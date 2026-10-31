@@ -1,0 +1,3168 @@
+// Wing's original AppKit host for the qualified Chromium browser framework.
+// The framework API is Apache-2.0; engine distribution includes GPL-3.0 code.
+#import "ArdiaCore.h"
+#import "ExtensionPanel.h"
+#import "ExtensionSidebar.h"
+#import "ImportProcess.h"
+#import "DeviceChooser.h"
+#import "PromptPopover.h"
+#import "PrivateWindow.h"
+#import <AppKit/AppKit.h>
+#include <cmath>
+#include <fcntl.h>
+#include <libproc.h>
+#include <string>
+#include <unistd.h>
+#include <vector>
+
+// Wing's source-built framework adds this narrow, policy-aware preference API.
+@interface ArdiaCoreProfile (WingDownloadDirectory)
+- (BOOL)setDownloadDirectory:(NSString *)directory;
+- (void)flushCookiesWithCompletion:(void (^)(void))completion;
+- (void)importLogins:(NSArray<NSDictionary *> *)entries
+          completion:(void (^)(NSInteger count, NSString *error))completion;
+@end
+
+// Capture without resizing the live page or changing its scroll position.
+static void CapturePage(ArdiaCoreTab *page, BOOL fullPage,
+                        void (^completion)(NSData *, NSString *)) {
+  NSString *documentURL = [page.url copy];
+  void (^capture)(NSDictionary *) = ^(NSDictionary *clip) {
+    if (page.closed || ![documentURL isEqual:page.url]) {
+      completion(nil, @"The page changed before capture completed."); return;
+    }
+    NSMutableDictionary *params = [@{@"format":@"png", @"captureBeyondViewport":@(fullPage)} mutableCopy];
+    if (clip) params[@"clip"] = clip;
+    [page devToolsCall:@"Page.captureScreenshot" params:params completion:^(NSDictionary *result, NSString *error) {
+      NSData *body = [result[@"data"] isKindOfClass:NSString.class]
+        ? [[NSData alloc] initWithBase64EncodedString:result[@"data"] options:0] : nil;
+      if (page.closed || ![documentURL isEqual:page.url]) {
+        completion(nil, @"The page changed before capture completed."); return;
+      }
+      completion(body, error ?: (body.length ? nil : @"Page capture failed."));
+    }];
+  };
+  if (!fullPage) { capture(nil); return; }
+  [page devToolsCall:@"Page.getLayoutMetrics" params:@{} completion:^(NSDictionary *result, NSString *error) {
+    NSDictionary *size = result[@"cssContentSize"];
+    double width = [size[@"width"] doubleValue], height = [size[@"height"] doubleValue];
+    // Bound the raster allocation; never silently crop or shrink the document.
+    if (error || !std::isfinite(width) || !std::isfinite(height) ||
+        width <= 0 || height <= 0 || width > 32767 || height > 32767 || width * height > 64000000) {
+      completion(nil, error ?: @"This page is too large for a full-page image. Capture the visible page instead."); return;
+    }
+    capture(@{@"x":size[@"x"] ?: @0, @"y":size[@"y"] ?: @0,
+              @"width":@(width), @"height":@(height), @"scale":@1});
+  }];
+}
+
+static NSString *JSON(id object) {
+  NSData *data =
+      [NSJSONSerialization dataWithJSONObject:object
+                                      options:NSJSONWritingFragmentsAllowed
+                                        error:nil];
+  return data ? [[NSString alloc] initWithData:data
+                                      encoding:NSUTF8StringEncoding]
+              : @"null";
+}
+static id Parse(NSString *text) {
+  if (![text isKindOfClass:NSString.class])
+    return nil;
+  return [NSJSONSerialization
+      JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding]
+                 options:NSJSONReadingFragmentsAllowed
+                   error:nil];
+}
+static BOOL Identifier(id value) {
+  return
+      [value isKindOfClass:NSString.class] && [value length] > 0 &&
+      [value length] <= 100 &&
+      [value
+          rangeOfCharacterFromSet:[[NSCharacterSet
+                                      characterSetWithCharactersInString:
+                                          @"abcdefghijklmnopqrstuvwxyzABCDEFGHI"
+                                          @"JKLMNOPQRSTUVWXYZ0123456789_-"]
+                                      invertedSet]]
+              .location == NSNotFound;
+}
+static BOOL WebURL(NSString *value) {
+  if (![value isKindOfClass:NSString.class])
+    return NO;
+  NSURL *url = [NSURL URLWithString:value];
+  if ([url.scheme isEqual:@"chrome-extension"] && url.host.length == 32 &&
+      !url.user && !url.password &&
+      [url.host rangeOfCharacterFromSet:
+                    [[NSCharacterSet
+                        characterSetWithCharactersInString:@"abcdefghijklmnop"]
+                        invertedSet]]
+              .location == NSNotFound)
+    return YES;
+  // Chromium's password manager, history and clear-data pages are the only
+  // privileged pages a tab may show; this mirrors internalPage() in model.cjs.
+  if ([url.scheme isEqual:@"chrome"] && !url.user && !url.password &&
+      ([url.host isEqual:@"password-manager"] || [url.host isEqual:@"history"] ||
+       ([url.host isEqual:@"settings"] && [url.path isEqual:@"/clearBrowserData"])) &&
+      ![value containsString:@".."])
+    return YES;
+  return [value isEqual:@"about:blank"] ||
+         (([url.scheme isEqual:@"https"] || [url.scheme isEqual:@"http"]) &&
+          url.host.length);
+}
+static BOOL SaveWorkspace(NSData *body, NSString *path) {
+  std::string pattern =
+      std::string(path.fileSystemRepresentation) + ".tmp.XXXXXX";
+  std::vector<char> temporary(pattern.begin(), pattern.end());
+  temporary.push_back('\0');
+  int descriptor =
+      mkstemp(temporary.data()); // private (0600), same-volume file
+  if (descriptor < 0)
+    return NO;
+  const char *bytes = static_cast<const char *>(body.bytes);
+  NSUInteger written = 0;
+  BOOL valid = YES;
+  while (written < body.length) {
+    ssize_t count = write(descriptor, bytes + written, body.length - written);
+    if (count < 0 && errno == EINTR)
+      continue;
+    if (count <= 0) {
+      valid = NO;
+      break;
+    }
+    written += count;
+  }
+  if (valid && fsync(descriptor) != 0)
+    valid = NO;
+  if (close(descriptor) != 0)
+    valid = NO;
+  if (valid && rename(temporary.data(), path.fileSystemRepresentation) != 0)
+    valid = NO;
+  if (!valid)
+    unlink(temporary.data());
+  return valid;
+}
+static BOOL ValidSync(NSDictionary *data) {
+  NSDictionary *state = data[@"workspace"];
+  if (![state isKindOfClass:NSDictionary.class] ||
+      ![state[@"tabs"] isKindOfClass:NSArray.class] ||
+      ![state[@"spaces"] isKindOfClass:NSArray.class] ||
+      ![data[@"panes"] isKindOfClass:NSArray.class] ||
+      [data[@"panes"] count] > 3 || [state[@"tabs"] count] > 10000 ||
+      [state[@"spaces"] count] > 10000)
+    return NO;
+  NSMutableSet *spaces = [NSMutableSet new], *tabs = [NSMutableSet new];
+  for (id space in state[@"spaces"]) {
+    if (![space isKindOfClass:NSDictionary.class] ||
+        !Identifier(space[@"id"]) || !Identifier(space[@"profileId"]) ||
+        [spaces containsObject:space[@"id"]])
+      return NO;
+    [spaces addObject:space[@"id"]];
+  }
+  for (id tab in state[@"tabs"]) {
+    if (![tab isKindOfClass:NSDictionary.class] || !Identifier(tab[@"id"]) ||
+        ![spaces containsObject:tab[@"spaceId"]] ||
+        [tabs containsObject:tab[@"id"]] ||
+        (![tab[@"url"] isEqual:@"wing://home"] && !WebURL(tab[@"url"])))
+      return NO;
+    [tabs addObject:tab[@"id"]];
+  }
+  NSMutableSet *visible = [NSMutableSet new];
+  for (id pane in data[@"panes"]) {
+    if (![pane isKindOfClass:NSDictionary.class] ||
+        ![tabs containsObject:pane[@"id"]] ||
+        [visible containsObject:pane[@"id"]])
+      return NO;
+    [visible addObject:pane[@"id"]];
+    for (NSString *key in @[ @"x", @"y", @"width", @"height" ]) {
+      if (![pane[key] isKindOfClass:NSNumber.class] ||
+          !std::isfinite([pane[key] doubleValue]) ||
+          [pane[key] doubleValue] < 0 || [pane[key] doubleValue] > 32768)
+        return NO;
+    }
+  }
+  return YES;
+}
+
+@interface WingChromiumHost
+    : NSObject <ArdiaCoreEngineDelegate, ArdiaCoreWindowDelegate,
+                ArdiaCoreTabDelegate>
+@end
+// Human wording for site prompts.
+static NSString *SiteName(NSString *origin) {
+  NSString *host = [NSURL URLWithString:origin ?: @""].host ?: origin ?: @"This website";
+  return [host hasPrefix:@"www."] ? [host substringFromIndex:4] : host;
+}
+static NSString *PermissionPhrase(NSArray *kinds) {
+  NSDictionary *phrases = @{
+    @"camera" : @"use your camera",
+    @"video" : @"use your camera",
+    @"microphone" : @"use your microphone",
+    @"audio" : @"use your microphone",
+    @"geolocation" : @"know your location",
+    @"location" : @"know your location",
+    @"notifications" : @"send you notifications",
+    @"clipboard" : @"see what you copy",
+    @"midi" : @"control MIDI devices",
+    @"storage" : @"use cookies and site data",
+    @"window" : @"manage windows on your displays",
+    @"idle" : @"know when you’re using this device",
+    @"sensors" : @"use motion sensors",
+    @"local-fonts" : @"use fonts on your Mac",
+    @"pointer" : @"lock your pointer",
+    @"keyboard" : @"lock your keyboard",
+  };
+  NSMutableOrderedSet *parts = [NSMutableOrderedSet new];
+  for (id kind in [kinds isKindOfClass:NSArray.class] ? kinds : @[]) {
+    NSString *name = [[kind description] lowercaseString], *phrase;
+    for (NSString *key in phrases)
+      if ([name containsString:key]) { phrase = phrases[key]; break; }
+    [parts addObject:phrase ?: [@"use " stringByAppendingString:
+                                   [name stringByReplacingOccurrencesOfString:@"-" withString:@" "]]];
+  }
+  if (!parts.count) return @"access this feature";
+  if (parts.count == 1) return parts.firstObject;
+  NSArray *list = parts.array;
+  return [[[list subarrayWithRange:NSMakeRange(0, list.count - 1)] componentsJoinedByString:@", "]
+      stringByAppendingFormat:@" and %@", list.lastObject];
+}
+static NSString *PermissionSymbol(NSArray *kinds) {
+  NSString *all = [[[kinds isKindOfClass:NSArray.class] ? kinds : @[] componentsJoinedByString:@" "] lowercaseString];
+  if ([all containsString:@"camera"] || [all containsString:@"video"]) return @"video.fill";
+  if ([all containsString:@"micro"] || [all containsString:@"audio"]) return @"mic.fill";
+  if ([all containsString:@"location"]) return @"location.fill";
+  if ([all containsString:@"notification"]) return @"bell.badge.fill";
+  if ([all containsString:@"clipboard"]) return @"doc.on.clipboard";
+  return @"hand.raised.fill";
+}
+@implementation WingChromiumHost {
+  ArdiaCoreWindow *_window, *_uiWindow;
+  ArdiaCoreTab *_shell;
+  NSString *_shellURL, *_workspacePath;
+  NSMutableDictionary<NSString *, ArdiaCoreTab *> *_tabs;
+  NSMutableDictionary<NSString *, ArdiaCoreProfile *> *_profiles;
+  NSMutableDictionary<NSString *, NSString *> *_modelURLs;
+  NSMutableDictionary<NSString *, NSNumber *> *_closing;
+  NSMutableSet<NSString *> *_loadingProfiles;
+  NSMutableSet<NSString *> *_capturingTabs;
+  NSMutableSet<NSString *> *_wakingTabs;
+  NSMutableSet<NSString *> *_pendingCreatedTabs;
+  NSMutableSet<NSString *> *_protectedProfiles;
+  NSMutableSet<NSString *> *_checkingProtection;
+  NSMutableSet<NSString *> *_startingProtection;
+  NSMutableDictionary<NSString *, ArdiaCoreTab *> *_protectionTabs;
+  NSMutableDictionary<NSString *, NSDate *> *_protectionDeadlines;
+  NSMutableDictionary<NSString *, NSString *> *_protectionURLs;
+  NSMutableDictionary<NSString *, ArdiaCoreTab *> *_serviceTabs;
+  NSMutableDictionary<NSString *, NSString *> *_serviceURLs;
+  NSMutableDictionary<NSString *, ArdiaCoreTab *> *_extensionManagers;
+  NSMutableDictionary<NSNumber *, NSDictionary *> *_processSamples;
+  WingImportProcess *_importProcess;
+  WingExtensionPanel *_extensionPanel;
+  WingExtensionSidebar *_extensionSidebar;
+  NSString *_extensionSidebarOwner;
+  NSString *_extensionPanelOwner;
+  NSMutableSet<NSString *> *_importProfiles;
+  NSSet<NSString *> *_importExistingProfiles;
+  BOOL _importCommitted;
+  NSMutableDictionary<NSNumber *, WingImportReply> *_hostReplies;
+  NSInteger _hostSequence;
+  NSDictionary *_lastSync;
+  id _resizeObserver;
+  id _modifierObserver;
+  id _mouseDownMonitor;
+  NSEvent *_lastMouseDown;
+  NSTimer *_maintenanceTimer;
+  NSMutableDictionary<NSString *, NSString *> *_appliedStyles;
+  NSMutableDictionary<NSString *, WingPromptPopover *> *_permissionAlerts;
+  NSMutableDictionary<NSString *, NSString *> *_crashedTabs;
+  NSMutableDictionary<NSString *, WingPromptPopover *> *_hangPrompts;
+  NSMutableDictionary<NSString *, NSDictionary *> *_externalAppAlerts;
+  NSMutableDictionary<NSNumber *, WingDeviceChooser *> *_deviceChoosers;
+  BOOL _automaticPictureInPicture;
+  NSMutableSet<NSString *> *_pictureInPictureTabs;
+  NSMutableSet<NSString *> *_screenSharingTabs;
+  BOOL _quitting;
+  BOOL _qualificationStarted;
+  NSMutableArray<NSString *> *_externalURLs;
+}
+- (void)send:(NSString *)kind data:(id)data {
+  if (_shell && !_shell.closed)
+    [_shell callPage:@"wing-native"
+                json:JSON(@{@"kind" : kind, @"data" : data ?: @{}})];
+}
+- (void)reply:(NSNumber *)request result:(id)result error:(NSString *)error {
+  WingImportReply callback = _hostReplies[request];
+  if (callback) {
+    [_hostReplies removeObjectForKey:request];
+    callback(result, error);
+    return;
+  }
+  [self send:@"response"
+        data:error ? @{@"id" : request, @"error" : error}
+                   : @{@"id" : request, @"result" : result ?: @{}}];
+}
+- (void)service:(NSDictionary *)request
+        profile:(NSString *)profileId
+          reply:(NSNumber *)rid
+       attempts:(int)attempts {
+  if (attempts <= 0 || _quitting) {
+    if (getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+      ArdiaCoreTab *probe = _serviceTabs[profileId];
+      fprintf(stderr,
+              "Service startup failed: profile=%s url=%s title=%s loading=%d "
+              "closed=%d\n",
+              profileId.UTF8String, probe.url.UTF8String,
+              probe.title.UTF8String, probe.loading, probe.closed);
+    }
+    [self reply:rid result:nil error:@"Browser services could not initialize."];
+    return;
+  }
+  ArdiaCoreProfile *profile = _profiles[profileId];
+  if (!profile) {
+    [ArdiaCoreEngine.sharedEngine
+        loadProfile:[@"Wing-" stringByAppendingString:profileId]
+         completion:^(ArdiaCoreProfile *loaded) {
+           if (!loaded) {
+             [self reply:rid result:nil error:@"Profile could not load."];
+             return;
+           }
+           if (self->_quitting) {
+             [self reply:rid result:nil error:@"Browser is closing."];
+             return;
+           }
+           self->_profiles[profileId] = loaded;
+           [self->_window prepareProfile:loaded];
+           [loaded loadComponentExtension:
+                       [NSBundle.mainBundle.resourcePath
+                           stringByAppendingPathComponent:@"uBlock0.chromium"]];
+           [self service:request
+                 profile:profileId
+                   reply:rid
+                attempts:attempts - 1];
+         }];
+    return;
+  }
+  ArdiaCoreTab *control = _serviceTabs[profileId];
+  if (!control || control.closed) {
+    NSString *extensionId =
+        [profile loadComponentExtension:
+                     [NSBundle.mainBundle.resourcePath
+                         stringByAppendingPathComponent:@"WingServices"]];
+    if (!extensionId.length) {
+      [self reply:rid
+           result:nil
+            error:@"Browser services extension could not load."];
+      return;
+    }
+    NSString *url = [NSString
+        stringWithFormat:@"chrome-extension://%@/control.html", extensionId];
+    control = [_window openTab:url profile:profile foreground:NO];
+    _serviceTabs[profileId] = control;
+    _serviceURLs[profileId] = url;
+    control.delegate = self;
+  }
+  NSString *expectedOrigin = [_serviceURLs[profileId]
+      stringByReplacingOccurrencesOfString:@"/control.html"
+                                withString:@""];
+  if (![control.url isEqual:_serviceURLs[profileId]] ||
+      ![control.committedOrigin isEqual:expectedOrigin]) {
+    if (!control.loading)
+      [control loadURL:_serviceURLs[profileId]];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+                     [self service:request
+                           profile:profileId
+                             reply:rid
+                          attempts:attempts - 1];
+                   });
+    return;
+  }
+  NSString *script = [NSString
+      stringWithFormat:
+          @"if(!window.wingService){post('result',JSON.stringify({"
+          @"waiting:true,title:document.title,ready:document.readyState,url:"
+          @"location.href}));}else{window.wingService(%@,%@).then("
+          @"value=>post('result',JSON.stringify({value})),error=>"
+          @"post('result',JSON.stringify({error:error.message})));}",
+          JSON(request[@"method"]), JSON(request[@"args"] ?: @{})];
+  [control
+        evaluate:script
+      completion:^(NSString *raw) {
+        id result = raw ? Parse(raw) : nil;
+        if ([result isKindOfClass:NSString.class])
+          result = Parse(result);
+        if (!result || [result[@"waiting"] boolValue]) {
+          if (attempts == 1 && getenv("WING_CHROMIUM_TEST_SCRIPT"))
+            fprintf(stderr, "Service readiness: %s\n",
+                    raw.UTF8String ?: "missing");
+          if (attempts % 10 == 0 && !control.closed) {
+            [profile loadComponentExtension:
+                         [NSBundle.mainBundle.resourcePath
+                             stringByAppendingPathComponent:@"WingServices"]];
+            [control loadURL:self->_serviceURLs[profileId] userInitiated:NO];
+          }
+          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                         dispatch_get_main_queue(), ^{
+                           [self service:request
+                                 profile:profileId
+                                   reply:rid
+                                attempts:attempts - 1];
+                         });
+        } else
+          [self reply:rid result:result[@"value"] error:result[@"error"]];
+      }];
+}
+- (void)engine:(ArdiaCoreEngine *)engine
+    permissionRequest:(NSDictionary *)request
+                  tab:(ArdiaCoreTab *)tab {
+  NSString *requestId = request[@"id"];
+  if (![requestId isKindOfClass:NSString.class])
+    return;
+  if (![self identityForTab:tab] || tab.closed) {
+    [engine resolvePermission:requestId result:@"deny" remember:NO];
+    return;
+  }
+  NSString *origin = tab.committedOrigin;
+  NSString *site = SiteName(request[@"origin"] ?: origin);
+  NSArray *kinds = request[@"permissions"];
+  NSString *wants = PermissionPhrase(kinds);
+  _permissionAlerts[requestId] = [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:PermissionSymbol(kinds)
+           title:[NSString stringWithFormat:@"Allow “%@” to %@?", site, wants]
+         message:@"You can change this anytime in Site Controls."
+         buttons:@[ @"Don’t Allow", @"Allow" ]
+        remember:@"Remember my choice for this site"
+      completion:^(NSInteger choice, BOOL remember) {
+        [self->_permissionAlerts removeObjectForKey:requestId];
+        BOOL accepted = choice == 1 && !tab.closed && [origin isEqual:tab.committedOrigin];
+        // Dismissing without a choice asks again next time.
+        [engine resolvePermission:requestId
+                           result:accepted ? @"accept" : @"deny"
+                         remember:choice >= 0 && remember];
+      }];
+}
+- (void)engine:(ArdiaCoreEngine *)engine
+    permissionRequestDismissed:(NSString *)requestId {
+  WingPromptPopover *prompt = _permissionAlerts[requestId];
+  [_permissionAlerts removeObjectForKey:requestId];
+  [prompt dismiss];
+}
+- (void)cancelDeviceRequestsForTab:(ArdiaCoreTab *)tab {
+  for (WingDeviceChooser *chooser in [_deviceChoosers.allValues copy])
+    if (chooser.tab == tab) [chooser cancel];
+}
+- (void)engine:(ArdiaCoreEngine *)engine deviceChooser:(NSDictionary *)state tab:(ArdiaCoreTab *)tab {
+  NSNumber *identity = state[@"id"];
+  if (![identity isKindOfClass:NSNumber.class]) return;
+  WingDeviceChooser *chooser = _deviceChoosers[identity];
+  if (!chooser && [state[@"open"] boolValue]) {
+    if (_quitting || ![self identityForTab:tab] || tab.closed) {
+      [ArdiaCoreEngine cancelDeviceChooser:identity.intValue];
+      return;
+    }
+    chooser = [[WingDeviceChooser alloc] initWithTab:tab window:_window.window];
+    __weak WingChromiumHost *host = self;
+    chooser.onClose = ^{
+      WingChromiumHost *owner = host;
+      if (owner) [owner->_deviceChoosers removeObjectForKey:identity];
+    };
+    _deviceChoosers[identity] = chooser;
+  }
+  [chooser update:state];
+}
+- (void)cancelExternalRequestsForTab:(ArdiaCoreTab *)tab {
+  for (NSString *requestId in _externalAppAlerts.allKeys) {
+    NSDictionary *entry = _externalAppAlerts[requestId];
+    if (entry[@"tab"] != tab) continue;
+    [_externalAppAlerts removeObjectForKey:requestId];
+    [entry[@"alert"] dismiss];
+    [ArdiaCoreEngine resolveExternalApp:requestId open:NO remember:NO];
+  }
+}
+- (void)tab:(ArdiaCoreTab *)tab externalAppRequest:(NSDictionary *)request {
+  NSString *requestId = request[@"id"];
+  if (![requestId isKindOfClass:NSString.class]) return;
+  if (![self identityForTab:tab] || tab.closed || _quitting) {
+    [ArdiaCoreEngine resolveExternalApp:requestId open:NO remember:NO];
+    return;
+  }
+  if (_externalAppAlerts[requestId]) return;
+  BOOL available = [request[@"appPath"] isKindOfClass:NSString.class];
+  NSString *remember = available && [request[@"remember"] isKindOfClass:NSString.class] ? request[@"remember"] : nil;
+  NSString *origin = tab.committedOrigin;
+  WingPromptPopover *prompt = [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:@"arrow.up.forward.app"
+           title:[request[@"title"] isKindOfClass:NSString.class] ? request[@"title"] : @"Open another application?"
+         message:[request[@"message"] isKindOfClass:NSString.class] ? request[@"message"] : @"This website requested an external application."
+         buttons:available ? @[ @"Cancel", @"Open" ] : @[ @"OK" ]
+        remember:remember
+      completion:^(NSInteger choice, BOOL rememberChoice) {
+        if (!self->_externalAppAlerts[requestId]) return;
+        [self->_externalAppAlerts removeObjectForKey:requestId];
+        BOOL open = available && choice == 1 && !tab.closed &&
+                    [origin isEqual:tab.committedOrigin] && !self->_quitting;
+        [ArdiaCoreEngine resolveExternalApp:requestId open:open remember:open && rememberChoice];
+      }];
+  _externalAppAlerts[requestId] = @{@"alert" : prompt, @"tab" : tab};
+}
+- (void)saveData:(NSData *)body name:(NSString *)name reply:(NSNumber *)rid {
+  if (!body) {
+    [self reply:rid result:nil error:@"The page could not be exported."];
+    return;
+  }
+  NSSavePanel *panel = [NSSavePanel savePanel];
+  panel.nameFieldStringValue = name.lastPathComponent;
+  [panel beginSheetModalForWindow:_window.window
+                completionHandler:^(NSModalResponse response) {
+                  if (response != NSModalResponseOK) {
+                    [self reply:rid result:@{@"cancelled" : @YES} error:nil];
+                    return;
+                  }
+                  NSError *error;
+                  BOOL saved = [body writeToURL:panel.URL
+                                        options:NSDataWritingAtomic
+                                          error:&error];
+                  [self reply:rid
+                       result:@{
+                         @"ok" : @(saved)
+                       }
+                        error:error.localizedDescription];
+                }];
+}
+- (void)engine:(ArdiaCoreEngine *)engine
+    extensionInstallPrompt:(NSDictionary *)prompt
+                       tab:(ArdiaCoreTab *)tab {
+  NSArray *permissions = [prompt[@"permissions"] isKindOfClass:NSArray.class] ? prompt[@"permissions"] : @[];
+  [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:@"puzzlepiece.extension"
+           title:[NSString stringWithFormat:@"Add “%@”?", prompt[@"name"]]
+         message:permissions.count
+                     ? [@"It can:\n• " stringByAppendingString:[permissions componentsJoinedByString:@"\n• "]]
+                     : [NSString stringWithFormat:@"Version %@", prompt[@"version"]]
+         buttons:@[ @"Cancel", @"Add Extension" ]
+        remember:nil
+      completion:^(NSInteger choice, BOOL remember) {
+        [ArdiaCoreEngine resolveExtensionInstallPrompt:prompt[@"requestId"] accepted:choice == 1];
+      }];
+}
+- (void)window:(ArdiaCoreWindow *)window
+    autofillPrompt:(NSDictionary<NSString *, id> *)prompt
+            forTab:(ArdiaCoreTab *)tab {
+  NSString *key = [NSString stringWithFormat:@"autofill-%@", prompt[@"id"]];
+  if ([prompt[@"closed"] boolValue]) {
+    WingPromptPopover *existing = _permissionAlerts[key];
+    [_permissionAlerts removeObjectForKey:key];
+    [existing dismiss];
+    return;
+  }
+  if (![self identityForTab:tab] || _permissionAlerts[key])
+    return;
+  NSMutableArray *lines = [NSMutableArray new];
+  for (NSString *field in @[ @"origin", @"message" ])
+    if ([prompt[field] isKindOfClass:NSString.class])
+      [lines addObject:prompt[field]];
+  if ([prompt[@"lines"] isKindOfClass:NSArray.class])
+    [lines addObjectsFromArray:prompt[@"lines"]];
+  _permissionAlerts[key] = [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:@"person.text.rectangle"
+           title:prompt[@"title"] ?: @"Save autofill information?"
+         message:[lines componentsJoinedByString:@"\n"]
+         buttons:@[ prompt[@"decline"] ?: @"Not Now", prompt[@"accept"] ?: @"Save" ]
+        remember:nil
+      completion:^(NSInteger choice, BOOL remember) {
+        if (!self->_permissionAlerts[key]) return;
+        [self->_permissionAlerts removeObjectForKey:key];
+        [tab resolveAutofillPrompt:[prompt[@"id"] integerValue]
+                            action:choice == 1 ? @"accept" : @"decline"];
+      }];
+}
+- (BOOL)showExtensionPopup:(NSString *)extensionId tab:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity)
+    return NO;
+  NSDictionary *state =
+      [tab actionStatesForExtensions:@[ extensionId ]][extensionId];
+  NSString *url = state[@"popup"];
+  if (![url hasPrefix:[NSString stringWithFormat:@"chrome-extension://%@/",
+                                                 extensionId]])
+    return NO;
+  _extensionPanelOwner = identity;
+  return [_extensionPanel showURL:url browser:_window profile:tab.profile];
+}
+- (void)focusAfterExtensionChange {
+  if (_quitting || _window.window.attachedSheet) return;
+  ArdiaCoreTab *target = [_lastSync[@"panes"] count]
+      ? (_extensionSidebar.page ?: _tabs[_lastSync[@"workspace"][@"activeTabId"]]) : _shell;
+  [target focus];
+}
+- (void)closeExtensionViewsForTabID:(NSString *)identity {
+  if ([_extensionSidebarOwner isEqual:identity]) {
+    [_extensionSidebar close];
+    _extensionSidebarOwner = nil;
+  }
+  if ([_extensionPanelOwner isEqual:identity]) {
+    [_extensionPanel close];
+    _extensionPanelOwner = nil;
+  }
+}
+- (BOOL)showExtensionSidebar:(NSString *)extensionId tab:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity || ![identity isEqual:_lastSync[@"workspace"][@"activeTabId"]]) return NO;
+  BOOL opened = [_extensionSidebar open:extensionId from:tab browser:_window];
+  _extensionSidebarOwner = opened ? identity : nil;
+  [self applyLayout];
+  if (opened) [self focusAfterExtensionChange];
+  return opened;
+}
+- (void)engine:(ArdiaCoreEngine *)engine extensionSidePanel:(NSDictionary *)panel tab:(ArdiaCoreTab *)tab {
+  if ([panel[@"open"] boolValue]) {
+    [self showExtensionSidebar:panel[@"extensionId"] tab:tab];
+  } else if ([_extensionSidebar.extensionId isEqual:panel[@"extensionId"]] &&
+             [_extensionSidebarOwner isEqual:[self identityForTab:tab]]) {
+    [_extensionSidebar close];
+  }
+}
+- (BOOL)engine:(ArdiaCoreEngine *)engine
+    extensionActionPopup:(NSDictionary *)popup
+                     tab:(ArdiaCoreTab *)tab {
+  return [self showExtensionPopup:popup[@"extensionId"] tab:tab];
+}
+- (BOOL)engine:(ArdiaCoreEngine *)engine
+    extensionActionShortcut:(NSDictionary *)shortcut
+                        tab:(ArdiaCoreTab *)tab {
+  NSString *kind = [tab executeExtensionAction:shortcut[@"extensionId"]];
+  return [kind isEqual:@"popup"]
+             ? [self showExtensionPopup:shortcut[@"extensionId"] tab:tab]
+             : [kind isEqual:@"sidePanel"] ? [self showExtensionSidebar:shortcut[@"extensionId"] tab:tab]
+             : [kind isEqual:@"none"];
+}
+- (void)contextAction:(NSMenuItem *)item {
+  NSDictionary *payload = item.representedObject;
+  if ([@[ @"command", @"action" ] containsObject:payload[@"kind"]])
+    [self send:payload[@"kind"] data:payload[@"data"]];
+}
+- (NSArray *)processMetrics {
+  NSMutableArray *queue = [NSMutableArray arrayWithObject:@(getpid())],
+                 *rows = [NSMutableArray new];
+  NSMutableSet *seen = [NSMutableSet new];
+  NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+  for (NSUInteger i = 0; i < queue.count && i < 1000; i++) {
+    NSNumber *pid = queue[i];
+    if ([seen containsObject:pid])
+      continue;
+    [seen addObject:pid];
+    int count = proc_listchildpids(pid.intValue, NULL, 0);
+    if (count > 0) {
+      std::vector<pid_t> children(count / sizeof(pid_t) + 16);
+      int bytes = proc_listchildpids(pid.intValue, children.data(),
+                                     (int)(children.size() * sizeof(pid_t)));
+      for (int j = 0; j < bytes / (int)sizeof(pid_t); j++)
+        if (children[j] > 0)
+          [queue addObject:@(children[j])];
+    }
+    struct proc_taskinfo info = {};
+    if (proc_pidinfo(pid.intValue, PROC_PIDTASKINFO, 0, &info, sizeof(info)) !=
+        (int)sizeof(info))
+      continue;
+    double total = (double)(info.pti_total_user + info.pti_total_system) / 1e9;
+    NSDictionary *previous = _processSamples[pid];
+    double elapsed = now - [previous[@"time"] doubleValue];
+    double cpu =
+        previous && elapsed > 0
+            ? MAX(0, (total - [previous[@"total"] doubleValue]) / elapsed * 100)
+            : 0;
+    _processSamples[pid] = @{@"time" : @(now), @"total" : @(total)};
+    char path[PROC_PIDPATHINFO_MAXSIZE] = {};
+    proc_pidpath(pid.intValue, path, sizeof(path));
+    [rows addObject:@{
+      @"pid" : pid,
+      @"type" : pid.intValue == getpid() ? @"Browser"
+                                         : [@(path) lastPathComponent],
+      @"cpu" : @(cpu),
+      @"workingSetKB" : @(info.pti_resident_size / 1024)
+    }];
+  }
+  for (NSNumber *pid in _processSamples.allKeys)
+    if (![seen containsObject:pid])
+      [_processSamples removeObjectForKey:pid];
+  return rows;
+}
+- (void)extensionManager:(NSString *)profileId
+                 inspect:(BOOL)inspect
+                   reply:(NSNumber *)rid
+                attempts:(int)attempts {
+  ArdiaCoreProfile *profile = _profiles[profileId];
+  if (!profile || attempts <= 0 || _quitting) {
+    [self reply:rid
+         result:nil
+          error:
+              profile
+                  ? @"The native extension manager could not initialize."
+                  : @"Open a page in this profile before managing extensions."];
+    return;
+  }
+  ArdiaCoreTab *manager = _extensionManagers[profileId];
+  if (!manager || manager.closed) {
+    manager = [_window openTab:@"chrome://extensions/"
+                       profile:profile
+                    foreground:NO];
+    _extensionManagers[profileId] = manager;
+    manager.delegate = self;
+  }
+  NSString *script =
+      inspect
+          ? @"post('result',JSON.stringify({available:typeof "
+            @"chrome.developerPrivate?.loadUnpacked==='function'}));"
+          : @"chrome.developerPrivate.loadUnpacked({failQuietly:true,"
+            @"populateError:true}).then(error=>post('result',JSON.stringify("
+            @"error?{error:JSON.stringify(error)}:{ok:true})),error=>post('"
+            @"result',JSON.stringify({error:error.message})));";
+  if (![manager.url isEqual:@"chrome://extensions/"] ||
+      ![manager.committedOrigin isEqual:@"chrome://extensions"]) {
+    if (!manager.loading)
+      [manager loadURL:@"chrome://extensions/" userInitiated:NO];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+                     [self extensionManager:profileId
+                                    inspect:inspect
+                                      reply:rid
+                                   attempts:attempts - 1];
+                   });
+    return;
+  }
+  script =
+      [NSString stringWithFormat:
+                    @"if(typeof "
+                    @"chrome.developerPrivate?.loadUnpacked!=='function'){post("
+                    @"'result',JSON.stringify({waiting:true}));}else{%@}",
+                    script];
+  [manager
+        evaluate:script
+      completion:^(NSString *raw) {
+        id result = raw ? Parse(raw) : nil;
+        if ([result isKindOfClass:NSString.class])
+          result = Parse(result);
+        if (!result || [result[@"waiting"] boolValue]) {
+          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                         dispatch_get_main_queue(), ^{
+                           [self extensionManager:profileId
+                                          inspect:inspect
+                                            reply:rid
+                                         attempts:attempts - 1];
+                         });
+          return;
+        }
+        [self reply:rid result:result error:result[@"error"]];
+      }];
+}
+- (void)window:(ArdiaCoreWindow *)window
+    passwordPrompt:(NSDictionary *)prompt
+            forTab:(ArdiaCoreTab *)tab {
+  NSString *state = prompt[@"state"];
+  if (![self identityForTab:tab] ||
+      ![@[ @"save", @"update" ] containsObject:state])
+    return;
+  BOOL update = [state isEqual:@"update"];
+  NSString *origin = tab.committedOrigin;
+  NSString *site = SiteName(prompt[@"origin"] ?: origin);
+  NSArray *buttons = update ? @[ @"Not Now", @"Update Password" ]
+                            : @[ @"Never for This Website", @"Not Now", @"Save Password" ];
+  [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:@"key.fill"
+           title:update ? [NSString stringWithFormat:@"Update the saved password for “%@”?", site]
+                        : [NSString stringWithFormat:@"Save this password for “%@”?", site]
+         message:[prompt[@"username"] length]
+                     ? [NSString stringWithFormat:@"Account: %@\nPasswords are encrypted with your Mac’s keychain.", prompt[@"username"]]
+                     : @"Passwords are encrypted with your Mac’s keychain."
+         buttons:buttons
+        remember:nil
+      completion:^(NSInteger choice, BOOL remember) {
+        if (tab.closed || ![origin isEqual:tab.committedOrigin]) return;
+        NSString *action = choice == (NSInteger)buttons.count - 1 ? state
+                         : (!update && choice == 0)             ? @"never"
+                                                                : @"dismiss";
+        [tab resolvePasswordPrompt:action username:nil password:nil];
+      }];
+}
+- (void)importProfile:(NSString *)profileId
+                ready:(void (^)(ArdiaCoreProfile *profile,
+                                NSString *error))ready {
+  if (!Identifier(profileId) ||
+      [_importExistingProfiles containsObject:profileId]) {
+    ready(nil, @"Import destination must be a fresh profile.");
+    return;
+  }
+  [_importProfiles addObject:profileId];
+  if (_profiles[profileId]) {
+    ready(_profiles[profileId], nil);
+    return;
+  }
+  [ArdiaCoreEngine.sharedEngine
+      loadProfile:[@"Wing-" stringByAppendingString:profileId]
+       completion:^(ArdiaCoreProfile *profile) {
+         if (self->_quitting) {
+           ready(nil, @"Browser is closing.");
+           return;
+         }
+         if (profile) {
+           self->_profiles[profileId] = profile;
+           // Register protection with the new profile's initial component set,
+           // before the importer starts its private browser service document.
+           [self->_window prepareProfile:profile];
+           [profile loadComponentExtension:[NSBundle.mainBundle.resourcePath
+                                               stringByAppendingPathComponent:
+                                                   @"uBlock0.chromium"]];
+         }
+         ready(profile, profile ? nil : @"Import destination could not load.");
+       }];
+}
+- (void)rollbackImportProfile:(NSString *)identity
+                   completion:(WingImportReply)completion {
+  if (![_importProfiles containsObject:identity] || _importCommitted) {
+    completion(@YES, nil);
+    return;
+  }
+  ArdiaCoreProfile *profile = _profiles[identity];
+  for (ArdiaCoreTab *tab in @[
+         _serviceTabs[identity] ?: (id)NSNull.null,
+         _extensionManagers[identity] ?: (id)NSNull.null
+       ])
+    if ([tab isKindOfClass:ArdiaCoreTab.class]) {
+      tab.delegate = nil;
+      [tab closeNow];
+    }
+  [_serviceTabs removeObjectForKey:identity];
+  [_extensionManagers removeObjectForKey:identity];
+  [_serviceURLs removeObjectForKey:identity];
+  [_profiles removeObjectForKey:identity];
+  if (!profile) {
+    completion(@YES, nil);
+    return;
+  }
+  [ArdiaCoreEngine.sharedEngine
+      deleteProfile:profile
+         completion:^(BOOL deleted) {
+           completion(@(deleted), deleted ? nil
+                                          : @"Import rollback could not remove "
+                                            @"its temporary profile.");
+         }];
+}
+- (void)handleImportRequest:(NSDictionary *)request
+                      reply:(WingImportReply)reply {
+  NSDictionary *data = request[@"data"];
+  NSString *operation = request[@"operation"];
+  if ([operation isEqual:@"persist"]) {
+    NSDictionary *proposed = data[@"state"];
+    if (!ValidSync(@{@"workspace" : proposed ?: @{}, @"panes" : @[]})) {
+      reply(nil, @"Invalid imported workspace.");
+      return;
+    }
+    NSMutableSet *newProfiles = [NSMutableSet new],
+                 *newSpaces = [NSMutableSet new];
+    for (NSDictionary *profile in proposed[@"profiles"])
+      if (![_importExistingProfiles containsObject:profile[@"id"]])
+        [newProfiles addObject:profile[@"id"]];
+    if (newProfiles.count != 1) {
+      reply(nil, @"Unexpected import profile set.");
+      return;
+    }
+    for (NSDictionary *space in proposed[@"spaces"])
+      if ([newProfiles containsObject:space[@"profileId"]])
+        [newSpaces addObject:space[@"id"]];
+    NSMutableSet *newTabs = [NSMutableSet new];
+    for (NSDictionary *tab in proposed[@"tabs"])
+      if ([newSpaces containsObject:tab[@"spaceId"]]) [newTabs addObject:tab[@"id"]];
+    NSMutableDictionary *merged = [_lastSync[@"workspace"] mutableCopy];
+    for (NSString *key in
+         @[ @"profiles", @"spaces", @"tabs", @"folders", @"history", @"archive", @"splits" ]) {
+      NSMutableArray *rows = [merged[key] mutableCopy];
+      for (NSDictionary *row in proposed[key]) {
+        BOOL include = [key isEqual:@"splits"]
+                           ? [[NSSet setWithArray:row[@"tabIds"] ?: @[]] isSubsetOfSet:newTabs]
+                       : [key isEqual:@"profiles"]
+                           ? [newProfiles containsObject:row[@"id"]]
+                       : [key isEqual:@"spaces"] || [key isEqual:@"history"]
+                           ? [newProfiles containsObject:row[@"profileId"]]
+                           : [newSpaces containsObject:row[@"spaceId"]];
+        if (include)
+          [rows addObject:row];
+      }
+      if ([key isEqual:@"history"] && rows.count > 10000)
+        [rows removeObjectsInRange:NSMakeRange(0, rows.count - 10000)];
+      merged[key] = rows;
+    }
+    merged[@"activeSpaceId"] = proposed[@"activeSpaceId"];
+    merged[@"activeTabId"] = proposed[@"activeTabId"];
+    if (!ValidSync(@{@"workspace" : merged, @"panes" : @[]})) {
+      reply(nil, @"Imported workspace exceeds browser limits.");
+      return;
+    }
+    NSData *body = [NSJSONSerialization dataWithJSONObject:merged
+                                                   options:0
+                                                     error:nil];
+    if (!SaveWorkspace(body, _workspacePath)) {
+      reply(nil, @"Imported workspace could not be saved.");
+      return;
+    }
+    _importCommitted = YES;
+    NSMutableDictionary *sync = [_lastSync mutableCopy];
+    sync[@"workspace"] = merged;
+    _lastSync = sync;
+    [self send:@"workspace-imported" data:merged];
+    reply(@YES, nil);
+    return;
+  }
+  NSString *profileId = data[@"profile"];
+  if ([operation isEqual:@"rollback"]) {
+    [self rollbackImportProfile:profileId completion:reply];
+    return;
+  }
+  [self
+      importProfile:profileId
+              ready:^(ArdiaCoreProfile *profile, NSString *error) {
+                if (error) {
+                  reply(nil, error);
+                  return;
+                }
+                if ([operation isEqual:@"cookie"]) {
+                  NSNumber *rid = @(--self->_hostSequence);
+                  self->_hostReplies[rid] = [reply copy];
+                  [self service:@{
+                    @"method" : @"import-cookie",
+                    @"args" : @{@"cookie" : data[@"cookie"] ?: @{}}
+                  }
+                        profile:profileId
+                          reply:rid
+                       attempts:100];
+                } else if ([operation isEqual:@"passwords"]) {
+                  if (![profile
+                          respondsToSelector:@selector(
+                                                 importLogins:completion:)]) {
+                    reply(nil, @"Saved-password import requires Wing's "
+                               @"source-built engine.");
+                    return;
+                  }
+                  if (![data[@"credentials"] isKindOfClass:NSArray.class]) {
+                    reply(nil, @"Invalid password import.");
+                    return;
+                  }
+                  [profile importLogins:data[@"credentials"]
+                             completion:^(NSInteger count, NSString *error) {
+                               reply(@(count), error);
+                             }];
+                } else if ([operation isEqual:@"flush-cookies"]) {
+                  if ([profile
+                          respondsToSelector:@selector(
+                                                 flushCookiesWithCompletion:)])
+                    [profile flushCookiesWithCompletion:^{
+                      reply(@YES, nil);
+                    }];
+                  else
+                    reply(@YES, nil);
+                } else
+                  reply(nil, @"Unknown import operation.");
+              }];
+}
+- (void)engineDidStart {
+  _tabs = [NSMutableDictionary new];
+  _extensionPanel = [WingExtensionPanel new];
+  _extensionSidebar = [WingExtensionSidebar new];
+  __weak WingChromiumHost *sidebarHost = self;
+  _extensionSidebar.onClose = ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [sidebarHost applyLayout];
+      [sidebarHost focusAfterExtensionChange];
+    });
+  };
+  _externalURLs = [NSMutableArray new];
+  [NSAppleEventManager.sharedAppleEventManager
+      setEventHandler:self
+          andSelector:@selector(handleOpenURL:reply:)
+        forEventClass:'GURL'
+           andEventID:'GURL'];
+  _serviceTabs = [NSMutableDictionary new];
+  _serviceURLs = [NSMutableDictionary new];
+  _extensionManagers = [NSMutableDictionary new];
+  _permissionAlerts = [NSMutableDictionary new];
+  _externalAppAlerts = [NSMutableDictionary new];
+  _deviceChoosers = [NSMutableDictionary new];
+  _appliedStyles = [NSMutableDictionary new];
+  _processSamples = [NSMutableDictionary new];
+  _hostReplies = [NSMutableDictionary new];
+  _profiles = [NSMutableDictionary new];
+  _modelURLs = [NSMutableDictionary new];
+  _closing = [NSMutableDictionary new];
+  _loadingProfiles = [NSMutableSet new];
+  _capturingTabs = [NSMutableSet new];
+  _pictureInPictureTabs = [NSMutableSet new];
+  _crashedTabs = [NSMutableDictionary new];
+  _hangPrompts = [NSMutableDictionary new];
+  _screenSharingTabs = [NSMutableSet new];
+  [ArdiaCoreEngine setAutoPictureInPicture:NO];
+  _wakingTabs = [NSMutableSet new];
+  _pendingCreatedTabs = [NSMutableSet new];
+  _protectedProfiles = [NSMutableSet new];
+  _checkingProtection = [NSMutableSet new];
+  _startingProtection = [NSMutableSet new];
+  _protectionTabs = [NSMutableDictionary new];
+  _protectionDeadlines = [NSMutableDictionary new];
+  _protectionURLs = [NSMutableDictionary new];
+  ArdiaCoreEngine *engine = ArdiaCoreEngine.sharedEngine;
+  // The engine default profile is reserved for trusted UI. Website profiles
+  // are loaded separately, including Wing's "default" browsing profile.
+  _workspacePath = [@(getenv("WING_PROFILE_ROOT"))
+      stringByAppendingPathComponent:@"wing-workspace.json"];
+  _shellURL = [NSURL fileURLWithPath:[NSBundle.mainBundle.resourcePath
+                                         stringByAppendingPathComponent:
+                                             @"shell/index.html"]]
+                  .absoluteString;
+  engine.pageScript = [NSString
+      stringWithFormat:
+          @"(post)=>{if(window!==top)return()=>{};if(location.protocol==='"
+          @"chrome-extension:'&&location.pathname==='/"
+          @"control.html'){Object.defineProperty(window,'__wingServicePost',{"
+          @"value:post});return()=>{};}if(location.href!==%@)return()=>{};"
+          @"Object."
+          @"defineProperty(window,'__wingNativePost',{value:post});return(kind,"
+          @"json)=>{if(kind==='wing-native')window.dispatchEvent(new "
+          @"CustomEvent('wing-native',{detail:JSON.parse(json)}));}}",
+          JSON(_shellURL)];
+  _window = [[ArdiaCoreWindow alloc]
+      initWithContentRect:NSMakeRect(100, 100, 1200, 800)];
+  _window.delegate = self;
+  _window.window.title = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
+  // Arc-style chrome: the web shell draws to the top edge and the traffic
+  // lights sit inside the sidebar header, centred on the toolbar row.
+  _window.window.styleMask |= NSWindowStyleMaskFullSizeContentView;
+  _window.window.titlebarAppearsTransparent = YES;
+  _window.window.titleVisibility = NSWindowTitleHidden;
+  _window.window.tabbingMode = NSWindowTabbingModeDisallowed;
+  [_window.window setFrameAutosaveName:@"WingMainWindow"];
+  // A saved frame can point at a display that is no longer attached.
+  BOOL visible = NO;
+  for (NSScreen *screen in NSScreen.screens)
+    visible = visible || NSIntersectsRect(
+                             NSInsetRect(screen.visibleFrame, 40, 40),
+                             _window.window.frame);
+  if (!visible) [_window.window center];
+  _uiWindow =
+      [[ArdiaCoreWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1200, 800)];
+  _uiWindow.internal = YES;
+  _uiWindow.window.excludedFromWindowsMenu = YES;
+  _uiWindow.delegate = self;
+  _shell = [_uiWindow openTab:_shellURL
+                      profile:engine.defaultProfile
+                   foreground:YES];
+  _shell.delegate = self;
+  // Native sidebar material behind a transparent shell, tinted by CSS.
+  NSVisualEffectView *material =
+      [[NSVisualEffectView alloc] initWithFrame:_window.hostView.bounds];
+  material.material = NSVisualEffectMaterialSidebar;
+  material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+  material.state = NSVisualEffectStateFollowsWindowActiveState;
+  material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  [_window.hostView addSubview:material];
+  _shell.pageBackgroundColor = NSColor.clearColor;
+  _shell.contentsBackgroundColor = NSColor.clearColor;
+  [_window.hostView addSubview:_shell.view];
+  _shell.view.frame = _window.hostView.bounds;
+  _shell.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  [_shell noteShownByHost:YES];
+  __weak WingChromiumHost *weakSelf = self;
+  _resizeObserver = [NSNotificationCenter.defaultCenter
+      addObserverForName:NSWindowDidResizeNotification
+                  object:_window.window
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *note) {
+                [weakSelf layoutTrafficLights];
+                [weakSelf send:@"resize" data:@{}];
+              }];
+  for (NSNotificationName name in @[ NSWindowDidExitFullScreenNotification,
+                                     NSWindowDidBecomeKeyNotification,
+                                     NSWindowDidResignKeyNotification ])
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:_window.window
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                  [weakSelf layoutTrafficLights];
+                }];
+  [NSNotificationCenter.defaultCenter
+      addObserverForName:NSWindowDidEnterFullScreenNotification
+                  object:_window.window
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *note) {
+                [weakSelf send:@"window-state" data:@{@"fullScreen" : @YES}];
+              }];
+  [NSNotificationCenter.defaultCenter
+      addObserverForName:NSWindowWillExitFullScreenNotification
+                  object:_window.window
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *note) {
+                [weakSelf send:@"window-state" data:@{@"fullScreen" : @NO}];
+              }];
+  // The shell asks for a window drag after mousedown on empty chrome; keep
+  // the originating event so AppKit can run its native move loop.
+  _mouseDownMonitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
+                                   handler:^NSEvent *(NSEvent *event) {
+                                     WingChromiumHost *host = weakSelf;
+                                     if (host && event.window == host->_window.window)
+                                       host->_lastMouseDown = event;
+                                     return event;
+                                   }];
+  [NSAppleEventManager.sharedAppleEventManager
+      setEventHandler:self
+          andSelector:@selector(handleReopen:reply:)
+        forEventClass:kCoreEventClass
+           andEventID:kAEReopenApplication];
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+  [_window showInactive];
+  [_window.window makeKeyAndOrderFront:nil];
+  [self layoutTrafficLights];
+  [self installMenus];
+  [_shell focus];
+  _maintenanceTimer =
+      [NSTimer scheduledTimerWithTimeInterval:60
+                                      repeats:YES
+                                        block:^(NSTimer *timer) {
+                                          [weakSelf archiveIdlePagesAt:NSDate.date.timeIntervalSince1970 * 1000
+                                                        completion:^{ }];
+                                          [weakSelf trimMemoryAutomatic:YES
+                                                             completion:^{
+                                                             }];
+                                        }];
+  _modifierObserver = [NSEvent
+      addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+                                   handler:^NSEvent *(NSEvent *event) {
+                                     if (!(event.modifierFlags &
+                                           NSEventModifierFlagControl))
+                                       [weakSelf
+                                           send:@"action"
+                                           data:@{
+                                             @"name" : @"recent-tabs-commit"
+                                           }];
+                                     return event;
+                                   }];
+}
+- (BOOL)mayRetirePage:(ArdiaCoreTab *)page {
+  NSString *identity = [self identityForTab:page];
+  if (_quitting || !identity || page.closed || page.loading ||
+      page.audible || page.view.superview || page.devToolsView ||
+      [_capturingTabs containsObject:identity] || [_pictureInPictureTabs containsObject:identity])
+    return NO;
+  NSDictionary *state = _lastSync[@"workspace"];
+  NSString *active = state[@"activeTabId"];
+  if ([identity isEqual:active])
+    return NO;
+  for (NSDictionary *split in state[@"splits"])
+    if ([split[@"tabIds"] containsObject:active] &&
+        [split[@"tabIds"] containsObject:identity])
+      return NO;
+  for (NSDictionary *record in state[@"tabs"])
+    if ([record[@"id"] isEqual:identity] && [record[@"transient"] boolValue])
+      return NO;
+  return YES;
+}
+- (BOOL)mayDiscardPage:(ArdiaCoreTab *)page {
+  return !page.discarded && [self mayRetirePage:page];
+}
+- (BOOL)isArchiveCandidate:(NSString *)identity at:(double)now {
+  NSDictionary *state = _lastSync[@"workspace"];
+  double hours = [state[@"settings"][@"archiveHours"] doubleValue];
+  if (hours <= 0 || _quitting || [identity isEqual:state[@"activeTabId"]])
+    return NO;
+  for (NSDictionary *split in state[@"splits"])
+    if ([split[@"tabIds"] containsObject:state[@"activeTabId"]] &&
+        [split[@"tabIds"] containsObject:identity])
+      return NO;
+  for (NSDictionary *record in state[@"tabs"])
+    if ([record[@"id"] isEqual:identity])
+      return [record[@"kind"] isEqual:@"today"] &&
+             ![record[@"transient"] boolValue] &&
+             now - [record[@"lastActive"] doubleValue] > hours * 3600000;
+  return NO;
+}
+- (void)archiveIdlePagesAt:(double)now completion:(void (^)(void))completion {
+  dispatch_group_t group = dispatch_group_create();
+  // Restored background destinations can be idle without ever creating a
+  // native page. They have no live document or beforeunload state to protect.
+  for (NSDictionary *record in _lastSync[@"workspace"][@"tabs"]) {
+    NSString *identity = record[@"id"];
+    if (!_tabs[identity] && [self isArchiveCandidate:identity at:now])
+      [self send:@"closed" data:@{@"id" : identity, @"archive" : @YES}];
+  }
+  for (NSString *identity in _tabs.allKeys) {
+    ArdiaCoreTab *page = _tabs[identity];
+    if (![self isArchiveCandidate:identity at:now] ||
+        ![self mayRetirePage:page] || _closing[identity])
+      continue;
+    void (^closeIfEligible)(void) = ^{
+      // Selection, settings, or document state may change during evaluation.
+      if ([self isArchiveCandidate:identity at:now] &&
+          [self mayRetirePage:page] && !_closing[identity]) {
+        _closing[identity] = @YES;
+        [page close]; // Keep Chromium's beforeunload cancellation semantics.
+      }
+    };
+    if (page.discarded) {
+      closeIfEligible();
+      continue;
+    }
+    dispatch_group_enter(group);
+    [page evaluate:@"post('result',JSON.stringify([...document."
+                   @"querySelectorAll('input,textarea,[contenteditable]')]."
+                   @"some(e=>e.isContentEditable||e.value!==e.defaultValue||"
+                   @"e.checked!==e.defaultChecked)))"
+        completion:^(NSString *raw) {
+          id value = raw ? Parse(raw) : nil;
+          if ([value isKindOfClass:NSString.class])
+            value = Parse(value);
+          if ([value isKindOfClass:NSNumber.class] && ![value boolValue])
+            closeIfEligible();
+          dispatch_group_leave(group);
+        }];
+  }
+  dispatch_group_notify(group, dispatch_get_main_queue(), completion);
+}
+- (void)trimMemoryAutomatic:(BOOL)automatic
+                 completion:(void (^)(void))completion {
+  dispatch_group_t group = dispatch_group_create();
+  NSArray *records = [_lastSync[@"workspace"][@"tabs"]
+      sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
+                                                     NSDictionary *b) {
+        return [a[@"lastActive"] compare:b[@"lastActive"]];
+      }];
+  NSInteger remaining = 0;
+  for (ArdiaCoreTab *page in _tabs.allValues)
+    if (!page.discarded && !page.closed)
+      remaining++;
+  NSInteger limit =
+      [_lastSync[@"workspace"][@"settings"][@"maxLiveTabs"] integerValue] ?: 8;
+  for (NSDictionary *record in records) {
+    ArdiaCoreTab *page = _tabs[record[@"id"]];
+    if (!page)
+      continue;
+    BOOL idle = NSDate.date.timeIntervalSince1970 * 1000 -
+                    [record[@"lastActive"] doubleValue] >
+                600000;
+    if (automatic && !idle && remaining <= limit)
+      continue;
+    if (![self mayDiscardPage:page])
+      continue;
+    remaining--;
+    dispatch_group_enter(group);
+    [page evaluate:@"post('result',JSON.stringify([...document."
+                   @"querySelectorAll('input,textarea,[contenteditable]')]."
+                   @"some(e=>e.isContentEditable||e.value!==e.defaultValue||"
+                   @"e.checked!==e.defaultChecked)))"
+        completion:^(NSString *raw) {
+          id value = raw ? Parse(raw) : nil;
+          if ([value isKindOfClass:NSString.class])
+            value = Parse(value);
+          if ([value isKindOfClass:NSNumber.class] && ![value boolValue] &&
+              [self mayDiscardPage:page])
+            [page discard];
+          dispatch_group_leave(group);
+        }];
+  }
+  dispatch_group_notify(group, dispatch_get_main_queue(), completion);
+}
+// Menu items route through the same shell actions as keyboard shortcuts.
+// Keys the engine reserves are consumed in preHandleKeyEvent before the menu
+// sees them, so listing them here only makes them discoverable.
+- (NSMenuItem *)menuItem:(NSString *)title
+                     key:(NSString *)key
+               modifiers:(NSEventModifierFlags)modifiers
+                    kind:(NSString *)kind
+                    data:(NSDictionary *)data {
+  NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+                                                action:@selector(menuSend:)
+                                         keyEquivalent:key ?: @""];
+  item.keyEquivalentModifierMask = modifiers;
+  item.target = self;
+  item.representedObject = @{@"kind" : kind, @"data" : data ?: @{}};
+  return item;
+}
+- (NSMenuItem *)action:(NSString *)title
+                   key:(NSString *)key
+             modifiers:(NSEventModifierFlags)modifiers
+                  name:(NSString *)name
+                  args:(NSDictionary *)args {
+  return [self menuItem:title
+                    key:key
+              modifiers:modifiers
+                   kind:@"action"
+                   data:@{@"name" : name, @"args" : args ?: @{}}];
+}
+- (NSMenuItem *)command:(NSString *)title
+                    key:(NSString *)key
+              modifiers:(NSEventModifierFlags)modifiers
+                   data:(NSDictionary *)data {
+  return [self menuItem:title key:key modifiers:modifiers kind:@"command" data:data];
+}
+- (NSMenuItem *)system:(NSString *)title
+              selector:(SEL)selector
+                   key:(NSString *)key
+             modifiers:(NSEventModifierFlags)modifiers {
+  NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+                                                action:selector
+                                         keyEquivalent:key ?: @""];
+  item.keyEquivalentModifierMask = modifiers;
+  return item;
+}
+- (void)menuSend:(NSMenuItem *)sender {
+  NSDictionary *payload = sender.representedObject;
+  NSDictionary *data = payload[@"data"];
+  NSString *name = [payload[@"kind"] isEqual:@"action"] ? data[@"name"]
+                   : [data[@"type"] isEqual:@"palette"]
+                       ? [@"palette-" stringByAppendingString:data[@"mode"] ?: @"new"]
+                       : nil;
+  if (name && [WingPrivateWindow performMenuAction:name args:data[@"args"] ?: @{}])
+    return;
+  if (!_window.window.visible) [self showMainWindow:nil];
+  [self send:payload[@"kind"] data:payload[@"data"]];
+  if ([payload[@"kind"] isEqual:@"command"]) [_shell focus];
+}
+- (NSMenu *)addMenu:(NSString *)title to:(NSMenu *)bar {
+  NSMenuItem *holder = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+  NSMenu *menu = [[NSMenu alloc] initWithTitle:title];
+  holder.submenu = menu;
+  [bar addItem:holder];
+  return menu;
+}
+- (void)installMenus {
+  const NSEventModifierFlags cmd = NSEventModifierFlagCommand,
+                             shift = NSEventModifierFlagShift,
+                             option = NSEventModifierFlagOption,
+                             control = NSEventModifierFlagControl;
+  NSMenu *bar = [NSMenu new];
+  NSString *name = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"] ?: @"Wing";
+
+  NSMenu *app = [self addMenu:name to:bar];
+  [app addItem:[self system:[@"About " stringByAppendingString:name]
+                   selector:@selector(orderFrontStandardAboutPanel:)
+                        key:nil modifiers:0]];
+  [app addItem:NSMenuItem.separatorItem];
+  [app addItem:[self command:@"Settings…" key:@"," modifiers:cmd data:@{@"type" : @"settings"}]];
+  [app addItem:[self action:@"Set as Default Browser" key:nil modifiers:0 name:@"default-browser" args:nil]];
+  [app addItem:NSMenuItem.separatorItem];
+  NSMenuItem *services = [[NSMenuItem alloc] initWithTitle:@"Services" action:nil keyEquivalent:@""];
+  services.submenu = [[NSMenu alloc] initWithTitle:@"Services"];
+  NSApp.servicesMenu = services.submenu;
+  [app addItem:services];
+  [app addItem:NSMenuItem.separatorItem];
+  [app addItem:[self system:[@"Hide " stringByAppendingString:name] selector:@selector(hide:) key:@"h" modifiers:cmd]];
+  [app addItem:[self system:@"Hide Others" selector:@selector(hideOtherApplications:) key:@"h" modifiers:cmd | option]];
+  [app addItem:[self system:@"Show All" selector:@selector(unhideAllApplications:) key:nil modifiers:0]];
+  [app addItem:NSMenuItem.separatorItem];
+  NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:[@"Quit " stringByAppendingString:name]
+                                                action:@selector(quit:)
+                                         keyEquivalent:@"q"];
+  quit.target = self;
+  [app addItem:quit];
+
+  NSMenu *file = [self addMenu:@"File" to:bar];
+  [file addItem:[self command:@"New Tab" key:@"t" modifiers:cmd data:@{@"type" : @"palette", @"mode" : @"new"}]];
+  NSMenuItem *window = [[NSMenuItem alloc] initWithTitle:@"Show Main Window"
+                                                  action:@selector(showMainWindow:)
+                                           keyEquivalent:@"n"];
+  window.target = self;
+  [file addItem:window];
+  NSMenuItem *privateWindow = [[NSMenuItem alloc] initWithTitle:@"New Private Window"
+                                                         action:@selector(newPrivateWindow:)
+                                                  keyEquivalent:@"n"];
+  privateWindow.keyEquivalentModifierMask = cmd | shift;
+  privateWindow.target = self;
+  [file addItem:privateWindow];
+  [file addItem:[self command:@"Open Location…" key:@"l" modifiers:cmd data:@{@"type" : @"palette", @"mode" : @"navigate"}]];
+  [file addItem:NSMenuItem.separatorItem];
+  [file addItem:[self action:@"Close Tab" key:@"w" modifiers:cmd name:@"close-tab" args:nil]];
+  [file addItem:[self system:@"Close Window" selector:@selector(performClose:) key:@"w" modifiers:cmd | shift]];
+  [file addItem:[self action:@"Reopen Closed Tab" key:@"t" modifiers:cmd | shift name:@"restore" args:nil]];
+  [file addItem:NSMenuItem.separatorItem];
+  [file addItem:[self command:@"New Space…" key:nil modifiers:0 data:@{@"type" : @"space-editor"}]];
+  [file addItem:[self command:@"Import Browser Data…" key:nil modifiers:0 data:@{@"type" : @"import"}]];
+  [file addItem:NSMenuItem.separatorItem];
+  [file addItem:[self action:@"Save Page as PDF…" key:nil modifiers:0 name:@"save-pdf" args:nil]];
+  [file addItem:[self action:@"Print…" key:@"p" modifiers:cmd name:@"print-page" args:nil]];
+
+  NSMenu *edit = [self addMenu:@"Edit" to:bar];
+  [edit addItem:[self system:@"Undo" selector:@selector(undo:) key:@"z" modifiers:cmd]];
+  [edit addItem:[self system:@"Redo" selector:@selector(redo:) key:@"z" modifiers:cmd | shift]];
+  [edit addItem:NSMenuItem.separatorItem];
+  [edit addItem:[self system:@"Cut" selector:@selector(cut:) key:@"x" modifiers:cmd]];
+  [edit addItem:[self system:@"Copy" selector:@selector(copy:) key:@"c" modifiers:cmd]];
+  [edit addItem:[self system:@"Paste" selector:@selector(paste:) key:@"v" modifiers:cmd]];
+  [edit addItem:[self system:@"Paste and Match Style" selector:@selector(pasteAndMatchStyle:) key:@"v" modifiers:cmd | shift | option]];
+  [edit addItem:[self system:@"Delete" selector:@selector(delete:) key:nil modifiers:0]];
+  [edit addItem:[self system:@"Select All" selector:@selector(selectAll:) key:@"a" modifiers:cmd]];
+  [edit addItem:NSMenuItem.separatorItem];
+  [edit addItem:[self action:@"Copy Page Address" key:@"c" modifiers:cmd | shift name:@"copy-url" args:nil]];
+  NSMenuItem *findHolder = [[NSMenuItem alloc] initWithTitle:@"Find" action:nil keyEquivalent:@""];
+  NSMenu *find = [[NSMenu alloc] initWithTitle:@"Find"];
+  findHolder.submenu = find;
+  [find addItem:[self command:@"Find…" key:@"f" modifiers:cmd data:@{@"type" : @"find"}]];
+  [find addItem:[self command:@"Find Next" key:@"g" modifiers:cmd data:@{@"type" : @"find", @"step" : @1}]];
+  [find addItem:[self command:@"Find Previous" key:@"g" modifiers:cmd | shift data:@{@"type" : @"find", @"step" : @(-1)}]];
+  [find addItem:[self command:@"Use Selection for Find" key:@"e" modifiers:cmd data:@{@"type" : @"find", @"selection" : @YES}]];
+  [edit addItem:findHolder];
+
+  NSMenu *view = [self addMenu:@"View" to:bar];
+  [view addItem:[self action:@"Toggle Sidebar" key:@"s" modifiers:cmd name:@"sidebar" args:nil]];
+  [view addItem:NSMenuItem.separatorItem];
+  [view addItem:[self action:@"Stop" key:@"." modifiers:cmd name:@"stop" args:nil]];
+  [view addItem:[self action:@"Reload Page" key:@"r" modifiers:cmd name:@"reload" args:nil]];
+  [view addItem:NSMenuItem.separatorItem];
+  [view addItem:[self action:@"Actual Size" key:@"0" modifiers:cmd name:@"zoom" args:@{@"reset" : @YES}]];
+  [view addItem:[self action:@"Zoom In" key:@"+" modifiers:cmd name:@"zoom" args:@{@"delta" : @1}]];
+  [view addItem:[self action:@"Zoom Out" key:@"-" modifiers:cmd name:@"zoom" args:@{@"delta" : @(-1)}]];
+  [view addItem:NSMenuItem.separatorItem];
+  [view addItem:[self command:@"Split View…" key:@"2" modifiers:cmd | shift data:@{@"type" : @"split-picker"}]];
+  [view addItem:[self command:@"Show Reader" key:@"r" modifiers:cmd | shift data:@{@"type" : @"reader"}]];
+  [view addItem:[self system:@"Enter Full Screen" selector:@selector(toggleFullScreen:) key:@"f" modifiers:cmd | control]];
+  [view addItem:NSMenuItem.separatorItem];
+  NSMenuItem *developerHolder = [[NSMenuItem alloc] initWithTitle:@"Developer" action:nil keyEquivalent:@""];
+  NSMenu *developer = [[NSMenu alloc] initWithTitle:@"Developer"];
+  developerHolder.submenu = developer;
+  [developer addItem:[self action:@"Developer Tools" key:@"i" modifiers:cmd | option name:@"devtools" args:nil]];
+  [developer addItem:[self command:@"Task Manager" key:nil modifiers:0 data:@{@"type" : @"performance"}]];
+  [view addItem:developerHolder];
+
+  NSMenu *history = [self addMenu:@"History" to:bar];
+  [history addItem:[self action:@"Back" key:@"[" modifiers:cmd name:@"back" args:nil]];
+  [history addItem:[self action:@"Forward" key:@"]" modifiers:cmd name:@"forward" args:nil]];
+  [history addItem:NSMenuItem.separatorItem];
+  [history addItem:[self action:@"Show All History" key:@"y" modifiers:cmd name:@"new-tab" args:@{@"url" : @"wing://history"}]];
+  [history addItem:[self command:@"Recent History" key:@"y" modifiers:cmd | shift data:@{@"type" : @"library", @"tab" : @"history"}]];
+  [history addItem:[self command:@"Downloads" key:@"j" modifiers:cmd | shift data:@{@"type" : @"library", @"tab" : @"downloads"}]];
+  [history addItem:[self command:@"Archive" key:nil modifiers:0 data:@{@"type" : @"library", @"tab" : @"archive"}]];
+  [history addItem:NSMenuItem.separatorItem];
+  [history addItem:[self action:@"Clear History…" key:nil modifiers:0 name:@"new-tab" args:@{@"url" : @"wing://clear-data"}]];
+
+  NSMenu *spaces = [self addMenu:@"Spaces" to:bar];
+  [spaces addItem:[self action:@"Previous Space" key:[NSString stringWithFormat:@"%C", (unichar)NSLeftArrowFunctionKey] modifiers:cmd | option name:@"swipe-profile" args:@{@"direction" : @(-1)}]];
+  [spaces addItem:[self action:@"Next Space" key:[NSString stringWithFormat:@"%C", (unichar)NSRightArrowFunctionKey] modifiers:cmd | option name:@"swipe-profile" args:@{@"direction" : @1}]];
+  [spaces addItem:NSMenuItem.separatorItem];
+  for (int i = 1; i <= 9; i++)
+    [spaces addItem:[self action:[NSString stringWithFormat:@"Profile %d", i]
+                             key:[NSString stringWithFormat:@"%d", i]
+                       modifiers:control
+                            name:@"space-index"
+                            args:@{@"index" : @(i - 1)}]];
+  [spaces addItem:NSMenuItem.separatorItem];
+  [spaces addItem:[self command:@"Edit Current Space…" key:nil modifiers:0 data:@{@"type" : @"space-editor"}]];
+
+  NSMenu *tabs = [self addMenu:@"Tabs" to:bar];
+  [tabs addItem:[self action:@"Pin / Unpin Tab" key:@"d" modifiers:cmd name:@"pin" args:nil]];
+  [tabs addItem:[self action:@"Add to Favorites" key:nil modifiers:0 name:@"favorite" args:nil]];
+  [tabs addItem:[self action:@"Mute Tab" key:nil modifiers:0 name:@"mute-tab" args:nil]];
+  [tabs addItem:NSMenuItem.separatorItem];
+  [tabs addItem:[self action:@"Show Next Tab" key:@"]" modifiers:cmd | shift name:@"cycle-tab" args:@{@"direction" : @1}]];
+  [tabs addItem:[self action:@"Show Previous Tab" key:@"[" modifiers:cmd | shift name:@"cycle-tab" args:@{@"direction" : @(-1)}]];
+  [tabs addItem:NSMenuItem.separatorItem];
+  for (int i = 1; i <= 9; i++)
+    [tabs addItem:[self action:i == 9 ? @"Last Tab" : [NSString stringWithFormat:@"Tab %d", i]
+                           key:[NSString stringWithFormat:@"%d", i]
+                     modifiers:cmd
+                          name:@"tab-index"
+                          args:@{@"index" : @(i == 9 ? -1 : i - 1)}]];
+  [tabs addItem:NSMenuItem.separatorItem];
+  [tabs addItem:[self action:@"Clear Today’s Tabs" key:nil modifiers:0 name:@"clear-today" args:nil]];
+
+  NSMenu *windowMenu = [self addMenu:@"Window" to:bar];
+  [windowMenu addItem:[self system:@"Minimize" selector:@selector(performMiniaturize:) key:@"m" modifiers:cmd]];
+  [windowMenu addItem:[self system:@"Zoom" selector:@selector(performZoom:) key:nil modifiers:0]];
+  [windowMenu addItem:NSMenuItem.separatorItem];
+  [windowMenu addItem:[self system:@"Bring All to Front" selector:@selector(arrangeInFront:) key:nil modifiers:0]];
+  NSApp.windowsMenu = windowMenu;
+
+  NSMenu *help = [self addMenu:@"Help" to:bar];
+  [help addItem:[self command:@"Wing Guide" key:@"/" modifiers:cmd | shift data:@{@"type" : @"help"}]];
+  NSApp.helpMenu = help;
+  NSApp.mainMenu = bar;
+}
+- (void)handleOpenURL:(NSAppleEventDescriptor *)event
+                reply:(NSAppleEventDescriptor *)reply {
+  NSString *url = [event paramDescriptorForKeyword:'----'].stringValue;
+  NSURLComponents *parsed = [NSURLComponents componentsWithString:url ?: @""];
+  if (![@[ @"http", @"https" ] containsObject:parsed.scheme.lowercaseString] ||
+      !parsed.host.length)
+    return;
+  if (!_lastSync)
+    [_externalURLs addObject:url];
+  else
+    [self send:@"action"
+          data:@{@"name" : @"external-url", @"args" : @{@"url" : url}}];
+  [_window.window makeKeyAndOrderFront:nil];
+  [NSApp activateIgnoringOtherApps:YES];
+}
+- (void)quit:(id)sender {
+  _quitting = YES;
+  [ArdiaCoreEngine.sharedEngine quit];
+}
+- (void)engineQuitCancelled {
+  _quitting = NO;
+  [self applyLayout];
+}
+- (void)windowDidCancelClose:(ArdiaCoreWindow *)window {
+  [self engineQuitCancelled];
+}
+- (BOOL)windowShouldClose:(ArdiaCoreWindow *)window {
+  // Mac browsers keep running when the window closes; the Dock icon,
+  // ⌘N or an opened link brings the same workspace back.
+  if (window == _window && !_quitting) {
+    [_window.window orderOut:nil];
+    return NO;
+  }
+  return YES;
+}
+// Site prompts attach below the address field the shell last reported.
+- (NSRect)promptAnchor {
+  NSDictionary *anchor = _lastSync[@"anchor"];
+  NSView *view = _window.hostView;
+  CGFloat height = NSHeight(view.bounds);
+  if (![anchor isKindOfClass:NSDictionary.class])
+    return NSMakeRect(NSMidX(view.bounds) - 1, view.isFlipped ? 46 : height - 46, 2, 2);
+  CGFloat x = [anchor[@"x"] doubleValue], y = [anchor[@"y"] doubleValue],
+          w = [anchor[@"width"] doubleValue], h = [anchor[@"height"] doubleValue];
+  return NSMakeRect(x, view.isFlipped ? y : height - y - h, MAX(w, 2), MAX(h, 2));
+}
+- (void)handleReopen:(NSAppleEventDescriptor *)event
+               reply:(NSAppleEventDescriptor *)reply {
+  [self showMainWindow:nil];
+}
+- (void)showMainWindow:(id)sender {
+  [_window.window makeKeyAndOrderFront:nil];
+  [NSApp activateIgnoringOtherApps:YES];
+  [self layoutTrafficLights];
+  [_shell focus];
+}
+- (void)layoutTrafficLights {
+  NSWindow *window = _window.window;
+  NSButton *close = [window standardWindowButton:NSWindowCloseButton];
+  NSView *container = close.superview.superview;
+  if (!container || (window.styleMask & NSWindowStyleMaskFullScreen))
+    return;
+  const CGFloat height = 52, left = 18, spacing = 20;
+  NSRect frame = container.frame;
+  frame.size.height = height;
+  frame.origin.y = NSHeight(window.frame) - height;
+  container.frame = frame;
+  CGFloat x = left;
+  for (NSNumber *kind in @[ @(NSWindowCloseButton), @(NSWindowMiniaturizeButton),
+                            @(NSWindowZoomButton) ]) {
+    NSButton *button = [window standardWindowButton:(NSWindowButton)kind.integerValue];
+    NSRect bounds = button.frame;
+    bounds.origin = NSMakePoint(x, round((height - NSHeight(bounds)) / 2));
+    button.frame = bounds;
+    x += spacing;
+  }
+}
+- (void)engineWillShutDown {
+  _quitting = YES;
+  [_extensionPanel close];
+  [_extensionSidebar close];
+  [_maintenanceTimer invalidate];
+  for (WingDeviceChooser *chooser in [_deviceChoosers.allValues copy]) [chooser cancel];
+  [_importProcess stop];
+  [NSAppleEventManager.sharedAppleEventManager
+      removeEventHandlerForEventClass:'GURL'
+                           andEventID:'GURL'];
+  if (_resizeObserver)
+    [NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];
+}
+- (NSString *)identityForTab:(ArdiaCoreTab *)tab {
+  for (NSString *key in _tabs)
+    if (_tabs[key] == tab)
+      return key;
+  return nil;
+}
+- (ArdiaCoreWindow *)engineWindowForNewBrowserOfProfile:
+                         (ArdiaCoreProfile *)profile
+                                                   type:(NSString *)type {
+  return [WingPrivateWindow engineWindowForProfile:profile] ?: _window;
+}
+- (void)newPrivateWindow:(id)sender {
+  BOOL duck = [_lastSync[@"workspace"][@"settings"][@"search"] isEqual:@"duckduckgo"];
+  [WingPrivateWindow
+      openFromProfile:_window.activeProfile ?: ArdiaCoreEngine.sharedEngine.defaultProfile
+                  url:nil
+               search:duck ? @"https://duckduckgo.com/?q=" : @"https://www.google.com/search?q="];
+}
+- (void)window:(ArdiaCoreWindow *)window
+    didInsertTab:(ArdiaCoreTab *)tab
+          opener:(ArdiaCoreTab *)opener
+     disposition:(NSString *)disposition {
+  // Owned opens are registered by their caller before this deferred check.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self->_quitting || tab.closed || tab == self->_shell ||
+        [self identityForTab:tab] ||
+        [self->_protectionTabs.allValues containsObject:tab] ||
+        [self->_serviceTabs.allValues containsObject:tab] ||
+        [self->_extensionManagers.allValues containsObject:tab])
+      return;
+    NSString *profileId;
+    for (NSString *candidate in self->_profiles)
+      if (self->_profiles[candidate] == tab.profile) {
+        profileId = candidate;
+        break;
+      }
+    if (!profileId)
+      return;
+    NSString *identity = NSUUID.UUID.UUIDString;
+    self->_tabs[identity] = tab;
+    [self->_pendingCreatedTabs addObject:identity];
+    self->_modelURLs[identity] = tab.url.length ? tab.url : @"about:blank";
+    tab.delegate = self;
+    [self send:@"created"
+          data:@{
+            @"id" : identity,
+            @"profileId" : profileId,
+            @"url" : tab.url ?: @"about:blank",
+            @"foreground" : @(![disposition isEqual:@"background_tab"])
+          }];
+    [self pageChanged:tab];
+  });
+}
+- (void)tab:(ArdiaCoreTab *)tab requestsActivation:(NSString *)reason {
+  NSString *identity = [self identityForTab:tab];
+  if (identity)
+    [self send:@"action"
+          data:@{@"name" : @"select-tab", @"args" : @{@"id" : identity}}];
+}
+- (void)applyStyle:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity || !tab.committedOrigin)
+    return;
+  NSString *css =
+      _lastSync[@"workspace"][@"boosts"][tab.committedOrigin] ?: @"";
+  if ([_appliedStyles[identity] isEqual:css])
+    return;
+  _appliedStyles[identity] = css;
+  [tab executeJavaScript:
+           [NSString
+               stringWithFormat:
+                   @"(()=>{const apply=()=>{let "
+                   @"style=document.getElementById('wing-site-style');if(!"
+                   @"style){style=document.createElement('style');style.id='"
+                   @"wing-site-style';(document.head||document.documentElement)"
+                   @".append(style);}style.textContent=%@;};if(document."
+                   @"documentElement)apply();"
+                   @"else "
+                   @"document.addEventListener('DOMContentLoaded',apply,{once:"
+                   @"true});})()",
+                   JSON(css)]];
+}
+- (void)tabDidCommitDocument:(ArdiaCoreTab *)tab {
+  [self cancelExternalRequestsForTab:tab];
+  [self cancelDeviceRequestsForTab:tab];
+  NSString *identity = [self identityForTab:tab];
+  if (identity)
+    [_crashedTabs removeObjectForKey:identity];
+  if (identity)
+    [_wakingTabs removeObject:identity];
+  if (identity)
+    [_appliedStyles removeObjectForKey:identity];
+  [self applyStyle:tab];
+  [self pageChanged:tab];
+  if ([_protectionTabs.allValues containsObject:tab])
+    [self tabDidChangeLoading:tab];
+}
+- (void)pageChanged:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity || tab.closed || _quitting)
+    return;
+  [self send:@"page"
+        data:@{
+          @"id" : identity,
+          @"url" : tab.url ?: @"",
+          @"title" : tab.title ?: @"",
+          @"loading" : @(tab.loading),
+          @"canGoBack" : @(tab.canGoBack),
+          @"canGoForward" : @(tab.canGoForward),
+          @"audible" : @(tab.audible),
+          @"muted" : @(tab.muted),
+          @"capturing" : @([_capturingTabs containsObject:identity]),
+          @"screenSharing" : @([_screenSharingTabs containsObject:identity]),
+          @"pictureInPicture" : @([_pictureInPictureTabs containsObject:identity]),
+          @"favicon" : tab.faviconURL ?: @"",
+          @"progress" : @(tab.progress),
+          @"zoom" : @(tab.zoomFactor),
+          @"crashed" : _crashedTabs[identity] ?: @""
+        }];
+}
+- (void)tab:(ArdiaCoreTab *)tab rendererGone:(NSString *)status code:(int)code {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity || tab.closed || _quitting || [status isEqual:@"normal"])
+    return;
+  [_hangPrompts[identity] dismiss];
+  [_hangPrompts removeObjectForKey:identity];
+  _crashedTabs[identity] = status;
+  [self pageChanged:tab];
+}
+- (void)tabBecameUnresponsive:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity || _hangPrompts[identity] || tab.closed)
+    return;
+  // Background tabs wait; the prompt appears only for the page in front.
+  if (![_lastSync[@"workspace"][@"activeTabId"] isEqual:identity]) {
+    [tab resolveUnresponsive:NO];
+    return;
+  }
+  __weak ArdiaCoreTab *weakTab = tab;
+  _hangPrompts[identity] = [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:@"hourglass"
+           title:[NSString stringWithFormat:@"“%@” isn’t responding", SiteName(tab.url)]
+         message:@"You can wait for it, or exit the page and reload it later."
+         buttons:@[ @"Exit Page", @"Wait" ]
+        remember:nil
+      completion:^(NSInteger choice, BOOL remember) {
+        [self->_hangPrompts removeObjectForKey:identity];
+        [weakTab resolveUnresponsive:choice == 0];
+      }];
+}
+- (void)tabBecameResponsive:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity) return;
+  WingPromptPopover *prompt = _hangPrompts[identity];
+  [_hangPrompts removeObjectForKey:identity];
+  [prompt dismiss];
+}
+- (void)tab:(ArdiaCoreTab *)tab navigationBecameDownload:(NSString *)url {
+  // The services page may not be loaded yet; ask the shell to refresh its
+  // library so the downloads button appears and starts tracking progress.
+  for (NSString *profileId in _profiles)
+    if (_profiles[profileId] == tab.profile) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), ^{
+                       [self send:@"service-event" data:@{@"profileId" : profileId}];
+                     });
+      return;
+    }
+}
+- (void)tabDidChangeProgress:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tabDidChangeZoom:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tab:(ArdiaCoreTab *)tab
+    didFindMatches:(int)count
+            active:(int)active
+             final:(BOOL)final {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity)
+    return;
+  [self send:@"command"
+        data:@{
+          @"type" : @"find-result",
+          @"id" : identity,
+          @"count" : @(count),
+          @"active" : @(active),
+          @"final" : @(final)
+        }];
+}
+- (void)tab:(ArdiaCoreTab *)tab didChangePictureInPicture:(NSDictionary *)state {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity) return;
+  if ([state[@"active"] boolValue]) [_pictureInPictureTabs addObject:identity];
+  else [_pictureInPictureTabs removeObject:identity];
+  [self pageChanged:tab];
+}
+- (void)tab:(ArdiaCoreTab *)tab
+    didChangeMediaAccess:(NSDictionary<NSString *, NSNumber *> *)access {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity)
+    return;
+  if ([access[@"screen"] boolValue]) [_screenSharingTabs addObject:identity];
+  else [_screenSharingTabs removeObject:identity];
+  if ([access[@"camera"] boolValue] || [access[@"microphone"] boolValue] ||
+      [access[@"screen"] boolValue])
+    [_capturingTabs addObject:identity];
+  else
+    [_capturingTabs removeObject:identity];
+  [self pageChanged:tab];
+}
+- (void)window:(ArdiaCoreWindow *)window
+    devToolsDidChangeForTab:(ArdiaCoreTab *)tab
+                       view:(NSView *)view {
+  [self applyLayout];
+}
+- (void)tabDidChangeURL:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tabDidChangeTitle:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tabDidChangeLoading:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+  if (!tab.loading && !tab.closed) {
+    for (NSString *identity in _protectionTabs.allKeys) {
+      if (_protectionTabs[identity] == tab &&
+          ![tab.url isEqual:_protectionURLs[identity]] &&
+          [self->_protectionDeadlines[identity] timeIntervalSinceNow] > 0) {
+        // During profile startup Chromium loads its component registry again.
+        // It replaces an open extension document with New Tab. Only this owned
+        // initialization page is reopened; ordinary browsing stays paused.
+        [_checkingProtection removeObject:identity];
+        [tab loadURL:_protectionURLs[identity] userInitiated:NO];
+        return;
+      }
+    }
+  }
+  if ([tab.committedOrigin hasPrefix:@"chrome-extension://"] &&
+      [tab.url hasSuffix:@"/dashboard.html"]) {
+    for (NSString *identity in _protectionTabs.allKeys) {
+      if (_protectionTabs[identity] != tab ||
+          [_checkingProtection containsObject:identity])
+        continue;
+      [_checkingProtection addObject:identity];
+      // getLists is explicitly gated by uBO's isReadyPromise. Do not load the
+      // first browsing page until the real filtering engines have initialized.
+      NSString *probe = [NSString
+          stringWithContentsOfFile:
+              [NSBundle.mainBundle.resourcePath
+                  stringByAppendingPathComponent:@"protection-ready.js"]
+                          encoding:NSUTF8StringEncoding
+                             error:nil];
+      [tab evaluate:probe
+          completion:^(NSString *result) {
+            if (self->_protectionTabs[identity] != tab ||
+                [self->_protectedProfiles containsObject:identity])
+              return;
+            if (!result && !tab.closed && !self->_quitting &&
+                [self->_protectionDeadlines[identity] timeIntervalSinceNow] >
+                    0) {
+              // A first-run extension reload can replace the document while a
+              // readiness RPC is pending. Retry in the new committed context.
+              [self->_checkingProtection removeObject:identity];
+              dispatch_after(
+                  dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                  dispatch_get_main_queue(), ^{
+                    [self tabDidChangeLoading:tab];
+                  });
+              return;
+            }
+            id value = result ? Parse(result) : nil;
+            if ([value isKindOfClass:NSString.class])
+              value = Parse(value);
+            if ([value isKindOfClass:NSDictionary.class] &&
+                [value[@"ready"] boolValue]) {
+              [self->_protectedProfiles addObject:identity];
+              [self->_protectionTabs removeObjectForKey:identity];
+              tab.delegate = nil;
+              [tab closeNow];
+              [self applyLayout];
+            } else {
+              if (!tab.closed && !self->_quitting &&
+                  [self->_protectionDeadlines[identity] timeIntervalSinceNow] >
+                      0) {
+                [self->_checkingProtection removeObject:identity];
+                [self->_profiles[identity]
+                    loadComponentExtension:[NSBundle.mainBundle.resourcePath
+                                               stringByAppendingPathComponent:
+                                                   @"uBlock0.chromium"]];
+                [tab loadURL:self->_protectionURLs[identity] userInitiated:NO];
+                return;
+              }
+              if (getenv("WING_CHROMIUM_TEST_SCRIPT"))
+                fprintf(stderr, "uBlock initialization result: %s\n",
+                        result.UTF8String ?: "(missing)");
+              [self send:@"command"
+                    data:@{
+                      @"type" : @"toast",
+                      @"message" : @"uBlock could not initialize. Browsing "
+                                   @"remains paused for this profile."
+                    }];
+            }
+          }];
+    }
+  }
+  const char *scriptPath = getenv("WING_CHROMIUM_TEST_SCRIPT");
+  if (tab == _shell && !tab.loading && !_qualificationStarted && scriptPath) {
+    _qualificationStarted = YES;
+    NSString *script = [NSString stringWithContentsOfFile:@(scriptPath)
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:nil];
+    [_shell evaluate:script
+          completion:^(NSString *result) {
+            const char *output = getenv("WING_CHROMIUM_TEST_REPORT");
+            if (output && result)
+              [result writeToFile:@(output)
+                       atomically:YES
+                         encoding:NSUTF8StringEncoding
+                            error:nil];
+            [self quit:nil];
+          }];
+  }
+}
+- (void)tabDidChangeNavigationState:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tabDidChangeFavicon:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tabDidChangeAudio:(ArdiaCoreTab *)tab {
+  [self pageChanged:tab];
+}
+- (void)tabWillClose:(ArdiaCoreTab *)tab {
+  [self cancelExternalRequestsForTab:tab];
+  [self cancelDeviceRequestsForTab:tab];
+  NSString *identity = [self identityForTab:tab];
+  if (!identity)
+    return;
+  [self closeExtensionViewsForTabID:identity];
+  NSNumber *archive = _closing[identity] ?: @NO;
+  [_tabs removeObjectForKey:identity];
+  [_crashedTabs removeObjectForKey:identity];
+  [_hangPrompts[identity] dismiss];
+  [_hangPrompts removeObjectForKey:identity];
+  [_modelURLs removeObjectForKey:identity];
+  [_closing removeObjectForKey:identity];
+  [_wakingTabs removeObject:identity];
+  [_capturingTabs removeObject:identity];
+  [_pendingCreatedTabs removeObject:identity];
+  [_pictureInPictureTabs removeObject:identity];
+  [_screenSharingTabs removeObject:identity];
+  if (!_quitting)
+    [self send:@"closed" data:@{@"id" : identity, @"archive" : archive}];
+}
+- (void)window:(ArdiaCoreWindow *)window didRemoveTab:(ArdiaCoreTab *)tab {
+  // Component registry startup can destroy the readiness document outright.
+  // Recreate only our private probe, within the original bounded deadline.
+  for (NSString *profileId in _protectionTabs.allKeys) {
+    if (_protectionTabs[profileId] != tab || _quitting ||
+        [_protectionDeadlines[profileId] timeIntervalSinceNow] <= 0)
+      continue;
+    [_checkingProtection removeObject:profileId];
+    [_profiles[profileId]
+        loadComponentExtension:
+            [NSBundle.mainBundle.resourcePath
+                stringByAppendingPathComponent:@"uBlock0.chromium"]];
+    ArdiaCoreTab *probe = [_window openTab:_protectionURLs[profileId]
+                                   profile:_profiles[profileId]
+                                foreground:NO];
+    _protectionTabs[profileId] = probe;
+    probe.delegate = self;
+    return;
+  }
+  // The core intentionally suppresses tabWillClose for host-initiated closes.
+  // Removal confirms that beforeunload permitted the close; never mutate the
+  // saved workspace merely because a close was requested.
+  NSString *identity = [self identityForTab:tab];
+  if (identity && _closing[identity])
+    [self tabWillClose:tab];
+}
+- (void)applyLayout {
+  if (_quitting || !_lastSync)
+    return;
+  NSDictionary *state = _lastSync[@"workspace"];
+  if (_extensionSidebarOwner && ![_extensionSidebarOwner isEqual:state[@"activeTabId"]]) {
+    [_extensionSidebar close];
+    _extensionSidebarOwner = nil;
+  }
+  if (_extensionPanelOwner &&
+      ![_extensionPanelOwner isEqual:state[@"activeTabId"]]) {
+    [_extensionPanel close];
+    _extensionPanelOwner = nil;
+  }
+  for (NSString *identity in _tabs.allKeys) {
+    NSDictionary *record;
+    for (NSDictionary *candidate in state[@"tabs"])
+      if ([candidate[@"id"] isEqual:identity]) {
+        record = candidate;
+        break;
+      }
+    NSString *profileId;
+    for (NSDictionary *space in state[@"spaces"])
+      if ([space[@"id"] isEqual:record[@"spaceId"]]) {
+        profileId = space[@"profileId"];
+        break;
+      }
+    ArdiaCoreTab *page = _tabs[identity];
+    if (record)
+      [_pendingCreatedTabs removeObject:identity];
+    else if ([_pendingCreatedTabs containsObject:identity])
+      continue;
+    if (!record || [record[@"closed"] boolValue] ||
+        ![page.profile.name
+            isEqual:[@"Wing-" stringByAppendingString:profileId ?: @""]]) {
+      [self closeExtensionViewsForTabID:identity];
+      [_tabs removeObjectForKey:identity];
+      [_crashedTabs removeObjectForKey:identity];
+      [_hangPrompts[identity] dismiss];
+      [_hangPrompts removeObjectForKey:identity];
+      [_modelURLs removeObjectForKey:identity];
+      [_appliedStyles removeObjectForKey:identity];
+      [_wakingTabs removeObject:identity];
+      [_capturingTabs removeObject:identity];
+      [_pictureInPictureTabs removeObject:identity];
+      [_screenSharingTabs removeObject:identity];
+      page.delegate = nil;
+      [page closeNow];
+    } else
+      [self applyStyle:page];
+  }
+  NSMutableSet *visible = [NSMutableSet new];
+  for (NSDictionary *pane in _lastSync[@"panes"])
+    if (Identifier(pane[@"id"]))
+      [visible addObject:pane[@"id"]];
+  for (NSString *identity in _tabs)
+    if (![visible containsObject:identity]) {
+      [_tabs[identity] noteShownByHost:NO];
+      [_tabs[identity].view removeFromSuperview];
+      [_tabs[identity].devToolsView removeFromSuperview];
+    }
+  CGFloat contentLeft = _window.hostView.bounds.size.width;
+  for (NSDictionary *pane in _lastSync[@"panes"])
+    contentLeft = MIN(contentLeft, [pane[@"x"] doubleValue]);
+  CGFloat available = MAX(0, _window.hostView.bounds.size.width - contentLeft);
+  CGFloat sidebarWidth = _extensionSidebar.page && available > 400 ? MIN(360, available * 0.45) : 0;
+  for (NSDictionary *pane in _lastSync[@"panes"]) {
+    NSString *identity = pane[@"id"];
+    NSDictionary *record;
+    for (NSDictionary *candidate in state[@"tabs"])
+      if ([candidate[@"id"] isEqual:identity]) {
+        record = candidate;
+        break;
+      }
+    if (!record || !WebURL(record[@"url"]))
+      continue;
+    NSString *profileId;
+    for (NSDictionary *space in state[@"spaces"])
+      if ([space[@"id"] isEqual:record[@"spaceId"]]) {
+        profileId = space[@"profileId"];
+        break;
+      }
+    if (!Identifier(profileId))
+      continue;
+    ArdiaCoreProfile *profile = _profiles[profileId];
+    if (!profile) {
+      if (![_loadingProfiles containsObject:profileId]) {
+        [_loadingProfiles addObject:profileId];
+        [ArdiaCoreEngine.sharedEngine
+            loadProfile:[@"Wing-" stringByAppendingString:profileId]
+             completion:^(ArdiaCoreProfile *loaded) {
+               [self->_loadingProfiles removeObject:profileId];
+               if (loaded) {
+                 self->_profiles[profileId] = loaded;
+                 [self applyLayout];
+               } else
+                 [self
+                     send:@"command"
+                     data:@{
+                       @"type" : @"toast",
+                       @"message" : @"The browser profile could not be opened."
+                     }];
+             }];
+      }
+      continue;
+    }
+    if (![_protectedProfiles containsObject:profileId]) {
+      if (![_startingProtection containsObject:profileId]) {
+        [_startingProtection addObject:profileId];
+        [_window prepareProfile:profile];
+        NSString *path = [NSBundle.mainBundle.resourcePath
+            stringByAppendingPathComponent:@"uBlock0.chromium"];
+        NSDictionary *manifest = Parse([NSString
+            stringWithContentsOfFile:
+                [path stringByAppendingPathComponent:@"manifest.json"]
+                            encoding:NSUTF8StringEncoding
+                               error:nil]);
+        // Missing component keys trigger a fatal Chromium CHECK; validate
+        // before entering the engine, even though the bundle is signed at build
+        // time.
+        if (![manifest[@"key"] isKindOfClass:NSString.class] ||
+            ![manifest[@"key"] length]) {
+          [self send:@"command"
+                data:@{
+                  @"type" : @"toast",
+                  @"message" : @"The bundled protection extension is invalid."
+                }];
+          continue;
+        }
+        [profile loadComponentExtension:
+                     [NSBundle.mainBundle.resourcePath
+                         stringByAppendingPathComponent:@"WingServices"]];
+        NSString *extensionId = [profile loadComponentExtension:path];
+        if (!extensionId)
+          continue;
+        NSString *dashboard =
+            [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html",
+                                       extensionId];
+        ArdiaCoreTab *initializing = [_window openTab:dashboard
+                                              profile:profile
+                                           foreground:NO];
+        _protectionTabs[profileId] = initializing;
+        _protectionURLs[profileId] = dashboard;
+        _protectionDeadlines[profileId] =
+            [NSDate dateWithTimeIntervalSinceNow:20];
+        initializing.delegate = self;
+      }
+      continue;
+    }
+    ArdiaCoreTab *tab = _tabs[identity];
+    if (!tab) {
+      tab = [_window openTab:record[@"url"] profile:profile foreground:NO];
+      _tabs[identity] = tab;
+      _modelURLs[identity] = record[@"url"];
+      tab.delegate = self;
+    } else if (tab.profile != profile) {
+      // Never silently move a live document across a profile boundary.
+      [self send:@"command"
+            data:@{
+              @"type" : @"toast",
+              @"message" : @"Cross-profile moves are not yet migrated."
+            }];
+      continue;
+    } else if (![_modelURLs[identity] isEqual:record[@"url"]]) {
+      // A sync can lag native navigation events. Only a changed model URL is
+      // a navigation request; an unchanged stale snapshot must not navigate
+      // back.
+      _modelURLs[identity] = record[@"url"];
+      if (![tab.url isEqual:record[@"url"]])
+        [tab loadURL:record[@"url"] userInitiated:YES];
+    }
+    if (tab.discarded && ![_wakingTabs containsObject:identity]) {
+      [_wakingTabs addObject:identity];
+      [tab reload];
+    }
+    if (tab.view.superview != _window.hostView)
+      [_window.hostView addSubview:tab.view];
+    CGFloat height = _window.hostView.bounds.size.height;
+    CGFloat x = [pane[@"x"] doubleValue], y = [pane[@"y"] doubleValue],
+            w = [pane[@"width"] doubleValue], h = [pane[@"height"] doubleValue];
+    if (sidebarWidth > 0) {
+      CGFloat scale = (available - sidebarWidth - 8) / available;
+      x = contentLeft + (x - contentLeft) * scale;
+      w *= scale;
+    }
+    NSRect pageFrame = NSMakeRect(0, 0, MAX(1, w), MAX(1, h)), toolsFrame;
+    NSView *toolsView = tab.devToolsView;
+    if (toolsView) {
+      [tab devToolsLayoutForSize:pageFrame.size
+                        devTools:&toolsFrame
+                            page:&pageFrame];
+      if (toolsView.superview != _window.hostView)
+        [_window.hostView addSubview:toolsView];
+      toolsView.frame = NSMakeRect(
+          x + toolsFrame.origin.x,
+          _window.hostView.isFlipped
+              ? y + toolsFrame.origin.y
+              : height - y - toolsFrame.origin.y - toolsFrame.size.height,
+          toolsFrame.size.width, toolsFrame.size.height);
+    }
+    tab.view.frame = NSMakeRect(x + pageFrame.origin.x,
+                                _window.hostView.isFlipped
+                                    ? y + pageFrame.origin.y
+                                    : height - y - pageFrame.origin.y -
+                                          pageFrame.size.height,
+                                pageFrame.size.width, pageFrame.size.height);
+    // Pages sit in a rounded card like Arc's, matching the shell's radius.
+    tab.view.wantsLayer = YES;
+    tab.view.layer.cornerRadius = 10;
+    tab.view.layer.cornerCurve = @"continuous"; // kCACornerCurveContinuous without linking QuartzCore
+    tab.view.layer.masksToBounds = YES;
+    [tab noteShownByHost:YES];
+    if ([identity isEqual:state[@"activeTabId"]]) {
+      _window.activeProfile = profile;
+      [_window activateTab:tab];
+    }
+  }
+  CGFloat sidebarTop = [state[@"settings"][@"toolbarHidden"] boolValue] ? 8 : 52;
+  CGFloat sidebarHeight = MAX(1, _window.hostView.bounds.size.height - sidebarTop - 8);
+  [_extensionSidebar layoutIn:_window.hostView
+                         frame:NSMakeRect(_window.hostView.bounds.size.width - sidebarWidth - 8,
+                             _window.hostView.isFlipped ? sidebarTop : 8,
+                             sidebarWidth, sidebarHeight)
+                       visible:sidebarWidth > 0];
+  // Chromium's tab strip hides inactive native views. Wing owns visibility
+  // for every split pane, so restore it after the active-tab transition.
+  for (NSString *identity in visible) {
+    ArdiaCoreTab *page = _tabs[identity];
+    if (page.view.superview == _window.hostView)
+      page.view.hidden = NO;
+    if (page.devToolsView.superview == _window.hostView)
+      page.devToolsView.hidden = NO;
+  }
+}
+- (void)window:(ArdiaCoreWindow *)window didActivateTab:(ArdiaCoreTab *)tab {
+  if (window != _window || _quitting)
+    return;
+  // Tab-strip notifications cannot mutate the strip synchronously.
+  dispatch_async(dispatch_get_main_queue(), ^{ [self applyLayout]; });
+}
+- (void)tab:(ArdiaCoreTab *)tab
+    didReceivePageMessage:(NSString *)kind
+                     json:(NSString *)json
+                    frame:(NSString *)frameId
+                     main:(BOOL)main
+                   origin:(NSString *)origin {
+  if ([kind isEqual:@"wing-service-event"] && main && json.length < 10000) {
+    for (NSString *profileId in _serviceTabs) {
+      if (_serviceTabs[profileId] == tab &&
+          [tab.url isEqual:_serviceURLs[profileId]] &&
+          [origin isEqual:tab.committedOrigin]) {
+        [self send:@"service-event" data:@{@"profileId" : profileId}];
+        return;
+      }
+    }
+    return;
+  }
+  // The engine exposes the message channel to every page. Only this exact local
+  // shell document, in its main frame, may invoke host capabilities.
+  if (tab != _shell || !main || ![_shell.url isEqual:_shellURL] ||
+      ![origin isEqual:_shell.committedOrigin] ||
+      ![kind isEqual:@"wing-request"] || json.length > 8000000)
+    return;
+  NSDictionary *request = Parse(json);
+  if (![request isKindOfClass:NSDictionary.class] ||
+      ![request[@"id"] isKindOfClass:NSNumber.class] ||
+      [request[@"id"] longLongValue] <= 0 ||
+      ![request[@"action"] isKindOfClass:NSString.class] ||
+      ![request[@"data"] isKindOfClass:NSDictionary.class])
+    return;
+  NSNumber *rid = request[@"id"];
+  NSString *action = request[@"action"];
+  NSDictionary *data = request[@"data"];
+  if (_quitting) {
+    [self reply:rid result:nil error:@"Browser is closing."];
+    return;
+  }
+  if ([action isEqual:@"window-drag"]) {
+    NSEvent *down = _lastMouseDown;
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    if (down && (NSEvent.pressedMouseButtons & 1) &&
+        NSProcessInfo.processInfo.systemUptime - down.timestamp < 1)
+      [_window.window performWindowDragWithEvent:down];
+    return;
+  }
+  if ([action isEqual:@"window-zoom"]) {
+    NSString *behavior = [NSUserDefaults.standardUserDefaults stringForKey:@"AppleActionOnDoubleClick"];
+    if ([behavior isEqual:@"Minimize"])
+      [_window.window performMiniaturize:nil];
+    else if (![behavior isEqual:@"None"])
+      [_window.window performZoom:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if (getenv("WING_CHROMIUM_TEST_SCRIPT") &&
+      ![@[ @"sync", @"diagnostics", @"evaluate-page", @"extension-actions" ]
+          containsObject:action])
+    fprintf(stderr, "Qualification request: %s\n", action.UTF8String);
+  if ([action isEqual:@"diagnostics"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    NSMutableArray *tabs = [NSMutableArray new];
+    NSMutableArray *protectionPages = [NSMutableArray new];
+    for (NSString *identity in _protectionTabs) {
+      ArdiaCoreTab *page = _protectionTabs[identity];
+      [protectionPages addObject:@{
+        @"profile" : identity,
+        @"url" : page.url,
+        @"origin" : page.committedOrigin ?: @"",
+        @"loading" : @(page.loading),
+        @"closed" : @(page.closed),
+        @"title" : page.title
+      }];
+    }
+    for (NSString *identity in _tabs) {
+      ArdiaCoreTab *page = _tabs[identity];
+      NSRect bounds = page.view.frame;
+      [tabs addObject:@{
+        @"id" : identity,
+        @"url" : page.url,
+        @"profile" : page.profile.name,
+        @"visible" : @(page.view.superview != nil),
+        @"attachedToWindow" : @(page.view.window == _window.window),
+        @"hidden" : @(page.view.hiddenOrHasHiddenAncestor),
+        @"devToolsVisible" : @(page.devToolsView.superview != nil),
+        @"discarded" : @(page.discarded),
+        @"x" : @(bounds.origin.x),
+        @"y" : @(bounds.origin.y),
+        @"width" : @(bounds.size.width),
+        @"height" : @(bounds.size.height)
+      }];
+    }
+    [self reply:rid
+         result:@{
+           @"tabs" : tabs,
+           @"shellInternal" : @(_uiWindow.internal),
+           @"externalAppRequests" : @(_externalAppAlerts.count),
+           @"deviceChoosers" : @(_deviceChoosers.count),
+           @"extensionSidebar" : @{
+             @"open" : @(_extensionSidebar.page != nil),
+             @"visible" : @(_extensionSidebar.page.view.window == _window.window),
+             @"title" : _extensionSidebar.page.title ?: @""
+           },
+           @"downloadDirectoryAPI" :
+               @([ArdiaCoreEngine.sharedEngine.defaultProfile
+                   respondsToSelector:@selector(setDownloadDirectory:)]),
+           @"protectedProfiles" : _protectedProfiles.allObjects,
+           @"checkingProtection" : _checkingProtection.allObjects,
+           @"protectionPages" : protectionPages,
+           @"initializingProfiles" : _protectionTabs.allKeys
+         }
+          error:nil];
+    return;
+  }
+  if ([action isEqual:@"default-browser"]) {
+    if ([[NSBundle.mainBundle objectForInfoDictionaryKey:@"WingQualificationOnly"] boolValue]) {
+      [self reply:rid result:nil error:@"Build and install the qualified Wing app before choosing it as your default browser."];
+      return;
+    }
+    NSURL *application = NSBundle.mainBundle.bundleURL;
+    [NSWorkspace.sharedWorkspace setDefaultApplicationAtURL:application toOpenURLsWithScheme:@"http"
+      completionHandler:^(NSError *error) {
+        if (error) {
+          dispatch_async(dispatch_get_main_queue(), ^{ [self reply:rid result:nil error:error.localizedDescription]; });
+          return;
+        }
+        [NSWorkspace.sharedWorkspace setDefaultApplicationAtURL:application toOpenURLsWithScheme:@"https"
+          completionHandler:^(NSError *secureError) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+              [self reply:rid result:secureError ? nil : @{@"ok" : @YES} error:secureError.localizedDescription];
+            });
+          }];
+      }];
+    return;
+  }
+  if ([action isEqual:@"bootstrap"]) {
+    NSData *saved = [NSData dataWithContentsOfFile:_workspacePath];
+    id state = saved ? [NSJSONSerialization JSONObjectWithData:saved
+                                                       options:0
+                                                         error:nil]
+                     : nil;
+    if (saved && ![state isKindOfClass:NSDictionary.class]) {
+      [self
+           reply:rid
+          result:nil
+           error:@"Saved preview workspace is invalid; it has been preserved."];
+      return;
+    }
+    [self reply:rid
+         result:@{
+           @"workspace" : state ?: NSNull.null,
+           @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion
+         }
+          error:nil];
+    return;
+  }
+  if ([action isEqual:@"protection-url"]) {
+    NSString *profile = data[@"profile"];
+    if (!Identifier(profile) || ![_protectedProfiles containsObject:profile]) {
+      [self reply:rid
+           result:nil
+            error:
+                @"Open a page in this profile to initialize protection first."];
+      return;
+    }
+    [self reply:rid result:@{@"url" : _protectionURLs[profile]} error:nil];
+    return;
+  }
+  if ([action isEqual:@"sync"]) {
+    NSDictionary *state = data[@"workspace"];
+    if (!ValidSync(data)) {
+      [self reply:rid result:nil error:@"Invalid workspace layout"];
+      return;
+    }
+    if ([data[@"persist"] boolValue]) {
+      NSError *error;
+      NSMutableDictionary *durable = [state mutableCopy];
+      NSMutableArray *tabs = [NSMutableArray new];
+      for (NSDictionary *record in state[@"tabs"])
+        if (![record[@"transient"] boolValue])
+          [tabs addObject:record];
+      durable[@"tabs"] = tabs;
+      NSData *body = [NSJSONSerialization dataWithJSONObject:durable
+                                                     options:0
+                                                       error:&error];
+      if (!body || !SaveWorkspace(body, _workspacePath)) {
+        [self reply:rid result:nil error:@"Workspace could not be saved."];
+        return;
+      }
+    }
+    _lastSync = data;
+    BOOL automaticPiP = [state[@"settings"][@"automaticPictureInPicture"] boolValue];
+    if (automaticPiP != _automaticPictureInPicture) {
+      _automaticPictureInPicture = automaticPiP;
+      [ArdiaCoreEngine setAutoPictureInPicture:automaticPiP];
+    }
+    [self applyLayout];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    for (NSString *url in [_externalURLs copy])
+      [self send:@"action"
+            data:@{@"name" : @"external-url", @"args" : @{@"url" : url}}];
+    [_externalURLs removeAllObjects];
+    return;
+  }
+  if ([action isEqual:@"overlay-capture"]) {
+    NSMutableArray *frames = [NSMutableArray new];
+    dispatch_group_t group = dispatch_group_create();
+    for (NSDictionary *pane in _lastSync[@"panes"]) {
+      ArdiaCoreTab *page = _tabs[pane[@"id"]];
+      if (!page || page.closed || !page.view.superview)
+        continue;
+      dispatch_group_enter(group);
+      [page copyPicture:0.3
+             completion:^(CGImageRef picture) {
+               NSMutableDictionary *frame = [@{
+                 @"bounds" : @{
+                   @"x" : pane[@"x"],
+                   @"y" : pane[@"y"],
+                   @"width" : pane[@"width"],
+                   @"height" : pane[@"height"]
+                 }
+               } mutableCopy];
+               if (picture) {
+                 NSBitmapImageRep *image =
+                     [[NSBitmapImageRep alloc] initWithCGImage:picture];
+                 NSData *png =
+                     [image representationUsingType:NSBitmapImageFileTypePNG
+                                         properties:@{}];
+                 if (png)
+                   frame[@"image"] = [@"data:image/png;base64,"
+                       stringByAppendingString:
+                           [png base64EncodedStringWithOptions:0]];
+               }
+               if (!frame[@"image"])
+                 frame[@"fallback"] = @YES;
+               [frames addObject:frame];
+               dispatch_group_leave(group);
+             }];
+    }
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+      [self reply:rid result:@{@"frames" : frames} error:nil];
+    });
+    return;
+  }
+  if ([action isEqual:@"metrics"]) {
+    NSUInteger sleeping = 0;
+    for (ArdiaCoreTab *page in _tabs.allValues)
+      if (page.discarded)
+        sleeping++;
+    [self reply:rid
+         result:@{
+           @"liveViews" : @(_tabs.count - sleeping),
+           @"sleepingTabs" : @(sleeping),
+           @"totalTabs" : @([_lastSync[@"workspace"][@"tabs"] count]),
+           @"processes" : [self processMetrics]
+         }
+          error:nil];
+    return;
+  }
+  if ([action isEqual:@"test-archive-idle"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    [self archiveIdlePagesAt:[data[@"now"] doubleValue] completion:^{
+      [self reply:rid result:@{@"ok" : @YES} error:nil];
+    }];
+    return;
+  }
+  if ([action isEqual:@"trim-memory"]) {
+    [self trimMemoryAutomatic:NO
+                   completion:^{
+                     [self reply:rid result:@{@"ok" : @YES} error:nil];
+                   }];
+    return;
+  }
+  if ([action isEqual:@"private-window"]) {
+    [self newPrivateWindow:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"context-menu"]) {
+    if (![data[@"items"] isKindOfClass:NSArray.class]) {
+      [self reply:rid result:nil error:@"Invalid menu."];
+      return;
+    }
+    // Entries: {separator}, {title, items} for a submenu, or {title, kind, data}
+    // with optional symbol and checked. Bounded so a page cannot build huge menus.
+    __block NSUInteger budget = 60;
+    __block NSMenu * (^build)(NSArray *, NSUInteger) = nil;
+    NSMenu * (^builder)(NSArray *, NSUInteger) = ^NSMenu *(NSArray *entries, NSUInteger depth) {
+      NSMenu *menu = [NSMenu new];
+      menu.autoenablesItems = NO;
+      for (NSDictionary *entry in entries) {
+        if (!budget--) break;
+        if (![entry isKindOfClass:NSDictionary.class]) continue;
+        if ([entry[@"separator"] isEqual:@YES]) {
+          if (menu.numberOfItems && !menu.itemArray.lastObject.isSeparatorItem)
+            [menu addItem:NSMenuItem.separatorItem];
+          continue;
+        }
+        if (![entry[@"title"] isKindOfClass:NSString.class]) continue;
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:entry[@"title"]
+                                                      action:nil
+                                               keyEquivalent:@""];
+        if ([entry[@"items"] isKindOfClass:NSArray.class]) {
+          if (depth > 1) continue;
+          item.submenu = build(entry[@"items"], depth + 1);
+          item.enabled = item.submenu.numberOfItems > 0;
+        } else if ([entry[@"data"] isKindOfClass:NSDictionary.class]) {
+          item.action = @selector(contextAction:);
+          item.target = self;
+          item.representedObject = entry;
+          item.enabled = ![entry[@"disabled"] isEqual:@YES];
+        } else
+          continue;
+        if ([entry[@"symbol"] isKindOfClass:NSString.class])
+          item.image = [NSImage imageWithSystemSymbolName:entry[@"symbol"]
+                                 accessibilityDescription:nil];
+        if ([entry[@"checked"] isEqual:@YES]) item.state = NSControlStateValueOn;
+        [menu addItem:item];
+      }
+      if (menu.itemArray.lastObject.isSeparatorItem)
+        [menu removeItem:menu.itemArray.lastObject];
+      return menu;
+    };
+    build = builder;
+    NSMenu *menu = build(data[@"items"], 0);
+    build = nil;
+    [menu popUpMenuPositioningItem:nil
+                        atLocation:NSEvent.mouseLocation
+                            inView:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"browser-profiles"] ||
+      [action isEqual:@"browser-import"]) {
+    if (_importProcess) {
+      [self reply:rid result:nil error:@"A browser import is already running."];
+      return;
+    }
+    _importProfiles = [NSMutableSet new];
+    NSMutableSet *existing = [NSMutableSet new];
+    for (NSDictionary *profile in _lastSync[@"workspace"][@"profiles"])
+      [existing addObject:profile[@"id"]];
+    _importExistingProfiles = existing;
+    _importCommitted = NO;
+    _importProcess = [WingImportProcess new];
+    NSMutableDictionary *input = [@{
+      @"kind" : @"start",
+      @"operation" : [action isEqual:@"browser-profiles"] ? @"profiles"
+                                                          : @"import"
+    } mutableCopy];
+    if ([action isEqual:@"browser-import"]) {
+      input[@"source"] = data[@"source"] ?: @"";
+      input[@"options"] = data[@"options"] ?: @{};
+      input[@"state"] = _lastSync[@"workspace"];
+    }
+    [_importProcess start:input
+        request:^(NSDictionary *request, WingImportReply reply) {
+          [self handleImportRequest:request reply:reply];
+        }
+        completion:^(id result, NSString *error) {
+          self->_importProcess = nil;
+          if (error && !self->_importCommitted)
+            for (NSString *profile in self->_importProfiles)
+              [self rollbackImportProfile:profile
+                               completion:^(id ignored, NSString *failure){
+                               }];
+          [self reply:rid result:result error:error];
+        }];
+    return;
+  }
+  if ([action isEqual:@"file-save"]) {
+    if (![data[@"text"] isKindOfClass:NSString.class] ||
+        ![data[@"name"] isKindOfClass:NSString.class]) {
+      [self reply:rid result:nil error:@"Invalid export."];
+      return;
+    }
+    [self saveData:[data[@"text"] dataUsingEncoding:NSUTF8StringEncoding]
+              name:data[@"name"]
+             reply:rid];
+    return;
+  }
+  if ([action isEqual:@"file-read"] || [action isEqual:@"directory"]) {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    BOOL directory = [action isEqual:@"directory"];
+    panel.canChooseDirectories = directory;
+    panel.canChooseFiles = !directory;
+    panel.allowsMultipleSelection = NO;
+    [panel beginSheetModalForWindow:_window.window
+                  completionHandler:^(NSModalResponse response) {
+                    if (response != NSModalResponseOK) {
+                      [self reply:rid result:@{@"cancelled" : @YES} error:nil];
+                      return;
+                    }
+                    if (directory) {
+                      [self reply:rid
+                           result:@{@"path" : panel.URL.path}
+                            error:nil];
+                      return;
+                    }
+                    NSNumber *size;
+                    [panel.URL getResourceValue:&size
+                                         forKey:NSURLFileSizeKey
+                                          error:nil];
+                    if (size.unsignedLongLongValue > 8000000) {
+                      [self reply:rid
+                           result:nil
+                            error:@"Workspace import exceeds 8 MB."];
+                      return;
+                    }
+                    NSError *error;
+                    NSString *text =
+                        [NSString stringWithContentsOfURL:panel.URL
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:&error];
+                    [self reply:rid
+                         result:@{@"text" : text ?: @""}
+                          error:error.localizedDescription];
+                  }];
+    return;
+  }
+  if ([action isEqual:@"extensions-install"] ||
+      ([action isEqual:@"extension-capabilities"] &&
+       getenv("WING_CHROMIUM_TEST_SCRIPT"))) {
+    NSString *profile = data[@"profile"];
+    if (!Identifier(profile)) {
+      [self reply:rid result:nil error:@"Invalid profile."];
+      return;
+    }
+    [self extensionManager:profile
+                   inspect:[action isEqual:@"extension-capabilities"]
+                     reply:rid
+                  attempts:100];
+    return;
+  }
+  if ([action isEqual:@"service"]) {
+    NSString *profileId = data[@"profile"];
+    BOOL known = NO;
+    for (NSDictionary *profile in _lastSync[@"workspace"][@"profiles"])
+      if ([profile[@"id"] isEqual:profileId])
+        known = YES;
+    if (!known || !Identifier(profileId) ||
+        ![data[@"method"] isKindOfClass:NSString.class] ||
+        ![data[@"args"] isKindOfClass:NSDictionary.class]) {
+      [self reply:rid result:nil error:@"Invalid browser service request."];
+      return;
+    }
+    [self service:data profile:profileId reply:rid attempts:100];
+    return;
+  }
+  if ([action isEqual:@"extension-actions"]) {
+    NSString *active = _lastSync[@"workspace"][@"activeTabId"];
+    ArdiaCoreTab *page = active ? _tabs[active] : nil;
+    NSMutableArray *items = [NSMutableArray new];
+    NSArray *extensions = page.profile.extensions ?: @[];
+    NSArray *identities = [extensions valueForKey:@"id"];
+    NSDictionary *states = [page actionStatesForExtensions:identities];
+    for (NSDictionary *extension in extensions) {
+      NSDictionary *state = states[extension[@"id"]];
+      if (!state)
+        continue;
+      NSMutableDictionary *item = [extension mutableCopy];
+      [item addEntriesFromDictionary:state];
+      [items addObject:item];
+    }
+    [self reply:rid result:@{@"extensions" : items} error:nil];
+    return;
+  }
+  if ([action isEqual:@"image-export"]) {
+    NSString *encoded = data[@"png"];
+    NSData *body = [encoded isKindOfClass:NSString.class] && encoded.length <= 7000000
+      ? [[NSData alloc] initWithBase64EncodedString:encoded options:0] : nil;
+    const unsigned char signature[] = {137,80,78,71,13,10,26,10};
+    // Read PNG dimensions before asking AppKit to decode an allocation.
+    const unsigned char *bytes = static_cast<const unsigned char *>(body.bytes);
+    uint32_t width = 0, height = 0;
+    if (body.length >= 24 && memcmp(bytes, signature, 8) == 0 && memcmp(bytes+12, "IHDR", 4) == 0) {
+      for (int i=0;i<4;i++) { width=(width<<8)|bytes[16+i]; height=(height<<8)|bytes[20+i]; }
+    }
+    if (!width || !height || width > 32767 || height > 32767 || (uint64_t)width*height > 64000000 ||
+        ![@[@"file", @"clipboard"] containsObject:data[@"destination"]] ||
+        ![NSBitmapImageRep imageRepWithData:body]) {
+      [self reply:rid result:nil error:@"Invalid or oversized capture image."]; return;
+    }
+    if (getenv("WING_CHROMIUM_TEST_SCRIPT") && [data[@"inspectCapture"] boolValue]) {
+      [self reply:rid result:@{@"ok":@YES, @"width":@(width), @"height":@(height)} error:nil]; return;
+    }
+    if ([data[@"destination"] isEqual:@"clipboard"]) {
+      [NSPasteboard.generalPasteboard clearContents];
+      BOOL copied = [NSPasteboard.generalPasteboard setData:body forType:NSPasteboardTypePNG];
+      [self reply:rid result:@{@"ok":@(copied)} error:copied ? nil : @"The image could not be copied."];
+    } else [self saveData:body name:@"Wing-capture.png" reply:rid];
+    return;
+  }
+  if ([action isEqual:@"clipboard"]) {
+    if (![data[@"text"] isKindOfClass:NSString.class])
+      return;
+    [NSPasteboard.generalPasteboard clearContents];
+    [NSPasteboard.generalPasteboard setString:data[@"text"]
+                                      forType:NSPasteboardTypeString];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  ArdiaCoreTab *page = Identifier(data[@"id"]) ? _tabs[data[@"id"]] : nil;
+  if ([action isEqual:@"close"]) {
+    if (page && !page.closed) {
+      _closing[data[@"id"]] = @([data[@"archive"] boolValue]);
+      [page close];
+    }
+    [self reply:rid result:@{@"pending" : @(page != nil)} error:nil];
+    return;
+  }
+  if (!page || page.closed) {
+    [self reply:rid result:nil error:@"Open a page first."];
+    return;
+  }
+  if ([action isEqual:@"test-cancel-device"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    [self cancelDeviceRequestsForTab:page];
+    [self reply:rid result:@{@"ok":@YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"test-cancel-external"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    [self cancelExternalRequestsForTab:page];
+    [self reply:rid result:@{@"ok":@YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"test-extension"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    NSString *operation = data[@"operation"];
+    if ([operation isEqual:@"load"] && getenv("WING_CHROMIUM_TEST_EXTENSION")) {
+      NSString *identity = [page.profile loadComponentExtension:@(getenv("WING_CHROMIUM_TEST_EXTENSION"))];
+      [self reply:rid result:@{@"extensionId" : identity ?: @""} error:nil];
+    } else if ([operation isEqual:@"open"]) {
+      [self reply:rid result:@{@"ok" : @([self showExtensionSidebar:data[@"extensionId"] tab:page])} error:nil];
+    } else if ([operation isEqual:@"close"]) {
+      [_extensionSidebar close];
+      [self applyLayout];
+      [self reply:rid result:@{@"ok" : @YES} error:nil];
+    } else {
+      [self reply:rid result:nil error:@"Unknown fixture operation."];
+    }
+    return;
+  }
+  if ([action isEqual:@"evaluate-page"] &&
+      getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    if (![data[@"script"] isKindOfClass:NSString.class])
+      return;
+    if ([data[@"userGesture"] boolValue]) {
+      [page
+          devToolsCall:@"Runtime.evaluate"
+                params:@{@"expression" : data[@"script"], @"userGesture" : @YES}
+            completion:^(NSDictionary *result, NSString *error) {
+              [self reply:rid result:result error:error];
+            }];
+      return;
+    }
+    [page evaluate:data[@"script"]
+        completion:^(NSString *result) {
+          [self reply:rid result:result ?: NSNull.null error:nil];
+        }];
+    return;
+  }
+  if ([action isEqual:@"download-directory"]) {
+    NSString *path = data[@"path"];
+    BOOL isDirectory = NO;
+    if (![path isKindOfClass:NSString.class] || !path.isAbsolutePath ||
+        ![NSFileManager.defaultManager fileExistsAtPath:path
+                                            isDirectory:&isDirectory] ||
+        !isDirectory) {
+      [self reply:rid
+           result:nil
+            error:@"Choose an existing download directory."];
+      return;
+    }
+    if (![page.profile respondsToSelector:@selector(setDownloadDirectory:)]) {
+      [self reply:rid
+           result:nil
+            error:@"Custom download directories require Wing's source-built "
+                  @"engine."];
+      return;
+    }
+    BOOL saved = [page.profile setDownloadDirectory:path];
+    [self reply:rid
+         result:@{@"ok" : @(saved)}
+          error:saved ? nil
+                      : @"The download directory could not be changed (it may "
+                        @"be managed by policy)."];
+    return;
+  }
+  if ([action isEqual:@"clear-site-data"]) {
+    NSString *url = page.url;
+    if (![url hasPrefix:@"http://"] && ![url hasPrefix:@"https://"]) {
+      [self reply:rid result:nil error:@"Open a website first."];
+      return;
+    }
+    NSAlert *alert = [NSAlert new];
+    alert.messageText =
+        [NSString stringWithFormat:@"Clear data for %@?", page.committedOrigin];
+    alert.informativeText = @"This signs you out and removes this site's "
+                            @"stored data. Other sites are unaffected.";
+    [alert addButtonWithTitle:@"Cancel"];
+    [alert addButtonWithTitle:@"Clear site data"];
+    [alert
+        beginSheetModalForWindow:_window.window
+               completionHandler:^(NSModalResponse response) {
+                 if (response != NSAlertSecondButtonReturn || page.closed ||
+                     ![page.url isEqual:url]) {
+                   [self reply:rid result:@{@"cancelled" : @YES} error:nil];
+                   return;
+                 }
+                 for (NSString *profileId in self->_profiles)
+                   if (self->_profiles[profileId] == page.profile) {
+                     [self service:@{
+                       @"method" : @"clear-site-data",
+                       @"args" : @{@"url" : url}
+                     }
+                           profile:profileId
+                             reply:rid
+                          attempts:100];
+                     return;
+                   }
+                 [self reply:rid
+                      result:nil
+                       error:@"The requesting profile is no longer available."];
+               }];
+    return;
+  }
+  if ([action isEqual:@"picture-in-picture"]) {
+    if ([data[@"close"] boolValue]) {
+      [page exitPictureInPicture]; [self reply:rid result:@{@"ok":@YES} error:nil];
+    } else // Only the verified local shell can invoke this user action. Chromium uses
+    // the monotonic request time to reject a document replaced during dispatch.
+    [page enterPictureInPictureForClickAt:NSProcessInfo.processInfo.systemUptime completion:^(NSString *route, BOOL opened) {
+      [self reply:rid result:@{@"ok":@(opened || [route isEqual:@"session"])}
+        error:opened || [route isEqual:@"session"] ? nil : @"Play a video on this page first."];
+    }];
+    return;
+  }
+  if ([action isEqual:@"reader"]) {
+    NSString *folder = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"reader"];
+    NSString *library = [NSString stringWithContentsOfFile:[folder stringByAppendingPathComponent:@"Readability.js"]
+                                                  encoding:NSUTF8StringEncoding
+                                                     error:nil];
+    NSString *toggle = [NSString stringWithContentsOfFile:[folder stringByAppendingPathComponent:@"reader.js"]
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:nil];
+    if (!library || !toggle || ![page.url hasPrefix:@"http"]) {
+      [self reply:rid result:@{@"reader" : @NO, @"unavailable" : @YES} error:nil];
+      return;
+    }
+    NSString *script = [NSString
+        stringWithFormat:@"post('result',JSON.stringify((()=>{try{%@\n%@\n}catch(e){return{reader:false,unavailable:true}}})()))",
+                         library, toggle];
+    [page evaluate:script
+        completion:^(NSString *json) {
+          id value = json ? Parse(json) : nil;
+          if ([value isKindOfClass:NSString.class])
+            value = Parse(value);
+          [self reply:rid
+               result:[value isKindOfClass:NSDictionary.class] ? value : @{@"reader" : @NO, @"unavailable" : @YES}
+                error:nil];
+        }];
+    return;
+  }
+  if ([action isEqual:@"media-toggle"]) {
+    // Pauses whatever is playing, or resumes the media that was paused last.
+    // evaluate: completes when the script posts its result.
+    [page evaluate:@"post('result',JSON.stringify((()=>{const m=[...document.querySelectorAll('video,audio')];"
+                   @"const p=m.find(e=>!e.paused&&!e.ended);if(p){p.pause();return{playing:false}}"
+                   @"const r=m.find(e=>e.currentTime>0&&!e.ended)||m[0];"
+                   @"if(r){r.play().catch(()=>{});return{playing:true}}return{playing:false,none:true}})()))"
+        completion:^(NSString *json) {
+          id value = json ? Parse(json) : nil;
+          if ([value isKindOfClass:NSString.class])
+            value = Parse(value);
+          [self reply:rid
+               result:[value isKindOfClass:NSDictionary.class] ? value : @{@"playing" : @NO, @"none" : @YES}
+                error:nil];
+        }];
+    return;
+  }
+  if ([action isEqual:@"stop-sharing"]) {
+    BOOL stopped = [page stopCapture];
+    [self reply:rid result:@{@"ok":@(stopped)} error:stopped ? nil : @"This page has no active capture to stop."];
+    return;
+  }
+  if ([@[@"capture-page", @"capture-full-page", @"capture-preview"] containsObject:action]) {
+    CapturePage(page, [action isEqual:@"capture-full-page"], ^(NSData *body, NSString *error) {
+      if (error) { [self reply:rid result:nil error:error]; return; }
+      if ([action isEqual:@"capture-preview"]) {
+        [self reply:rid result:@{@"png":[body base64EncodedStringWithOptions:0]} error:nil];
+      } else if ([data[@"destination"] isEqual:@"clipboard"]) {
+        [NSPasteboard.generalPasteboard clearContents];
+        BOOL copied = [NSPasteboard.generalPasteboard setData:body forType:NSPasteboardTypePNG];
+        [self reply:rid result:@{@"ok":@(copied)} error:copied ? nil : @"The image could not be copied."];
+      } else if (getenv("WING_CHROMIUM_TEST_SCRIPT") && [data[@"inspectCapture"] boolValue]) {
+        NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:body];
+        [self reply:rid result:@{@"width":@(bitmap.pixelsWide), @"height":@(bitmap.pixelsHigh)} error:nil];
+      } else [self saveData:body name:@"Wing-page.png" reply:rid];
+    });
+    return;
+  }
+  if ([@[ @"save-pdf", @"save-page" ] containsObject:action]) {
+    NSString *method = [action isEqual:@"save-pdf"] ? @"Page.printToPDF"
+                                                      : @"Page.captureSnapshot";
+    NSDictionary *params =
+        [action isEqual:@"save-pdf"]   ? @{@"printBackground" : @YES}
+                                         : @{@"format" : @"mhtml"};
+    [page
+        devToolsCall:method
+              params:params
+          completion:^(NSDictionary *result, NSString *error) {
+            if (error || ![result[@"data"] isKindOfClass:NSString.class]) {
+              [self reply:rid result:nil error:error ?: @"Page export failed."];
+              return;
+            }
+            NSData *body =
+                [action isEqual:@"save-page"]
+                    ? [result[@"data"] dataUsingEncoding:NSUTF8StringEncoding]
+                    : [[NSData alloc]
+                          initWithBase64EncodedString:result[@"data"]
+                                              options:0];
+            NSString *extension = [action isEqual:@"save-pdf"]   ? @"pdf"
+                                                                   : @"mhtml";
+            [self
+                saveData:body
+                    name:[NSString stringWithFormat:@"Wing-page.%@", extension]
+                   reply:rid];
+          }];
+    return;
+  }
+  if ([action isEqual:@"extension-action"]) {
+    NSString *extensionId = data[@"extensionId"];
+    if (![extensionId isKindOfClass:NSString.class] ||
+        extensionId.length != 32) {
+      [self reply:rid result:nil error:@"Invalid extension action."];
+      return;
+    }
+    NSString *kind = [page executeExtensionAction:extensionId];
+    if ([kind isEqual:@"popup"] && ![self showExtensionPopup:extensionId
+                                                         tab:page]) {
+      [self reply:rid result:nil error:@"The extension popup could not open."];
+      return;
+    }
+    if ([kind isEqual:@"sidePanel"] && ![self showExtensionSidebar:extensionId tab:page]) {
+      [self reply:rid result:nil error:@"The extension side panel could not open."];
+      return;
+    }
+  } else if ([action isEqual:@"back"])
+    [page goBack];
+  else if ([action isEqual:@"forward"])
+    [page goForward];
+  else if ([action isEqual:@"reload"]) {
+    NSString *identity = [self identityForTab:page];
+    if (identity && _crashedTabs[identity]) {
+      [_crashedTabs removeObjectForKey:identity];
+      [self pageChanged:page];
+    }
+    [page reload];
+  }
+  else if ([action isEqual:@"stop"])
+    [page stop];
+  else if ([action isEqual:@"fill-login"]) {
+    if (![page.url hasPrefix:@"https://"]) {
+      [self reply:rid result:nil error:@"Open an HTTPS sign-in page first."];
+      return;
+    }
+    BOOL shown = [page showAutofillSuggestions:YES];
+    [self reply:rid
+         result:@{@"ok" : @(shown)}
+          error:shown ? nil : @"Select a sign-in field to show saved logins."];
+    return;
+  } else if ([action isEqual:@"focus"])
+    [page focus];
+  else if ([action isEqual:@"devtools"]) {
+    if ([data[@"close"] boolValue])
+      [page closeDevTools];
+    else
+      [page showDevTools];
+  } else if ([action isEqual:@"zoom"]) {
+    if ([data[@"reset"] boolValue])
+      page.zoomFactor = 1;
+    else
+      [page zoomStep:[data[@"delta"] intValue] > 0 ? 1 : -1];
+  } else if ([action isEqual:@"print-page"]) {
+    if (![page executeChromeCommand:35003]) {
+      [self reply:rid result:nil error:@"Printing could not start."];
+      return;
+    }
+  } else if ([action isEqual:@"mute"])
+    page.muted = !page.muted;
+  else if ([action isEqual:@"find"]) {
+    if ([data[@"text"] length])
+      [page find:data[@"text"]
+          forward:data[@"forward"] ? [data[@"forward"] boolValue] : YES];
+    else
+      [page stopFinding];
+  } else {
+    [self reply:rid result:nil error:@"Native operation is not supported yet."];
+    return;
+  }
+  [self reply:rid result:@{@"ok" : @YES} error:nil];
+}
+- (BOOL)engineIsReservedKey:(NSString *)key
+               unshiftedKey:(NSString *)unshiftedKey
+                  modifiers:(NSEventModifierFlags)modifiers {
+  if (!(modifiers & NSEventModifierFlagCommand) ||
+      (modifiers & NSEventModifierFlagControl))
+    return NO;
+  NSString *plain = unshiftedKey.lowercaseString;
+  if (modifiers & NSEventModifierFlagOption)
+    return [@[ @"i", @"\uF702", @"\uF703" ] containsObject:plain];
+  if (modifiers & NSEventModifierFlagShift)
+    return [@[ @"t", @"r", @"2", @"=", @"+", @"j" ] containsObject:plain];
+  return [@[
+    @"t", @"l", @"w", @"r", @"f", @"s", @"[", @"]", @",", @"y", @"d",
+    @"=", @"+", @"-", @"0"
+  ] containsObject:plain];
+}
+- (BOOL)engineIsReservedKeyEvent:(NSEvent *)event {
+  return event.type == NSEventTypeKeyDown &&
+         [self engineIsReservedKey:event.characters
+                      unshiftedKey:[event charactersByApplyingModifiers:0]
+                         modifiers:event.modifierFlags];
+}
+- (BOOL)window:(ArdiaCoreWindow *)window preHandleKeyEvent:(NSEvent *)event {
+  if (event.type == NSEventTypeKeyDown && event.keyCode == 48 &&
+      (event.modifierFlags & NSEventModifierFlagControl)) {
+    [self send:@"action"
+          data:@{
+            @"name" : @"recent-tabs-preview",
+            @"args" : @{
+              @"direction" : (event.modifierFlags & NSEventModifierFlagShift)
+                  ? @(-1)
+                  : @1
+            }
+          }];
+    [_shell focus];
+    return YES;
+  }
+  if (event.type == NSEventTypeKeyDown && event.keyCode == 53) {
+    // Shell modals own Escape; page-focused Escape dismisses the Peek itself.
+    if (window != _uiWindow)
+      for (NSDictionary *record in _lastSync[@"workspace"][@"tabs"])
+        if ([record[@"transient"] boolValue]) {
+          [self send:@"action" data:@{@"name" : @"close-peek"}];
+          return YES;
+        }
+    [self send:@"action" data:@{@"name" : @"recent-tabs-cancel"}];
+    return NO;
+  }
+  if (![self engineIsReservedKeyEvent:event])
+    return NO;
+  NSString *key = [event charactersByApplyingModifiers:0].lowercaseString;
+  BOOL shift = (event.modifierFlags & NSEventModifierFlagShift) != 0;
+  if (event.modifierFlags & NSEventModifierFlagOption) {
+    if ([key isEqual:@"i"])
+      [self send:@"action" data:@{@"name" : @"devtools"}];
+    else
+      [self send:@"action"
+            data:@{
+              @"name" : @"swipe-profile",
+              @"args" : @{@"direction" : [key isEqual:@"\uF702"] ? @(-1) : @1}
+            }];
+  } else if ([key isEqual:@","] || [key isEqual:@"y"] || [key isEqual:@"j"] ||
+             [key isEqual:@"2"]) {
+    NSString *type = [key isEqual:@","]   ? @"settings"
+                     : [key isEqual:@"2"] ? @"split-picker"
+                                          : @"library";
+    [self send:@"command"
+          data:@{
+            @"type" : type,
+            @"tab" : [key isEqual:@"j"] ? @"downloads" : @"history"
+          }];
+    [_shell focus];
+  } else if ([@[ @"=", @"+", @"-", @"0" ] containsObject:key]) {
+    [self send:@"action"
+          data:@{
+            @"name" : @"zoom",
+            @"args" : @{
+              @"reset" : @([key isEqual:@"0"]),
+              @"delta" : [key isEqual:@"-"] ? @(-1) : @1
+            }
+          }];
+  } else if ([key isEqual:@"r"] && shift) {
+    [self send:@"command" data:@{@"type" : @"reader"}];
+  } else if ([key isEqual:@"t"] && shift) {
+    [self send:@"action" data:@{@"name" : @"restore"}];
+  } else if ([key isEqual:@"t"] || [key isEqual:@"l"]) {
+    [self send:@"command"
+          data:@{
+            @"type" : @"palette",
+            @"mode" : [key isEqual:@"t"] ? @"new" : @"navigate"
+          }];
+    [_shell focus];
+  } else if ([key isEqual:@"f"]) {
+    [self send:@"command" data:@{@"type" : @"find"}];
+    [_shell focus];
+  } else {
+    NSDictionary *actions = @{
+      @"w" : @"close-tab",
+      @"d" : @"pin",
+      @"r" : @"reload",
+      @"s" : @"sidebar",
+      @"[" : @"back",
+      @"]" : @"forward"
+    };
+    [self send:@"action" data:@{@"name" : actions[key]}];
+  }
+  return YES;
+}
+@end
+int main(int argc, const char *argv[]) {
+  @autoreleasepool {
+    NSNumber *qualification = [NSBundle.mainBundle objectForInfoDictionaryKey:@"WingQualificationOnly"];
+    if (!qualification) {
+      fprintf(stderr, "Missing build mode; rebuild the application.\n");
+      return 64;
+    }
+    NSString *directory;
+    if (qualification.boolValue) {
+      const char *testDirectory = getenv("WING_CHROMIUM_TEST_PROFILE");
+      if (!testDirectory || testDirectory[0] != '/') {
+        fprintf(stderr, "Preview requires an isolated WING_CHROMIUM_TEST_PROFILE.\n");
+        return 64;
+      }
+      directory = @(testDirectory);
+    } else {
+      NSDictionary *provenance = Parse([NSString stringWithContentsOfFile:
+          [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"engine-provenance.json"]
+          encoding:NSUTF8StringEncoding error:nil]);
+      if (![provenance[@"kind"] isEqual:@"wing-source"]) {
+        fprintf(stderr, "Persistent profiles require the Wing source engine.\n");
+        return 64;
+      }
+      // Production never enables test bridges, fixture import roots or mock credentials.
+      for (const char *name : {"WING_CHROMIUM_TEST_PROFILE", "WING_CHROMIUM_TEST_SCRIPT",
+                              "WING_CHROMIUM_TEST_REPORT", "WING_CHROMIUM_TEST_EXTENSION",
+                              "WING_IMPORT_TEST_BASE", "WING_IMPORT_TEST_KEY"}) unsetenv(name);
+      NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory
+                                                            inDomains:NSUserDomainMask].firstObject;
+      directory = [[support URLByAppendingPathComponent:@"Wing/Chromium" isDirectory:YES] path];
+    }
+    NSError *error;
+    if (![NSFileManager.defaultManager createDirectoryAtPath:directory
+                                withIntermediateDirectories:YES
+                                                 attributes:@{NSFilePosixPermissions : @0700}
+                                                      error:&error]) {
+      fprintf(stderr, "Cannot create browser profile directory: %s\n", error.localizedDescription.UTF8String);
+      return 73;
+    }
+    setenv("WING_PROFILE_ROOT", directory.UTF8String, 1);
+    std::string profile = std::string("--user-data-dir=") + directory.UTF8String;
+    std::vector<const char *> args;
+    args.push_back(argv[0]);
+    // The staged app owns its profile and credential settings. Test runners alone
+    // may provide Chromium test flags; normal launches accept web URLs via GURL.
+    if (qualification.boolValue)
+      args.insert(args.end(), argv + 1, argv + argc);
+    args.push_back(profile.c_str());
+    if (qualification.boolValue) args.push_back("--use-mock-keychain");
+    static WingChromiumHost *host = [WingChromiumHost new];
+    return [ArdiaCoreEngine runWithArgc:(int)args.size()
+                                   argv:args.data()
+                               delegate:host];
+  }
+}

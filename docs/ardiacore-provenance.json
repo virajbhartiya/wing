@@ -1,0 +1,13 @@
+{
+  "upstream": "https://github.com/mantrakp04/ardia",
+  "tag": "v0.2.40-nightly.8",
+  "engineTree": "6b96c16ab2ccc3b93ee28278ec0ed495aad7009a",
+  "chromium": "155.0.8059.84",
+  "engineURL": "https://github.com/mantrakp04/ardia/releases/download/v0.2.40-nightly.8/ArdiaCore-6b96c16ab2cc.tar.xz",
+  "engineSHA256": "f3a4b15b5254285b2d718040946e569971742d7a9c8378e55d78b6818889688c",
+  "sourceURL": "https://github.com/mantrakp04/ardia/releases/download/v0.2.40-nightly.8/ArdiaCore-6b96c16ab2cc-source.tar.xz",
+  "headerSHA256": "2784940cd0af5300d1923827c3aa16ee554e09e93b440d4a8088ab51f65833c5",
+  "ownSourceLicense": "Apache-2.0",
+  "combinedEngineLicense": "GPL-3.0",
+  "status": "qualification only; not production Wing engine"
+}

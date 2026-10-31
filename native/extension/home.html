@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>New tab · Wing</title>
+  <link rel="stylesheet" href="design-system.css">
+  <link rel="stylesheet" href="home.css">
+</head>
+<body>
+  <header class="home-top">
+    <span class="identity"><svg class="wing-symbol" viewBox="0 0 28 28" aria-hidden="true"><path d="M5 9v7c0 5 7 5 9-4v4c0 5 7 5 9-7"/></svg><span>wing</span></span>
+    <time id="date"></time>
+  </header>
+  <main>
+    <div class="greeting"><span class="space-indicator"></span><span id="space-name">Your space</span></div>
+    <h1>A little room<br>for <em>what’s next.</em></h1>
+    <form id="search" role="search">
+      <svg class="wing-icon search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.5 15.5 4 4"/></svg>
+      <input id="query" placeholder="Search or enter a URL" aria-label="Search or enter a URL" autocomplete="off" spellcheck="false" autofocus>
+      <button type="submit" aria-label="Open address or search"><svg class="wing-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+    </form>
+    <nav class="shortcuts" aria-label="Quick links">
+      <button data-url="https://github.com"><span class="shortcut-icon"><svg class="wing-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16"/></svg></span><span>GitHub</span></button>
+      <button data-url="https://en.wikipedia.org"><span class="shortcut-icon"><svg class="wing-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h5c2 0 4 1 4 3v13c0-2-2-3-4-3H3zm18 0h-5c-2 0-4 1-4 3v13c0-2 2-3 4-3h5z"/></svg></span><span>Wikipedia</span></button>
+      <button data-url="https://developer.mozilla.org"><span class="shortcut-icon"><svg class="wing-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM14 3v5h5M8 12h8m-8 4h5"/></svg></span><span>MDN</span></button>
+      <button id="extensions"><span class="shortcut-icon"><svg class="wing-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6V3a2 2 0 0 1 4 0v1h6v6h1a2 2 0 0 1 0 4h-1v6h-6v-1a2 2 0 0 0-4 0v1H4v-6h1a2 2 0 0 0 0-4H4z"/></svg></span><span>Extensions</span></button>
+    </nav>
+    <p class="search-hint">A new thought starts here.</p>
+  </main>
+  <footer><span class="footer-line"></span><span>Make yourself at home.</span><span class="footer-line"></span></footer>
+  <p id="status" role="status" aria-live="polite"></p>
+  <script type="module" src="home.js"></script>
+</body>
+</html>

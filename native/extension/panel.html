@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wing Spaces</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body class="panel">
+    <header>
+      <span class="mark">w</span
+      ><span>wing<span class="eyebrow">A LITTLE MORE YOU</span></span
+      ><button id="settings" title="Settings" aria-label="Settings">☷</button>
+    </header>
+    <div class="space-head">
+      <div>
+        <span class="eyebrow">YOUR SPACE</span>
+        <h1 id="space-name">Personal</h1>
+      </div>
+      <button id="add-space" title="New Space" aria-label="New Space">
+        ＋
+      </button>
+    </div>
+    <nav id="spaces" aria-label="Spaces"></nav>
+    <form id="search">
+      <span>⌕</span
+      ><input
+        id="query"
+        placeholder="Search or enter a URL"
+        aria-label="Search or enter a URL"
+        autocomplete="off"
+      /><kbd>↵</kbd>
+    </form>
+    <div class="section-title">
+      <span>PINNED</span
+      ><button id="group" title="Group this Space in Chromium’s tab strip">
+        Group
+      </button>
+    </div>
+    <div id="pinned"></div>
+    <div class="section-title">
+      <span>TODAY</span><button id="new-tab">＋ New tab</button>
+    </div>
+    <main id="tabs"></main>
+    <footer>
+      <button id="archive">◷ Archive</button
+      ><button id="extensions">⊞ Extensions</button
+      ><button id="memory">◌ Memory</button>
+    </footer>
+    <dialog id="dialog">
+      <form method="dialog">
+        <button class="dialog-close" aria-label="Close dialog">×</button>
+      </form>
+      <div id="dialog-content"></div>
+    </dialog>
+    <div id="status" role="status"></div>
+    <script type="module" src="panel.js"></script>
+  </body>
+</html>

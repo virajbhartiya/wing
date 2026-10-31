@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Wing MV3 Compatibility Probe",
+  "version": "1.0.0",
+  "description": "Local-only test of content scripts, a service worker, storage, messaging and declarative request rules.",
+  "permissions": ["storage", "tabs", "declarativeNetRequest"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "worker.js" },
+  "action": { "default_title": "Wing MV3 test", "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "probe", "enabled": true, "path": "rules.json" }]
+  }
+}

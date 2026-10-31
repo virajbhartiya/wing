@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data: crx:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Wing</title>
+    <link rel="stylesheet" href="design-system.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="sidebar-edge" aria-hidden="true" hidden></div>
+      <aside id="sidebar">
+        <div class="window-drag">
+          <button
+            class="icon sidebar-toggle"
+            data-action="sidebar"
+            title="Hide sidebar · ⌘S"
+            aria-label="Toggle sidebar"
+          ></button>
+        </div>
+        <div id="favorites"></div>
+        <div class="space-heading">
+          <span id="space-name"></span
+          ><button class="icon" id="edit-space" title="Edit Space" aria-label="Edit Space"></button>
+        </div>
+        <div id="tab-scroll">
+          <div id="pinned"></div>
+          <div class="today-heading">
+            <span>Today</span
+            ><button id="clear-today" title="Archive today’s tabs">
+              Clear
+            </button>
+          </div>
+          <button class="new-tab" id="new-tab">
+            <span class="new-tab-icon"></span> New Tab <kbd>⌘T</kbd>
+          </button>
+          <div id="today"></div>
+        </div>
+        <div id="media-player" hidden></div>
+        <footer>
+          <button
+            class="icon"
+            id="library-button"
+            title="Library · ⌘Y"
+            aria-label="Open library"
+          ></button>
+          <div
+            id="spaces"
+            title="Swipe horizontally on the sidebar to switch profiles"
+          ></div>
+          <button class="icon" id="add-space" title="New Space" aria-label="New Space"></button>
+        </footer>
+        <div id="sidebar-resize"></div>
+      </aside>
+      <main id="main">
+        <header id="toolbar">
+          <button
+            class="icon"
+            data-action="sidebar"
+            id="show-sidebar"
+            aria-label="Show sidebar"
+          ></button>
+          <div id="toolbar-spaces"></div>
+          <div class="navigation">
+            <button
+              class="icon"
+              data-action="back"
+              id="back"
+              title="Back · ⌘[" aria-label="Back"
+            ></button
+            ><button
+              class="icon"
+              data-action="forward"
+              id="forward"
+              title="Forward · ⌘]" aria-label="Forward"
+            ></button
+            ><button
+              class="icon"
+              data-action="reload"
+              id="reload"
+              title="Reload · ⌘R" aria-label="Reload"
+            ></button>
+          </div>
+          <button id="address" title="Search or enter URL · ⌘L">
+            <span id="security-icon"></span
+            ><span id="address-text">Search or enter website name</span
+            ><span id="zoom-badge" role="button" title="Reset zoom · ⌘0" hidden></span>
+          </button>
+          <div class="toolbar-actions">
+            <button
+              class="icon"
+              id="favorite-button"
+              title="Add to Favorites"
+              aria-label="Toggle favorite"
+              aria-pressed="false"
+            ></button>
+            <browser-action-list
+              id="extension-actions"
+              partition="persist:wing-default"
+              alignment="bottom right"
+            ></browser-action-list>
+            <button
+              class="icon"
+              id="copy-url"
+              title="Copy address"
+              aria-label="Copy address"
+            ></button
+            ><button
+              class="icon"
+              id="boost-button"
+              title="Style this website"
+              aria-label="Site styles"
+            ></button
+            ><button
+              class="icon"
+              id="downloads-button"
+              title="Downloads · ⇧⌘J"
+              aria-label="Downloads"
+              hidden
+            ></button
+            ><button
+              class="icon"
+              id="split-button"
+              title="Split View · ⌘⇧2"
+              aria-label="Split view"
+            ></button
+            ><button
+              class="icon"
+              id="settings-button"
+              title="Settings · ⌘,"
+              aria-label="Settings"
+            ></button>
+          </div>
+        </header>
+        <nav id="tab-strip" aria-label="Tabs">
+          <div id="strip-tabs"></div>
+          <button
+            class="icon"
+            id="strip-new-tab"
+            title="New Tab · ⌘T"
+            aria-label="New tab"
+          ></button>
+        </nav>
+        <div id="loading"></div>
+        <section id="home">
+          <div class="home-top">
+            <span class="wordmark"
+              ><span class="wing-mark" aria-hidden="true"></span>Wing</span
+            >
+            <span class="home-tag" id="home-context">Personal workspace</span>
+          </div>
+          <div class="home-content">
+            <div class="eyebrow">YOUR WORKSPACE</div>
+            <h1>Where to next?</h1>
+            <p>Find a tab, open a page, or pick up where you left off.</p>
+            <button id="home-search">
+              <span class="search-icon"></span
+              ><span>Search anything or enter a URL</span><kbd>⌘ T</kbd>
+            </button>
+            <section class="launch-section" aria-labelledby="favorites-heading">
+              <div class="launch-heading">
+                <h2 id="favorites-heading">Favorites</h2>
+                <span>Always close by</span>
+              </div>
+              <div id="home-favorites" class="launch-favorites"></div>
+            </section>
+            <section class="launch-section" aria-labelledby="recent-heading">
+              <div class="launch-heading">
+                <h2 id="recent-heading">Open in this space</h2>
+                <span id="home-tab-count"></span>
+              </div>
+              <div id="home-tabs" class="launch-tabs"></div>
+            </section>
+          </div>
+          <div class="home-bottom">
+            <span
+              >Wing <span class="footer-separator">/</span> A space for your
+              internet</span
+            ><button id="guide-button">Keyboard Shortcuts</button>
+          </div>
+        </section>
+        <div id="page-error" hidden></div>
+        <div id="split-divider" hidden></div>
+        <div id="peek-frame" hidden>
+          <div>
+            <span id="peek-title"></span
+            ><button id="promote-peek">Open as Tab</button
+            ><button
+              class="icon"
+              id="peek-close"
+              data-action="close-peek"
+              aria-label="Close Peek"
+            ></button>
+          </div>
+        </div>
+        <div id="find-bar" hidden>
+          <input
+            id="find-input"
+            placeholder="Find in page"
+            aria-label="Find in page"
+          /><span id="find-count" aria-live="polite"></span
+          ><button class="icon" id="find-prev" aria-label="Previous match" title="Previous · ⇧⌘G"></button
+          ><button class="icon" id="find-next" aria-label="Next match" title="Next · ⌘G"></button
+          ><button class="icon" id="find-close" aria-label="Close find" title="Done · esc"></button>
+        </div>
+      </main>
+    </div>
+    <div id="page-backdrop" aria-hidden="true" hidden></div>
+    <div id="overlay" hidden>
+      <div
+        id="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Browser command"
+      ></div>
+    </div>
+    <div id="toast" role="status" hidden></div>
+    <script src="renderer.js"></script>
+    <script src="features.js"></script>
+    <script src="capture.js"></script>
+    <script src="recent-tabs-ui.js"></script>
+  </body>
+</html>

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wing</title><link rel="stylesheet" href="design-system.css"><link rel="stylesheet" href="shell.css"></head>
+<body class="shell">
+<svg class="symbols" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="i-back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol><symbol id="i-forward" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+<symbol id="i-reload" viewBox="0 0 24 24"><path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-archive" viewBox="0 0 24 24"><path d="M5 8v12h14V8M3 4h18v4H3zM9 12h6"/></symbol>
+<symbol id="i-extension" viewBox="0 0 24 24"><path d="M4 13V5h7a3 3 0 1 1 6 0h3v7a3 3 0 1 0 0 6v3H4v-3a3 3 0 1 0 0-5Z"/></symbol>
+<symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+<symbol id="i-memory" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-8-8 6 6 0 0 0 8 8Z"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></symbol>
+</defs></svg>
+<div class="window-grip" aria-hidden="true"></div>
+<header class="navigation" aria-label="Page navigation">
+<button id="back" class="icon-button" aria-label="Go back" title="Go back"><svg><use href="#i-back"/></svg></button>
+<button id="forward" class="icon-button" aria-label="Go forward" title="Go forward"><svg><use href="#i-forward"/></svg></button>
+<button id="reload" class="icon-button" aria-label="Reload" title="Reload · ⌘R"><svg><use href="#i-reload"/></svg></button>
+<button id="settings" class="icon-button" aria-label="Settings" title="Settings"><svg><use href="#i-settings"/></svg></button>
+</header>
+<button id="location" class="location" title="Edit address · ⌘L"><span class="location-dot"></span><span id="location-label">New tab</span><kbd>⌘L</kbd></button>
+<form id="search" role="search"><svg><use href="#i-search"/></svg><input id="query" placeholder="Search or enter URL" aria-label="Search tabs or enter a URL" autocomplete="off" spellcheck="false"><kbd>↵</kbd></form>
+<section class="workspace"><div class="space-head"><span class="space-mark" aria-hidden="true">P</span><h1 id="space-name">Personal</h1><button id="add-space" class="icon-button" aria-label="New Space" title="New Space"><svg><use href="#i-plus"/></svg></button></div>
+<div class="section-title"><span>Pinned</span><button id="group" title="Group tabs in this Space">Group</button></div><div id="pinned" aria-label="Pinned tabs"></div>
+<div class="divider"></div><button id="new-tab" class="new-tab"><svg><use href="#i-plus"/></svg><span>New tab</span><kbd>⌘T</kbd></button>
+<main id="tabs" aria-label="Open tabs"></main></section>
+<div class="bottom"><nav id="spaces" aria-label="Spaces"></nav><footer><span class="brand">wing<span class="brand-dot">.</span></span><button id="archive" class="icon-button" aria-label="Archive" title="Archived tabs"><svg><use href="#i-archive"/></svg></button><button id="extensions" class="icon-button" aria-label="Extensions" title="Extensions"><svg><use href="#i-extension"/></svg></button><button id="memory" class="icon-button" aria-label="Memory" title="Sleeping tabs"><svg><use href="#i-memory"/></svg></button></footer></div>
+<dialog id="dialog"><form method="dialog"><button class="dialog-close" aria-label="Close dialog">×</button></form><div id="dialog-content"></div></dialog><div id="status" role="status" aria-live="polite"></div>
+<script type="module" src="shell.js"></script></body></html>

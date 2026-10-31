@@ -1,0 +1,130 @@
+{
+  "at": "2026-10-24",
+  "scope": "Unmodified official uBOL in isolated Electron45 + Wing ExtensionManager + electron-chrome-extensions4.9.0",
+  "result": "unsupported",
+  "method": "Authored local page loads images from doubleclick.net and wing-safe.invalid at local HTTP server port. Chromium process-local host-resolver-rules MAP * 127.0.0.1 and no-proxy-server prevent external target traffic. No system DNS or user profile changes. No extension source modifications.",
+  "withoutExtension": {
+    "electron": "45.0.0",
+    "enabled": false,
+    "release": "2026.1021.1354",
+    "assetSHA256": "0ff92d3e33437e0fa389a16a3d4c3a486fbda08e33114e07859db1f58d789d0b",
+    "source": "https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.1021.1354/uBOLite_2026.1021.1354.chromium.zip",
+    "network": [],
+    "seen": [
+      "doubleclick.net:54603",
+      "wing-safe.invalid:54603"
+    ],
+    "logs": [],
+    "workerCount": 0,
+    "blockedHost": "loaded",
+    "controlHost": "loaded"
+  },
+  "failure": "Namespace mismatch fixed: browser.* now receives real adapter implementations and unmodified uBOL worker starts without startup exceptions. Filtering still not qualified: known blocked-domain request reaches local fixture server. Do not claim uBOL support.",
+  "beforeNamespaceFix": {
+    "electron": "45.0.0",
+    "enabled": true,
+    "release": "2026.1021.1354",
+    "assetSHA256": "0ff92d3e33437e0fa389a16a3d4c3a486fbda08e33114e07859db1f58d789d0b",
+    "source": "https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.1021.1354/uBOLite_2026.1021.1354.chromium.zip",
+    "network": [],
+    "seen": [
+      "doubleclick.net:54582",
+      "wing-safe.invalid:54582"
+    ],
+    "logs": [
+      {
+        "versionId": 0,
+        "source": "javascript",
+        "level": 3,
+        "message": "Uncaught TypeError: Cannot read properties of undefined (reading 'onCommand')",
+        "lineNumber": 883,
+        "sourceUrl": "chrome-extension://anikkmfbgcklmnhgkfjeflbmmlapkboa/js/background.js"
+      }
+    ],
+    "workerCount": 0,
+    "blockedHost": "loaded",
+    "controlHost": "loaded"
+  },
+  "withExtension": {
+    "electron": "45.0.0",
+    "enabled": true,
+    "release": "2026.1021.1354",
+    "assetSHA256": "0ff92d3e33437e0fa389a16a3d4c3a486fbda08e33114e07859db1f58d789d0b",
+    "source": "https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.1021.1354/uBOLite_2026.1021.1354.chromium.zip",
+    "network": [],
+    "seen": [
+      "doubleclick.net:54972",
+      "wing-safe.invalid:54972"
+    ],
+    "logs": [
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll ",
+        "lineNumber": 48,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll (result) [object Object]",
+        "lineNumber": 66,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll ",
+        "lineNumber": 48,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll (result) [object Object]",
+        "lineNumber": 66,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll ",
+        "lineNumber": 48,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll (result) [object Object]",
+        "lineNumber": 66,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll ",
+        "lineNumber": 48,
+        "sourceUrl": ""
+      },
+      {
+        "versionId": 0,
+        "source": "console-api",
+        "level": 1,
+        "message": "permissions.getAll (result) [object Object]",
+        "lineNumber": 66,
+        "sourceUrl": ""
+      }
+    ],
+    "workerCount": 1,
+    "blockedHost": "loaded",
+    "controlHost": "loaded"
+  },
+  "investigation": "A separate instrumented isolated run observed six default static rulesets enabled and 176 dynamic rules after namespace fix. Another authored DNR fixture shows tabIds [-1] allow rules also apply to Electron page requests, but uBOL session allow rules were empty so this is not established as the cause of its filtering failure."
+}

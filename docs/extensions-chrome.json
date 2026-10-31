@@ -1,0 +1,12 @@
+{
+  "engine": "CEF Chrome runtime",
+  "mode": "chrome",
+  "at": "2026-10-23T18:38:50.033Z",
+  "worker": true,
+  "storage": true,
+  "tabs": true,
+  "messaging": true,
+  "extensionId": "nablmpdkoffbnencfipiehaajnnkpfgd",
+  "contentScript": true,
+  "declarativeNetRequest": true
+}

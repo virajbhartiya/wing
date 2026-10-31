@@ -1,0 +1,147 @@
+{
+  "date": "2026-10-23T20:38:36.209Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "electron": "45.0.0",
+  "chromium": "156.0.8078.48",
+  "cycles": 60,
+  "fixture": "local static HTML; 10 concurrent views; same in-memory profile",
+  "loadLatencyMs": {
+    "median": 55.31,
+    "p95": 102.52
+  },
+  "results": [
+    {
+      "label": "warm baseline",
+      "atMs": 2415,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 245.33,
+      "cpuPercent": 0,
+      "mainHeapMB": 3.59
+    },
+    {
+      "label": "batch 1: 10 live pages",
+      "atMs": 3386,
+      "webContents": 10,
+      "processCount": 13,
+      "workingSetMB": 1047.34,
+      "cpuPercent": 1.55,
+      "mainHeapMB": 3.75
+    },
+    {
+      "label": "batch 1: all destroyed",
+      "atMs": 4591,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 238.22,
+      "cpuPercent": 0.36,
+      "mainHeapMB": 3.77
+    },
+    {
+      "label": "batch 2: 10 live pages",
+      "atMs": 5147,
+      "webContents": 10,
+      "processCount": 13,
+      "workingSetMB": 1065.66,
+      "cpuPercent": 1.78,
+      "mainHeapMB": 3.89
+    },
+    {
+      "label": "batch 2: all destroyed",
+      "atMs": 6349,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 239.31,
+      "cpuPercent": 0.43,
+      "mainHeapMB": 3.91
+    },
+    {
+      "label": "batch 3: 10 live pages",
+      "atMs": 6977,
+      "webContents": 10,
+      "processCount": 13,
+      "workingSetMB": 1066.52,
+      "cpuPercent": 1.63,
+      "mainHeapMB": 3.77
+    },
+    {
+      "label": "batch 3: all destroyed",
+      "atMs": 8183,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 239.7,
+      "cpuPercent": 0.17,
+      "mainHeapMB": 3.78
+    },
+    {
+      "label": "batch 4: 10 live pages",
+      "atMs": 8746,
+      "webContents": 10,
+      "processCount": 13,
+      "workingSetMB": 1066.69,
+      "cpuPercent": 1.79,
+      "mainHeapMB": 3.91
+    },
+    {
+      "label": "batch 4: all destroyed",
+      "atMs": 9951,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 239.89,
+      "cpuPercent": 0.22,
+      "mainHeapMB": 3.93
+    },
+    {
+      "label": "batch 5: 10 live pages",
+      "atMs": 10519,
+      "webContents": 10,
+      "processCount": 13,
+      "workingSetMB": 1067.2,
+      "cpuPercent": 1.86,
+      "mainHeapMB": 4.06
+    },
+    {
+      "label": "batch 5: all destroyed",
+      "atMs": 11721,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 240.2,
+      "cpuPercent": 0.17,
+      "mainHeapMB": 4.08
+    },
+    {
+      "label": "batch 6: 10 live pages",
+      "atMs": 12274,
+      "webContents": 10,
+      "processCount": 13,
+      "workingSetMB": 1067.45,
+      "cpuPercent": 1.74,
+      "mainHeapMB": 4.2
+    },
+    {
+      "label": "batch 6: all destroyed",
+      "atMs": 13477,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 240.84,
+      "cpuPercent": 0.17,
+      "mainHeapMB": 4.22
+    },
+    {
+      "label": "idle end",
+      "atMs": 16479,
+      "webContents": 0,
+      "processCount": 3,
+      "workingSetMB": 240.88,
+      "cpuPercent": 0.01,
+      "mainHeapMB": 4.22
+    }
+  ],
+  "limitations": [
+    "Synthetic document, not representative of heavy web apps.",
+    "Working sets can double-count shared memory.",
+    "A short stress run cannot rule out long-duration leaks.",
+    "Unattached views test lifecycle, not animation frame rate."
+  ]
+}

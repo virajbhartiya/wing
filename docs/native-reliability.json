@@ -1,0 +1,54 @@
+{
+  "at": "2026-10-23T20:26:02.169Z",
+  "passed": 5,
+  "checks": [
+    "clean profile",
+    "graceful restart persistence",
+    "two-window recovery with duplicate URLs, Spaces, pins and split",
+    "cookie and extension storage isolation",
+    "committed data after forced termination"
+  ],
+  "reports": [
+    {
+      "priorMarker": null,
+      "savedWindows": 2,
+      "savedTabs": 3,
+      "stage": "seed",
+      "profile": "A",
+      "previousCookie": ""
+    },
+    {
+      "priorMarker": "A",
+      "restoredTabs": 3,
+      "restoredWindows": 2,
+      "pinned": 1,
+      "split": 2,
+      "duplicateSpaces": [
+        "personal",
+        "work"
+      ],
+      "sourcePreserved": true,
+      "stage": "restore",
+      "profile": "A",
+      "previousCookie": "wing_profile=A"
+    },
+    {
+      "priorMarker": null,
+      "stage": "seed",
+      "profile": "B",
+      "previousCookie": ""
+    },
+    {
+      "priorMarker": "A",
+      "stage": "read",
+      "profile": "A",
+      "previousCookie": "wing_profile=A"
+    },
+    {
+      "priorMarker": "A",
+      "stage": "read",
+      "profile": "A",
+      "previousCookie": "wing_profile=A"
+    }
+  ]
+}

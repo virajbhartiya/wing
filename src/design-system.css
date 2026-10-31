@@ -1,0 +1,114 @@
+/* Wing / Workspace. Semantic tokens shared by browser chrome and internal pages. */
+:root {
+  color-scheme: light;
+  --wing-bg: #fafbfc;
+  --wing-panel: #edeef0;
+  --wing-surface: #ffffff;
+  --wing-text: #24272e;
+  --wing-muted: #6b707b;
+  --wing-line: #24272e14;
+  --wing-accent: #526780;
+  --wing-hover: #24272e08;
+  --wing-selected: #ffffff;
+  --wing-focus: #526780;
+  --wing-danger: #a33441;
+  --wing-shadow: 0 8px 28px #3d30400a, 0 1px 3px #3d304007;
+  --wing-radius-sm: 6px;
+  --wing-radius-md: 10px;
+  --wing-radius-lg: 12px;
+  --wing-radius-xl: 16px;
+  --wing-space-1: 4px;
+  --wing-space-2: 8px;
+  --wing-space-3: 12px;
+  --wing-space-4: 16px;
+  --wing-space-5: 20px;
+  --wing-space-6: 24px;
+  --wing-space-7: 28px;
+  --wing-space-8: 32px;
+  --wing-fast: 120ms;
+  --wing-normal: 180ms;
+  --wing-slow: 260ms;
+  --wing-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  font:
+    13px/1.45 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  color: var(--wing-text);
+  background: var(--wing-bg);
+}
+[data-theme="dark"],
+.dark {
+  color-scheme: dark;
+  --wing-bg: #191b20;
+  --wing-panel: #22242b;
+  --wing-surface: #ffffff06;
+  --wing-text: #eceef2;
+  --wing-muted: #989eaa;
+  --wing-line: #ffffff16;
+  --wing-accent: #c5b0e4;
+  --wing-hover: #ffffff09;
+  --wing-selected: #ffffff14;
+  --wing-focus: #c9aff0;
+  --wing-danger: #ff9ba7;
+  --wing-shadow: 0 8px 28px #00000018, 0 1px 3px #00000010;
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: default;
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+button,
+a,
+input,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+:where(button, a, input, select):focus-visible {
+  outline: 2px solid var(--wing-focus);
+  outline-offset: 3px;
+}
+::selection {
+  background: color-mix(in srgb, var(--wing-accent) 25%, transparent);
+}
+.wing-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --wing-fast: 0ms;
+    --wing-normal: 0ms;
+    --wing-slow: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+  }
+}

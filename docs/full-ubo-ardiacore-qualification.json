@@ -1,0 +1,163 @@
+{
+  "engineSource": "https://github.com/mantrakp04/ardia/releases/download/v0.2.40-nightly.8/ArdiaCore-6b96c16ab2cc.tar.xz",
+  "engineSHA256": "f3a4b15b5254285b2d718040946e569971742d7a9c8378e55d78b6818889688c",
+  "headerSHA256": "2784940cd0af5300d1923827c3aa16ee554e09e93b440d4a8088ab51f65833c5",
+  "extensionSource": "https://github.com/gorhill/uBlock/releases/download/1.75.0/uBlock0_1.75.0.chromium.zip",
+  "extensionSHA256": "393cf95709d1074d4022970e9014e434395c53a822387f1e25f43be97cf4b582",
+  "scenarios": [
+    {
+      "extensions": [],
+      "enabled": false,
+      "chromium": "155.0.8059.84",
+      "evaluation": "{\"ad\":\"loaded\",\"control\":\"loaded\",\"cosmeticDisplay\":\"block\",\"cookieDisplay\":\"block\"}",
+      "mode": "",
+      "exitCode": 0,
+      "stderr": "",
+      "seen": [
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/fixture"
+        },
+        {
+          "host": "doubleclick.net:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-safe.invalid:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/favicon.ico"
+        }
+      ],
+      "results": {
+        "ad": "loaded",
+        "control": "loaded",
+        "cosmeticDisplay": "block",
+        "cookieDisplay": "block"
+      }
+    },
+    {
+      "extensionId": "fajbdaomknpkicfjcpipdmcpoamdmilh",
+      "extensions": [],
+      "enabled": true,
+      "chromium": "155.0.8059.84",
+      "evaluation": "{\"ad\":\"blocked\",\"control\":\"loaded\",\"cosmeticDisplay\":\"block\",\"cookieDisplay\":\"block\"}",
+      "mode": "",
+      "exitCode": 0,
+      "stderr": "[19219:7359125:1024/152538.483983:ERROR:chrome/browser/extensions/api/storage/managed_value_store_cache.cc:236] Failed to parse schema for extension fajbdaomknpkicfjcpipdmcpoamdmilh with error: /private/var/folders/1c/qtjws3q91b172htyz8v0yny00000gn/T/wing-ardiacore-ubo-5qx6kh13/ubo/uBlock0.chromium/managed_storage.json is not a component extension resource\n[19219:7359125:1024/152543.758225:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'run-ad-auction'.\", source:  (0)\n[19219:7359125:1024/152543.758252:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'join-ad-interest-group'.\", source:  (0)\n[19219:7359125:1024/152543.758259:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'private-aggregation'.\", source:  (0)\n[19219:7359125:1024/152543.758265:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'attribution-reporting'.\", source:  (0)\n",
+      "seen": [
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/fixture"
+        },
+        {
+          "host": "wing-safe.invalid:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/favicon.ico"
+        }
+      ],
+      "results": {
+        "ad": "blocked",
+        "control": "loaded",
+        "cosmeticDisplay": "block",
+        "cookieDisplay": "block"
+      }
+    },
+    {
+      "extensionId": "fajbdaomknpkicfjcpipdmcpoamdmilh",
+      "extensions": [],
+      "enabled": true,
+      "chromium": "155.0.8059.84",
+      "filterSettings": "{\"assetKey\":\"user-filters\",\"content\":\"wing-fixture.invalid###wing-fixture-ad\\n@@||doubleclick.net^\",\"enabled\":true,\"trusted\":false,\"lists\":{\"genericDisabled\":false,\"cosmeticEnabled\":true,\"cosmeticCount\":84757,\"imported\":{\"content\":\"filters\",\"contentURL\":[\"http://127.0.0.1:60644/cookies.txt\"],\"external\":true,\"group\":\"custom\",\"submitter\":\"user\",\"title\":\"EasyList \u2013 Cookie Notices\",\"hasLocalURL\":false,\"hasRemoteURL\":true,\"submitTime\":1792835757735,\"writeTime\":0,\"obsolete\":true,\"off\":false,\"supportURL\":\"https://easylist.to/\",\"entryCount\":48380,\"entryUsedCount\":48258}}}",
+      "evaluation": "{\"ad\":\"loaded\",\"control\":\"loaded\",\"cosmeticDisplay\":\"none\",\"cookieDisplay\":\"none\"}",
+      "mode": "configure",
+      "exitCode": 0,
+      "stderr": "[19286:7359668:1024/152558.303953:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'run-ad-auction'.\", source:  (0)\n[19286:7359668:1024/152558.303972:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'join-ad-interest-group'.\", source:  (0)\n[19286:7359668:1024/152558.303976:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'private-aggregation'.\", source:  (0)\n[19286:7359668:1024/152558.303985:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'attribution-reporting'.\", source:  (0)\n",
+      "seen": [
+        {
+          "host": "127.0.0.1:60644",
+          "path": "/cookies.txt"
+        },
+        {
+          "host": "127.0.0.1:60644",
+          "path": "/cookies.txt"
+        },
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/fixture"
+        },
+        {
+          "host": "doubleclick.net:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-safe.invalid:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/favicon.ico"
+        }
+      ],
+      "results": {
+        "ad": "loaded",
+        "control": "loaded",
+        "cosmeticDisplay": "none",
+        "cookieDisplay": "none"
+      }
+    },
+    {
+      "extensionId": "fajbdaomknpkicfjcpipdmcpoamdmilh",
+      "extensions": [],
+      "enabled": true,
+      "chromium": "155.0.8059.84",
+      "filterSettings": "{\"assetKey\":\"user-filters\",\"content\":\"wing-fixture.invalid###wing-fixture-ad\\n@@||doubleclick.net^\",\"enabled\":true,\"trusted\":false,\"lists\":{\"genericDisabled\":false,\"cosmeticEnabled\":true,\"cosmeticCount\":84757,\"imported\":{\"content\":\"filters\",\"contentURL\":[\"http://127.0.0.1:60644/cookies.txt\"],\"external\":true,\"group\":\"custom\",\"submitter\":\"user\",\"title\":\"EasyList \u2013 Cookie Notices\",\"hasLocalURL\":false,\"hasRemoteURL\":true,\"submitTime\":1792835763976,\"supportURL\":\"https://easylist.to/\",\"cached\":true,\"writeTime\":1792835757920,\"obsolete\":false,\"remoteURL\":\"http://127.0.0.1:60644/cookies.txt\",\"off\":false,\"entryCount\":48380,\"entryUsedCount\":48313}}}",
+      "evaluation": "{\"ad\":\"loaded\",\"control\":\"loaded\",\"cosmeticDisplay\":\"none\",\"cookieDisplay\":\"none\"}",
+      "mode": "persisted",
+      "exitCode": 0,
+      "stderr": "[19306:7360045:1024/152612.296969:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'run-ad-auction'.\", source:  (0)\n[19306:7360045:1024/152612.297050:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'join-ad-interest-group'.\", source:  (0)\n[19306:7360045:1024/152612.297063:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'private-aggregation'.\", source:  (0)\n[19306:7360045:1024/152612.297072:INFO:CONSOLE:0] \"Error with Permissions-Policy header: Unrecognized feature: 'attribution-reporting'.\", source:  (0)\n",
+      "seen": [
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/fixture"
+        },
+        {
+          "host": "doubleclick.net:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-safe.invalid:60644",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-fixture.invalid:60644",
+          "path": "/favicon.ico"
+        }
+      ],
+      "results": {
+        "ad": "loaded",
+        "control": "loaded",
+        "cosmeticDisplay": "none",
+        "cookieDisplay": "none"
+      }
+    }
+  ],
+  "extensionPackaging": "Only manifest key added, required by Chromium ComponentLoader; all uBO code and filter assets unchanged. Public key from pinned Ardia ubo.sh.",
+  "cookieList": {
+    "source": "https://raw.githubusercontent.com/uBlockOrigin/uAssets/77cb1ef921d8acab50ac5881fbb0692ce7a7d800/thirdparties/easylist-cookies.txt",
+    "sha256": "f57aef05a78461e56de1469b192ce3afaa887c1d7cb8103b81d32d5685e535f6",
+    "delivery": "Official list served over local fixture HTTP, imported via uBO dashboard; no user filter imitates its rules."
+  },
+  "networkPassed": true,
+  "passed": true,
+  "scope": "Network/cosmetic/cookie-list/exception/persistence spike with full uBlock Origin; only component identity manifest key added. Not Wing integration, real-site cookie coverage, update qualification, or a production release.",
+  "cosmeticPassed": true,
+  "exceptionPassed": true,
+  "cookieListPassed": true,
+  "persistencePassed": true
+}

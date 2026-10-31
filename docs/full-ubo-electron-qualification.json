@@ -1,0 +1,204 @@
+{
+  "at": "2026-10-24T09:44:23.628Z",
+  "source": "https://github.com/gorhill/uBlock/releases/download/1.75.0/uBlock0_1.75.0.chromium.zip",
+  "sha256": "393cf95709d1074d4022970e9014e434395c53a822387f1e25f43be97cf4b582",
+  "version": "1.75.0",
+  "manifestVersion": 2,
+  "scope": "Official, unmodified full uBlock Origin through Wing ExtensionManager on Electron; isolated test profiles",
+  "method": "Process-local DNS maps all hostnames to 127.0.0.1 and disables proxy use. An authored local fixture loads a known advertising host and a control host. No user profile, system DNS, or extension source changes.",
+  "scenarios": [
+    {
+      "enabled": false,
+      "engine": {
+        "node": "24.22.0",
+        "acorn": "8.18.0",
+        "ada": "4.0.0",
+        "amaro": "1.1.11",
+        "ares": "1.34.8",
+        "brotli": "1.2.0",
+        "cldr": "48.0",
+        "icu": "78.2",
+        "llhttp": "9.4.3",
+        "merve": "1.2.2",
+        "modules": "150",
+        "napi": "10",
+        "nbytes": "0.1.4",
+        "ncrypto": "0.0.1",
+        "nghttp2": "1.70.0",
+        "nghttp3": "",
+        "ngtcp2": "",
+        "openssl": "0.0.0",
+        "simdjson": "4.6.11",
+        "simdutf": "7.7.0",
+        "sqlite": "3.53.4",
+        "tz": "2026e",
+        "undici": "7.29.1",
+        "unicode": "17.0",
+        "uv": "1.52.1",
+        "uvwasi": "0.0.23",
+        "v8": "15.6.75.19-electron.0",
+        "zlib": "1.3.2.1-motley",
+        "zstd": "1.6.0",
+        "electron": "45.0.0",
+        "chrome": "156.0.8078.48"
+      },
+      "loadError": null,
+      "logs": [
+        {
+          "level": "warning",
+          "message": "Electron Security Warning (Insecure Resources) This renderer process loads resources using insecure\n  protocols. This exposes users of this app to unnecessary security risks.\n  Consider loading the following resources over HTTPS or FTPS. \n- http://doubleclick.net:58023/image.svg\n- http://wing-safe.invalid:58023/image.svg\n  \n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+          "source": "http://127.0.0.1:58023/fixture"
+        },
+        {
+          "level": "warning",
+          "message": "Electron Security Warning (Insecure Content-Security-Policy) This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+          "source": "http://127.0.0.1:58023/fixture"
+        }
+      ],
+      "seen": [
+        {
+          "host": "127.0.0.1:58023",
+          "path": "/fixture"
+        },
+        {
+          "host": "doubleclick.net:58023",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-safe.invalid:58023",
+          "path": "/image.svg"
+        }
+      ],
+      "results": {
+        "ad": "loaded",
+        "control": "loaded"
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "enabled": true,
+      "engine": {
+        "node": "24.22.0",
+        "acorn": "8.18.0",
+        "ada": "4.0.0",
+        "amaro": "1.1.11",
+        "ares": "1.34.8",
+        "brotli": "1.2.0",
+        "cldr": "48.0",
+        "icu": "78.2",
+        "llhttp": "9.4.3",
+        "merve": "1.2.2",
+        "modules": "150",
+        "napi": "10",
+        "nbytes": "0.1.4",
+        "ncrypto": "0.0.1",
+        "nghttp2": "1.70.0",
+        "nghttp3": "",
+        "ngtcp2": "",
+        "openssl": "0.0.0",
+        "simdjson": "4.6.11",
+        "simdutf": "7.7.0",
+        "sqlite": "3.53.4",
+        "tz": "2026e",
+        "undici": "7.29.1",
+        "unicode": "17.0",
+        "uv": "1.52.1",
+        "uvwasi": "0.0.23",
+        "v8": "15.6.75.19-electron.0",
+        "zlib": "1.3.2.1-motley",
+        "zstd": "1.6.0",
+        "electron": "45.0.0",
+        "chrome": "156.0.8078.48"
+      },
+      "loadError": null,
+      "logs": [
+        {
+          "level": "warning",
+          "message": "injectExtensionAPIs: context isolation disabled in chrome-extension://cffhgdphejfeepnibdnjopdimpenbeej/background.html",
+          "source": "/Users/art3mis/Developer/wing/node_modules/electron-chrome-extensions/dist/chrome-extension-api.preload.js"
+        },
+        {
+          "level": "error",
+          "message": "Unable to load preload script: /Users/art3mis/Developer/wing/src/extension-namespace-preload.cjs",
+          "source": ""
+        },
+        {
+          "level": "error",
+          "message": "Error: contextBridge API can only be used when contextIsolation is enabled",
+          "source": ""
+        },
+        {
+          "level": "error",
+          "message": "Uncaught TypeError: Cannot read properties of undefined (reading 'setBadgeBackgroundColor')",
+          "source": "chrome-extension://cffhgdphejfeepnibdnjopdimpenbeej/js/webext.js"
+        },
+        {
+          "level": "warning",
+          "message": "Electron Security Warning (Insecure Resources) This renderer process loads resources using insecure\n  protocols. This exposes users of this app to unnecessary security risks.\n  Consider loading the following resources over HTTPS or FTPS. \n- http://doubleclick.net:58027/image.svg\n- http://wing-safe.invalid:58027/image.svg\n  \n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+          "source": "http://127.0.0.1:58027/fixture"
+        },
+        {
+          "level": "warning",
+          "message": "Electron Security Warning (Insecure Content-Security-Policy) This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+          "source": "http://127.0.0.1:58027/fixture"
+        }
+      ],
+      "seen": [
+        {
+          "host": "127.0.0.1:58027",
+          "path": "/fixture"
+        },
+        {
+          "host": "doubleclick.net:58027",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-safe.invalid:58027",
+          "path": "/image.svg"
+        }
+      ],
+      "results": {
+        "control": "loaded",
+        "ad": "loaded"
+      },
+      "extension": {
+        "id": "cffhgdphejfeepnibdnjopdimpenbeej",
+        "name": "uBlock Origin",
+        "version": "1.75.0",
+        "manifestVersion": 2,
+        "permissions": [
+          "alarms",
+          "contextMenus",
+          "privacy",
+          "storage",
+          "tabs",
+          "unlimitedStorage",
+          "webNavigation",
+          "webRequest",
+          "webRequestBlocking",
+          "<all_urls>"
+        ],
+        "hostPermissions": []
+      },
+      "extensionContexts": [
+        {
+          "url": "chrome-extension://cffhgdphejfeepnibdnjopdimpenbeej/background.html",
+          "type": "backgroundPage"
+        }
+      ],
+      "backgroundAPIs": {
+        "webRequest": "object",
+        "blockingListener": "function",
+        "webNavigation": "undefined",
+        "storage": "object",
+        "ready": true
+      },
+      "exitCode": 0,
+      "stderr": "(node:13451) ExtensionLoadWarning: Warnings loading extension at /private/var/folders/1c/qtjws3q91b172htyz8v0yny00000gn/T/wing-full-ubo-5mTN29/extension/uBlock0.chromium:\n  Manifest version 2 is deprecated, and support will be removed in 2025. See https://developer.chrome.com/docs/extensions/develop/migrate/mv2-deprecation-timeline for details.\n  Permission 'contextMenus' is unknown or URL pattern is malformed.\n  Permission 'privacy' is unknown or URL pattern is malformed.\n  Permission 'webNavigation' is unknown or URL pattern is malformed.\n\n(Use `Electron --trace-warnings ...` to show where the warning was created)\n"
+    }
+  ],
+  "passed": false,
+  "result": "unsupported",
+  "cookieBannerFiltering": "Not qualified; network blocking is a prerequisite"
+}

@@ -1,0 +1,6 @@
+{
+  "bundleId": "org.wingbrowser.Wing",
+  "safeStorageService": "Wing Safe Storage",
+  "safeStorageAccount": "Wing",
+  "cdmStorageIdKey": "f103fd6df0022fbee9545798092933f4"
+}

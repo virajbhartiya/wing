@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Wing Spaces",
+  "version": "0.2.0",
+  "description": "Local workspaces, a calm new tab, and a native Chromium sidebar for Wing.",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "sidePanel",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "worker.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "chrome_url_overrides": {
+    "newtab": "home.html"
+  },
+  "action": {
+    "default_title": "Open Wing Spaces",
+    "default_icon": {
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "128": "icon.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Open Wing Spaces"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArEEATr+SsemXJzCAppLWF2SFHqPXQClY02Kl1oFAaewMKqE6+CKXJA77p0OGVWcOIx+qlDeNmnWQlnkN+113aQE9uneE5DU5LOBfTvMMCMWy3sSm9+auAXJltX0T/iTJ+FJgIb0oAMkIut9zAQBAgYlYCX6/CgJbBRoWO+gW/YXJnsLzvPLvel8M4m6GgkJ0BNUJEuXzXtgKQsdPR9v0eii6W3gO+fG41C/981B6+wf06mg8V8fYAZXm3aHKPUxoKbKr5ftzrKU2mKLjOyHJ14HNdpf59VSK1eBMUifd4BnfWRuqll64eEbGsLjP/NFGbL71EQ2Qfyr8eWtUSpAIfwIDAQAB",
+  "incognito": "not_allowed"
+}

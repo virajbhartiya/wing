@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Wing browser services",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsNvO1jq0j+xA5O90mnCPCt9D6CMN8IH4/4HNTn1GqdfZHvgOQ/mglZZjy1bbPbuQYy/6kM5FxKVmbF+xZqv0byO0X040jrLmCmXtfL7cKuiWMrov6IaL+2mG/V1HyWcJaaWLG3KFE3CJBG83/IikCjul3g8R7IJryOOK7pPOHwiTK7d9vGxDpj6pjT9zRtoJrX4QwaCgD16mM4iRjpmjXLDS+XGxAv5eBm6Jpuags9UTGV96UyPffWrrPTUN4lwXTSqA0PUYB6TfSPxbJhcRu/CqlPe6G6ZHrzq3EbNcCLwDfofM0bXgjpxleCXhqka7RCxwPJFSzGK6A7F0xjkjzwIDAQAB",
+  "permissions": [
+    "downloads",
+    "history",
+    "bookmarks",
+    "contentSettings",
+    "browsingData",
+    "management",
+    "storage",
+    "tabs",
+    "scripting",
+    "cookies"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

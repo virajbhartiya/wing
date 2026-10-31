@@ -1,0 +1,14 @@
+{
+  "engine": "CEF Chrome runtime",
+  "mode": "chrome",
+  "at": "2026-10-23T18:56:22.901Z",
+  "split": true,
+  "worker": true,
+  "storage": true,
+  "tabs": true,
+  "messaging": true,
+  "extensionId": "nablmpdkoffbnencfipiehaajnnkpfgd",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+  "contentScript": true,
+  "declarativeNetRequest": true
+}

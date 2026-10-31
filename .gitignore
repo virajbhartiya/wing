@@ -1,0 +1,15 @@
+node_modules/
+release/
+.DS_Store
+*.log
+native/vendor/
+native/build/
+native-probe/wing-webkit-probe
+
+native/wing-build/
+__pycache__/
+
+/release-config.json
+*.p12
+*.p8
+*.pem

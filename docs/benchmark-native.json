@@ -1,0 +1,1472 @@
+{
+  "engine": "Wing CEF Chrome runtime",
+  "at": "2026-10-23T18:51:39.536Z",
+  "fixture": "60 tabs, six batches of ten, local static HTML",
+  "measurement": "Summed host and descendant RSS, shared pages can be counted more than once. CPU is ps lifetime average, not instantaneous.",
+  "medianTabCreateMs": 20.299999982118607,
+  "p95TabCreateMs": 110.10000002384186,
+  "tabCreateLatenciesMs": [
+    59.099999994039536,
+    66.30000001192093,
+    20.599999994039536,
+    22.400000005960464,
+    55.5,
+    20.80000001192093,
+    14.299999982118607,
+    12.700000017881393,
+    75.2999999821186,
+    17.30000001192093,
+    12.400000005960464,
+    19.799999982118607,
+    16.400000005960464,
+    15,
+    52.5,
+    10.800000011920929,
+    12,
+    12.699999988079071,
+    30.80000001192093,
+    20.299999982118607,
+    13.700000017881393,
+    15.5,
+    14.099999994039536,
+    26.69999998807907,
+    27.200000017881393,
+    23.19999998807907,
+    146.80000001192093,
+    38.5,
+    114.2999999821186,
+    37.80000001192093,
+    32.599999994039536,
+    14.599999994039536,
+    37.5,
+    12.5,
+    79.7000000178814,
+    22.299999982118607,
+    21.80000001192093,
+    15.199999988079071,
+    15.400000005960464,
+    13.099999994039536,
+    14.599999994039536,
+    11.300000011920929,
+    13.5,
+    15.800000011920929,
+    30.5,
+    77.89999997615814,
+    38.10000002384186,
+    55.19999998807907,
+    33,
+    91.40000000596046,
+    11.400000005960464,
+    10.199999988079071,
+    17.69999998807907,
+    110.10000002384186,
+    20.19999998807907,
+    15.800000011920929,
+    12.799999982118607,
+    52.80000001192093,
+    18,
+    19.5
+  ],
+  "samples": [
+    {
+      "phase": "baseline",
+      "tabs": 1,
+      "rssSumMB": 813.34375,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 175472,
+          "cpuLifetimePercent": 0.9,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 101536,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 62512,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 48352,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 126384,
+          "cpuLifetimePercent": 0.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76165,
+          "ppid": 76127,
+          "rssKB": 68336,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 92848,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 77984,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 79440,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "loaded-0",
+      "tabs": 11,
+      "rssSumMB": 1892.90625,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 195952,
+          "cpuLifetimePercent": 3.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 105104,
+          "cpuLifetimePercent": 1.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 64144,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 49344,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 128656,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76165,
+          "ppid": 76127,
+          "rssKB": 91264,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 94112,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 79968,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 80592,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76281,
+          "ppid": 76127,
+          "rssKB": 106688,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76282,
+          "ppid": 76127,
+          "rssKB": 107680,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76285,
+          "ppid": 76127,
+          "rssKB": 106800,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76286,
+          "ppid": 76127,
+          "rssKB": 106880,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76288,
+          "ppid": 76127,
+          "rssKB": 106720,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76289,
+          "ppid": 76127,
+          "rssKB": 106816,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76290,
+          "ppid": 76127,
+          "rssKB": 106912,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76291,
+          "ppid": 76127,
+          "rssKB": 106976,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76292,
+          "ppid": 76127,
+          "rssKB": 106784,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76293,
+          "ppid": 76127,
+          "rssKB": 86944,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "closed-0",
+      "tabs": 1,
+      "rssSumMB": 856.21875,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 193232,
+          "cpuLifetimePercent": 1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 100688,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 63568,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 48768,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 128832,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 94112,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 80064,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 80560,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76293,
+          "ppid": 76127,
+          "rssKB": 86944,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "loaded-1",
+      "tabs": 11,
+      "rssSumMB": 1854.515625,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 184944,
+          "cpuLifetimePercent": 5.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 95504,
+          "cpuLifetimePercent": 1.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61792,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47520,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 124704,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 93152,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 80256,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 80608,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76293,
+          "ppid": 76127,
+          "rssKB": 88608,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76303,
+          "ppid": 76127,
+          "rssKB": 99120,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76304,
+          "ppid": 76127,
+          "rssKB": 102416,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76306,
+          "ppid": 76127,
+          "rssKB": 107808,
+          "cpuLifetimePercent": 0.9,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76307,
+          "ppid": 76127,
+          "rssKB": 106944,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76308,
+          "ppid": 76127,
+          "rssKB": 106784,
+          "cpuLifetimePercent": 0.9,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76309,
+          "ppid": 76127,
+          "rssKB": 106864,
+          "cpuLifetimePercent": 0.9,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76310,
+          "ppid": 76127,
+          "rssKB": 106832,
+          "cpuLifetimePercent": 0.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76311,
+          "ppid": 76127,
+          "rssKB": 107664,
+          "cpuLifetimePercent": 1.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76312,
+          "ppid": 76127,
+          "rssKB": 108768,
+          "cpuLifetimePercent": 0.8,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76313,
+          "ppid": 76127,
+          "rssKB": 88736,
+          "cpuLifetimePercent": 0.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "closed-1",
+      "tabs": 1,
+      "rssSumMB": 832.96875,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 182032,
+          "cpuLifetimePercent": 1.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 95040,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61184,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 46944,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 124864,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 93168,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 80336,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 80656,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76313,
+          "ppid": 76127,
+          "rssKB": 88736,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "loaded-2",
+      "tabs": 11,
+      "rssSumMB": 1617.390625,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 182304,
+          "cpuLifetimePercent": 4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 86960,
+          "cpuLifetimePercent": 1.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61472,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47072,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 102944,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 81840,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 73248,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 74224,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76313,
+          "ppid": 76127,
+          "rssKB": 87600,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76322,
+          "ppid": 76127,
+          "rssKB": 86336,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76323,
+          "ppid": 76127,
+          "rssKB": 87600,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76325,
+          "ppid": 76127,
+          "rssKB": 87648,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76326,
+          "ppid": 76127,
+          "rssKB": 86464,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76327,
+          "ppid": 76127,
+          "rssKB": 88256,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76328,
+          "ppid": 76127,
+          "rssKB": 86832,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76329,
+          "ppid": 76127,
+          "rssKB": 87104,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76332,
+          "ppid": 76127,
+          "rssKB": 88336,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76335,
+          "ppid": 76127,
+          "rssKB": 89216,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76337,
+          "ppid": 76127,
+          "rssKB": 70752,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "closed-2",
+      "tabs": 1,
+      "rssSumMB": 768.078125,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 181584,
+          "cpuLifetimePercent": 1.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 87168,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61040,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47360,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 103472,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85888,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 74672,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 74576,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76337,
+          "ppid": 76127,
+          "rssKB": 70752,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "loaded-3",
+      "tabs": 11,
+      "rssSumMB": 1820.78125,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 186016,
+          "cpuLifetimePercent": 4.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 87104,
+          "cpuLifetimePercent": 1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61840,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 48016,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 106960,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85952,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 74848,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 74560,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76337,
+          "ppid": 76127,
+          "rssKB": 90544,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76343,
+          "ppid": 76127,
+          "rssKB": 106896,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76344,
+          "ppid": 76127,
+          "rssKB": 106848,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76345,
+          "ppid": 76127,
+          "rssKB": 106816,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76346,
+          "ppid": 76127,
+          "rssKB": 106848,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76347,
+          "ppid": 76127,
+          "rssKB": 106800,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76349,
+          "ppid": 76127,
+          "rssKB": 106864,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76350,
+          "ppid": 76127,
+          "rssKB": 106880,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76351,
+          "ppid": 76127,
+          "rssKB": 106848,
+          "cpuLifetimePercent": 0.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76352,
+          "ppid": 76127,
+          "rssKB": 106848,
+          "cpuLifetimePercent": 0.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76353,
+          "ppid": 76127,
+          "rssKB": 86992,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "closed-3",
+      "tabs": 1,
+      "rssSumMB": 791.40625,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 182560,
+          "cpuLifetimePercent": 1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 86400,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61200,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47376,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 107536,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85952,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 76496,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 75888,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76353,
+          "ppid": 76127,
+          "rssKB": 86992,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "loaded-4",
+      "tabs": 11,
+      "rssSumMB": 1823.90625,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 185024,
+          "cpuLifetimePercent": 2.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 86368,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61616,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 48032,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 107936,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85888,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 76656,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 75952,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76353,
+          "ppid": 76127,
+          "rssKB": 90560,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76360,
+          "ppid": 76127,
+          "rssKB": 106928,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76361,
+          "ppid": 76127,
+          "rssKB": 106944,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76362,
+          "ppid": 76127,
+          "rssKB": 106976,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76364,
+          "ppid": 76127,
+          "rssKB": 106768,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76365,
+          "ppid": 76127,
+          "rssKB": 106864,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76366,
+          "ppid": 76127,
+          "rssKB": 106720,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76367,
+          "ppid": 76127,
+          "rssKB": 107904,
+          "cpuLifetimePercent": 0.6,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76368,
+          "ppid": 76127,
+          "rssKB": 106672,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76369,
+          "ppid": 76127,
+          "rssKB": 106880,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76373,
+          "ppid": 76127,
+          "rssKB": 86992,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "closed-4",
+      "tabs": 1,
+      "rssSumMB": 790.1875,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 181472,
+          "cpuLifetimePercent": 1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 85648,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 60976,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47392,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 108128,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85888,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 76688,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 75968,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76373,
+          "ppid": 76127,
+          "rssKB": 86992,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "loaded-5",
+      "tabs": 11,
+      "rssSumMB": 1835.640625,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 185888,
+          "cpuLifetimePercent": 4.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 88064,
+          "cpuLifetimePercent": 0.9,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 61504,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47984,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 109216,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85760,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 79408,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 75984,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76373,
+          "ppid": 76127,
+          "rssKB": 95344,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76381,
+          "ppid": 76127,
+          "rssKB": 106720,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76382,
+          "ppid": 76127,
+          "rssKB": 106896,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76384,
+          "ppid": 76127,
+          "rssKB": 107776,
+          "cpuLifetimePercent": 0.7,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76385,
+          "ppid": 76127,
+          "rssKB": 106800,
+          "cpuLifetimePercent": 0.4,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76387,
+          "ppid": 76127,
+          "rssKB": 106912,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76388,
+          "ppid": 76127,
+          "rssKB": 106928,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76389,
+          "ppid": 76127,
+          "rssKB": 107792,
+          "cpuLifetimePercent": 0.8,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76390,
+          "ppid": 76127,
+          "rssKB": 106896,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76392,
+          "ppid": 76127,
+          "rssKB": 106864,
+          "cpuLifetimePercent": 0.5,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76393,
+          "ppid": 76127,
+          "rssKB": 86960,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "closed-5",
+      "tabs": 1,
+      "rssSumMB": 796.1875,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 182224,
+          "cpuLifetimePercent": 0.9,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 87312,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 60864,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47344,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 109376,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 85760,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 79456,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 76000,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76393,
+          "ppid": 76127,
+          "rssKB": 86960,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    },
+    {
+      "phase": "idle",
+      "tabs": 1,
+      "rssSumMB": 797.296875,
+      "processes": [
+        {
+          "pid": 76127,
+          "ppid": 76119,
+          "rssKB": 182112,
+          "cpuLifetimePercent": 0.3,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/MacOS/Wing"
+        },
+        {
+          "pid": 76130,
+          "ppid": 76127,
+          "rssKB": 87216,
+          "cpuLifetimePercent": 0.2,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76131,
+          "ppid": 76127,
+          "rssKB": 60864,
+          "cpuLifetimePercent": 0.1,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76151,
+          "ppid": 76127,
+          "rssKB": 47344,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper.app/Contents/MacOS/Wing Helper"
+        },
+        {
+          "pid": 76157,
+          "ppid": 76127,
+          "rssKB": 109376,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76166,
+          "ppid": 76127,
+          "rssKB": 87072,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76171,
+          "ppid": 76127,
+          "rssKB": 79456,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76172,
+          "ppid": 76127,
+          "rssKB": 76032,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        },
+        {
+          "pid": 76393,
+          "ppid": 76127,
+          "rssKB": 86960,
+          "cpuLifetimePercent": 0,
+          "name": "/Users/art3mis/Developer/wing/native/wing-build/host/Release/Wing.app/Contents/Frameworks/Wing Helper (Renderer).app/Contents/MacOS/Wing Helper (Renderer)"
+        }
+      ]
+    }
+  ]
+}

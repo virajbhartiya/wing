@@ -1,0 +1,102 @@
+{
+  "cycles" : 60,
+  "date" : "2026-10-23T18:32:33Z",
+  "limitations" : [
+    "Host RSS excludes WebKit networking\/GPU\/content XPC processes. Do not compare it with Electron total working set.",
+    "Unattached views and a static local document do not measure smoothness or normal web browsing.",
+    "WebKit process reuse differs from Chromium. This is feasibility evidence, not an engine ranking.",
+    "Weak references returning to nil prove WKWebView object release, not that all WebKit caches or subprocess allocations are gone."
+  ],
+  "loadLatencyMs" : {
+    "median" : 49.44300651550293,
+    "p95" : 77.764034271240234
+  },
+  "os" : "Version 26.6.2 (Build 25G83)",
+  "platform" : "macOS AppKit + WKWebView",
+  "samples" : [
+    {
+      "atMs" : 2422,
+      "hostRSSMB" : 64.265625,
+      "label" : "warm baseline",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 3002,
+      "hostRSSMB" : 68.28125,
+      "label" : "batch 1: 10 live pages",
+      "retainedWKWebViews" : 10
+    },
+    {
+      "atMs" : 4224,
+      "hostRSSMB" : 68.34375,
+      "label" : "batch 1: references released",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 4789,
+      "hostRSSMB" : 68.75,
+      "label" : "batch 2: 10 live pages",
+      "retainedWKWebViews" : 10
+    },
+    {
+      "atMs" : 6052,
+      "hostRSSMB" : 68.75,
+      "label" : "batch 2: references released",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 6626,
+      "hostRSSMB" : 69.75,
+      "label" : "batch 3: 10 live pages",
+      "retainedWKWebViews" : 10
+    },
+    {
+      "atMs" : 7842,
+      "hostRSSMB" : 69.734375,
+      "label" : "batch 3: references released",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 8435,
+      "hostRSSMB" : 70.109375,
+      "label" : "batch 4: 10 live pages",
+      "retainedWKWebViews" : 10
+    },
+    {
+      "atMs" : 9712,
+      "hostRSSMB" : 70.015625,
+      "label" : "batch 4: references released",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 10254,
+      "hostRSSMB" : 70.40625,
+      "label" : "batch 5: 10 live pages",
+      "retainedWKWebViews" : 10
+    },
+    {
+      "atMs" : 11490,
+      "hostRSSMB" : 70.328125,
+      "label" : "batch 5: references released",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 12042,
+      "hostRSSMB" : 70.65625,
+      "label" : "batch 6: 10 live pages",
+      "retainedWKWebViews" : 10
+    },
+    {
+      "atMs" : 13317,
+      "hostRSSMB" : 70.53125,
+      "label" : "batch 6: references released",
+      "retainedWKWebViews" : 0
+    },
+    {
+      "atMs" : 16515,
+      "hostRSSMB" : 67.640625,
+      "label" : "idle end",
+      "retainedWKWebViews" : 0
+    }
+  ]
+}

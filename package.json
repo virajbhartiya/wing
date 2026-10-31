@@ -1,0 +1,52 @@
+{
+  "name": "wing-browser",
+  "productName": "Wing",
+  "version": "0.2.0",
+  "description": "An open-source, space-first desktop browser inspired by Arc",
+  "main": "src/main.cjs",
+  "license": "GPL-3.0-only",
+  "private": true,
+  "scripts": {
+    "start": "open release/Wing.app",
+    "test": "node --test test/*.test.cjs",
+    "check": "node --check src/main.cjs && node --check src/model.cjs && node --check src/preload.cjs && node --check src/renderer.js",
+    "package": "node scripts/package-electron.cjs",
+    "dmg": "npm run package && node scripts/make-dmg.cjs",
+    "install:app": "npm run package && node scripts/make-dmg.cjs --install",
+    "test:import": "electron scripts/import-engine-test.cjs",
+    "benchmark": "electron scripts/benchmark.cjs",
+    "test:engine": "node scripts/run-engine-test.cjs",
+    "benchmark:webkit": "xcrun swiftc -swift-version 5 -O -framework AppKit -framework WebKit native-probe/main.swift -o native-probe/wing-webkit-probe && native-probe/wing-webkit-probe docs/webkit-probe.json",
+    "start:prototype": "electron .",
+    "package:prototype": "node scripts/package-electron.cjs",
+    "build:native": "python3 scripts/build-native.py",
+    "test:extensions": "npm run test:engine",
+    "benchmark:native": "node scripts/benchmark-native.cjs",
+    "test:reliability": "node scripts/test-native-reliability.cjs",
+    "check:engine-update": "python3 scripts/check-engine-update.py",
+    "check:release": "python3 -m unittest discover -s test -p \"*_test.py\"",
+    "start:dev": "electron .",
+    "start:native": "open \"release/Wing Native.app\"",
+    "build:preload": "esbuild src/preload.cjs --bundle --platform=node --external:electron --outfile=src/preload.bundle.cjs",
+    "prepackage": "npm run build:preload",
+    "pretest:engine": "npm run build:preload",
+    "prestart:dev": "npm run build:preload",
+    "test:extensions:native": "node scripts/test-cef-extensions.cjs --wing",
+    "build:chromium-preview": "python3 scripts/build-chromium-preview.py",
+    "test:chromium-preview": "python3 scripts/test-chromium-preview.py",
+    "prepare:chromium": "python3 scripts/prepare-chromium.py --sync",
+    "start:chromium-preview": "python3 scripts/run-chromium-preview.py",
+    "migrate:chromium": "python3 scripts/migrate-chromium.py",
+    "build:chromium-production": "python3 scripts/build-chromium-preview.py --production --source-receipt ../wing-chromium-build/wing-build-receipt.json"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "45.0.0",
+    "esbuild": "0.25.12",
+    "prettier": "^3.9.10"
+  },
+  "dependencies": {
+    "electron-chrome-extensions": "4.9.0",
+    "yauzl": "3.4.0"
+  }
+}

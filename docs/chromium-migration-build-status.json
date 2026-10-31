@@ -1,0 +1,8 @@
+{
+  "stage": "stage-production",
+  "state": "passed",
+  "updatedAt": "2026-10-25T05:51:14.609588+00:00",
+  "releaseReady": false,
+  "productionAppReceipt": "native/build/chromium-production/latest.json",
+  "report": "docs/chromium-preview-qualification.json"
+}

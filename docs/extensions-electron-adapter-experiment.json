@@ -1,0 +1,23 @@
+{
+  "electron": "45.0.0",
+  "chrome": "156.0.8078.48",
+  "adapter": "Wing ExtensionManager + electron-chrome-extensions@4.9.0",
+  "commandsNamespace": true,
+  "worker": true,
+  "messaging": true,
+  "errors": {},
+  "staticRules": {
+    "before": [],
+    "after": [
+      "probe"
+    ]
+  },
+  "storage": true,
+  "tabs": true,
+  "createRemoveTab": true,
+  "browserCreateRemoveTab": true,
+  "dynamicDNR": true,
+  "contentScript": true,
+  "staticDNR": true,
+  "dynamicDNRBlocked": true
+}

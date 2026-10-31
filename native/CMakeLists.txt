@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.21)
+project(Wing LANGUAGES C CXX)
+set(VERSION_SHORT "0.2.0")
+set(CEF_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/vendor/cef")
+list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
+find_package(CEF REQUIRED)
+add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
+add_subdirectory(host)

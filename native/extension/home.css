@@ -1,0 +1,42 @@
+body {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(ellipse at 5% 0%, #dcd3e94d, transparent 52%),
+    radial-gradient(ellipse at 100% 100%, #e9d6c636, transparent 50%),
+    var(--wing-bg);
+}
+.home-top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 26px 34px; color: var(--wing-muted);
+}
+.identity { display: inline-flex; gap: 9px; align-items: center; font-weight: 650; font-size: 15px; letter-spacing: -.5px; color: var(--wing-text); }
+.wing-symbol { width: 27px; height: 27px; fill: none; stroke: var(--wing-accent); stroke-width: 2.8; stroke-linecap: round; }
+time { font-size: 11px; }
+main { width: min(510px, calc(100% - 64px)); margin: auto; padding: 46px 0 64px; }
+.greeting { display: flex; align-items: center; gap: 8px; font-weight: 550; font-size: 11px; color: var(--wing-muted); }
+.space-indicator { width: 6px; height: 6px; border-radius: 50%; background: var(--wing-accent); opacity: .7; }
+h1 { font: 400 clamp(34px, 4.8vw, 51px)/1.16 Georgia, "Times New Roman", serif; letter-spacing: -1.7px; margin: 21px 0 33px; }
+h1 em { color: var(--wing-accent); font-weight: 400; }
+#search { display: flex; align-items: center; gap: 12px; border: 1px solid var(--wing-line); border-radius: var(--wing-radius-lg); background: var(--wing-surface); padding: 10px 10px 10px 18px; box-shadow: var(--wing-shadow); transition: border-color var(--wing-normal), box-shadow var(--wing-normal); }
+#search:focus-within { border-color: color-mix(in srgb, var(--wing-focus) 40%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--wing-focus) 7%, transparent), var(--wing-shadow); }
+.search-icon { color: var(--wing-muted); width: 17px; height: 17px; }
+input { border: 0; outline: none; background: transparent; padding: 8px 0; flex: 1; min-width: 0; font-size: 13px; }
+input:focus-visible { outline: none; }
+input::placeholder { color: var(--wing-muted); opacity: .9; }
+#search button { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: var(--wing-radius-md); color: var(--wing-accent); background: color-mix(in srgb, var(--wing-accent) 8%, transparent); transition: background var(--wing-fast); }
+#search button:hover { background: color-mix(in srgb, var(--wing-accent) 15%, transparent); }
+.shortcuts { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 29px; gap: 10px; }
+.shortcuts button { border: 0; background: transparent; border-radius: var(--wing-radius-md); display: flex; flex-direction: column; align-items: center; gap: 11px; padding: 10px 2px; color: var(--wing-muted); font-size: 11px; transition: background var(--wing-normal); }
+.shortcuts button:hover { background: var(--wing-hover); color: var(--wing-text); }
+.shortcut-icon { display: grid; place-items: center; width: 43px; height: 43px; border: 1px solid var(--wing-line); border-radius: 13px; color: var(--wing-accent); background: var(--wing-surface); transition: transform var(--wing-normal) var(--wing-ease); }
+.shortcuts button:hover .shortcut-icon { transform: translateY(-2px); }
+.search-hint { font-size: 11px; color: var(--wing-muted); text-align: center; margin: 35px 0 0; opacity: .8; }
+footer { display: flex; gap: 13px; align-items: center; justify-content: center; padding: 25px; color: var(--wing-muted); font-size: 10px; opacity: .7; }
+.footer-line { width: 24px; height: 1px; background: currentColor; opacity: .4; }
+#status { position: fixed; bottom: 55px; left: 50%; transform: translateX(-50%); max-width: min(400px, 90%); font-size: 12px; line-height: 1.5; border-radius: var(--wing-radius-md); margin: 0; }
+#status:not(:empty) { padding: 12px 16px; background: var(--wing-text); color: var(--wing-bg); box-shadow: var(--wing-shadow); }
+[data-theme="dark"] body { background: radial-gradient(ellipse at 5% 0%, #54426630, transparent 55%), var(--wing-bg); }
+@media (max-width: 420px) { .home-top { padding: 20px; } main { width: calc(100% - 40px); } .shortcuts { gap: 2px; } }
+@media (max-height: 550px) { main { padding: 15px 0 20px; } h1 { font-size: 32px; margin: 12px 0 20px; } .search-hint, footer { display: none; } }

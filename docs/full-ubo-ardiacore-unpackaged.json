@@ -1,0 +1,49 @@
+{
+  "engineSource": "https://github.com/mantrakp04/ardia/releases/download/v0.2.40-nightly.8/ArdiaCore-6b96c16ab2cc.tar.xz",
+  "engineSHA256": "f3a4b15b5254285b2d718040946e569971742d7a9c8378e55d78b6818889688c",
+  "headerSHA256": "2784940cd0af5300d1923827c3aa16ee554e09e93b440d4a8088ab51f65833c5",
+  "extensionSource": "https://github.com/gorhill/uBlock/releases/download/1.75.0/uBlock0_1.75.0.chromium.zip",
+  "extensionSHA256": "393cf95709d1074d4022970e9014e434395c53a822387f1e25f43be97cf4b582",
+  "scenarios": [
+    {
+      "extensions": [],
+      "enabled": false,
+      "chromium": "155.0.8059.84",
+      "evaluation": "{\"ad\":\"loaded\",\"control\":\"loaded\"}",
+      "exitCode": 0,
+      "stderr": "",
+      "seen": [
+        {
+          "host": "127.0.0.1:59672",
+          "path": "/fixture"
+        },
+        {
+          "host": "doubleclick.net:59672",
+          "path": "/image.svg"
+        },
+        {
+          "host": "wing-safe.invalid:59672",
+          "path": "/image.svg"
+        },
+        {
+          "host": "127.0.0.1:59672",
+          "path": "/favicon.ico"
+        }
+      ],
+      "results": {
+        "ad": "loaded",
+        "control": "loaded"
+      }
+    },
+    {
+      "error": "No report produced",
+      "enabled": true,
+      "exitCode": -5,
+      "stderr": "[17317:7341915:1024/152146.007641:WARNING:components/prefs/pref_notifier_impl.cc:26] Init observer found at shutdown.\n",
+      "seen": [],
+      "results": null
+    }
+  ],
+  "passed": false,
+  "scope": "Network-only spike with unmodified full uBlock Origin. Not Wing integration, cookie-banner qualification, or a production release."
+}
