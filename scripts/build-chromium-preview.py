@@ -80,7 +80,7 @@ def main():
                     raise RuntimeError('Importer runtime archive is missing a required file')
                 (helper / destination).write_bytes(member.read())
         (helper / 'node').chmod(0o755)
-        for name in ['chromium-import-helper.cjs', 'profile-import.cjs', 'profile-reader.cjs', 'import-controller.cjs', 'wing-profile-migration.cjs', 'model.cjs', 'splits.cjs', 'themes.cjs']:
+        for name in ['chromium-import-helper.cjs', 'profile-import.cjs', 'browser-formats.cjs', 'profile-reader.cjs', 'import-controller.cjs', 'wing-profile-migration.cjs', 'model.cjs', 'splits.cjs', 'themes.cjs']:
             shutil.copy2(ROOT / 'src' / name, helper / name)
         (helper / 'provenance.json').write_text(json.dumps(NODE_IMPORT, indent=2)+'\n')
         shutil.copy2(ROOT / 'native/chromium/protection-ready.js', resources / 'protection-ready.js')

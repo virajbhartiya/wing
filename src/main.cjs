@@ -26,6 +26,7 @@ const { pathToFileURL } = require("node:url");
 const M = require("./model.cjs");
 const Navigation = require("./navigation.cjs");
 const { createBrowserFeatures } = require("./browser-features.cjs");
+const { createPrivateWindows } = require("./private-window.cjs");
 const I = require("./interactions.cjs");
 const RecentTabs = require("./recent-tabs.cjs");
 const recentTabs = new RecentTabs.TabSwitcher();
@@ -260,6 +261,25 @@ function closeView(tabId) {
   view.webContents.close();
   runtime.delete(tabId);
 }
+const privateWindows = createPrivateWindows({
+  electron: {
+    BrowserWindow,
+    WebContentsView,
+    ipcMain,
+    session,
+    Menu,
+    clipboard,
+  },
+  resolve: (input) =>
+    M.normalizeURL(
+      Navigation.resolveInput(input, state.settings),
+      state.settings.search === "duckduckgo"
+        ? "https://duckduckgo.com/?q="
+        : undefined,
+    ),
+  userAgent: (agent) =>
+    agent.replace(/\sElectron\/\S+/g, "").replace(/\swing-browser\/\S+/gi, ""),
+});
 function sessionFor(profileId) {
   const partition = "persist:wing-" + profileId,
     ses = session.fromPartition(partition);
@@ -1728,6 +1748,9 @@ async function action(name, data = {}) {
       }
       break;
     }
+    case "private-window":
+      privateWindows.open();
+      return { ok: true };
     default: {
       const result = await features.handle(name, data);
       if (result !== null) return result;
@@ -1798,9 +1821,15 @@ function menu() {
             click: () => ui("palette"),
           },
           {
+<<<<<<< ours
             label: "New Mini Window",
             accelerator: "Alt+CmdOrCtrl+N",
             click: () => action("mini-window"),
+=======
+            label: "New Private Window",
+            accelerator: "CmdOrCtrl+Shift+N",
+            click: () => action("private-window"),
+>>>>>>> theirs
           },
           {
             label: "Open Location",
@@ -2187,6 +2216,7 @@ app.whenReady().then(async () => {
     event.preventDefault();
     closing = true;
     updateController.stop();
+    privateWindows.closeAll();
     closeOverlay(false);
     clearInterval(memoryTimer);
     clearTimeout(saveTimer);

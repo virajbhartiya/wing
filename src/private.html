@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Private Window</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #211b2e;
+        --field: rgba(255, 255, 255, 0.09);
+        --text: #f4f3f8;
+        --muted: rgba(244, 243, 248, 0.45);
+        --hover: rgba(255, 255, 255, 0.1);
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      form {
+        height: 44px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 10px 0 78px;
+        -webkit-app-region: drag;
+      }
+      button,
+      input {
+        -webkit-app-region: no-drag;
+      }
+      button {
+        height: 28px;
+        min-width: 28px;
+        border: 0;
+        border-radius: 7px;
+        background: none;
+        color: inherit;
+        font: inherit;
+      }
+      button:hover:not(:disabled) {
+        background: var(--hover);
+      }
+      button:disabled {
+        color: var(--muted);
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        height: 28px;
+        margin: 0 4px;
+        padding: 0 10px;
+        box-sizing: border-box;
+        border: 0;
+        border-radius: 7px;
+        outline: 0;
+        background: var(--field);
+        color: inherit;
+        font: inherit;
+      }
+      #badge {
+        margin-left: 6px;
+        font-weight: 550;
+        white-space: nowrap;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <form id="bar">
+      <button type="button" id="back" aria-label="Back" title="Back">‹</button>
+      <button type="button" id="forward" aria-label="Forward" title="Forward">›</button>
+      <button type="button" id="reload" aria-label="Reload" title="Reload">↻</button>
+      <input id="address" placeholder="Search or enter website" aria-label="Address" spellcheck="false" autocomplete="off" />
+      <span id="badge">Private</span>
+    </form>
+    <script src="private.js"></script>
+  </body>
+</html>

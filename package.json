@@ -13,6 +13,7 @@
     "package": "node scripts/package-electron.cjs",
     "dmg": "npm run package && node scripts/make-dmg.cjs",
     "install:app": "npm run package && node scripts/make-dmg.cjs --install",
+    "test:private": "node scripts/private-window-engine-test.cjs",
     "test:import": "electron scripts/import-engine-test.cjs",
     "benchmark": "electron scripts/benchmark.cjs",
     "test:engine": "node scripts/run-engine-test.cjs",

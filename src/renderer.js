@@ -1499,6 +1499,15 @@ const SHORTCUTS = [
   ["View page source", "⌥⌘U"],
   ["Full screen", "⌃⌘F"],
 ];
+// The row's cross removes a pinned page; ⌘W only closes it and keeps the row.
+function closeFromRow(button) {
+  const id = button.dataset.close,
+    tab = state.tabs.find((t) => t.id === id),
+    pinned = tab?.kind === "pinned" || tab?.kind === "favorite",
+    remove = pinned && !button.closest(".is-split");
+  act("close-tab", { id, archive: remove });
+  if (remove) toast("Removed. You can restore it from History & Archive.");
+}
 // The Pull Requests smart tab.
 const PR_CI = {
   passing: ["Checks passing", "good"],
@@ -2440,8 +2449,8 @@ document.addEventListener("click", (e) => {
       strip.style.setProperty("--frozen-tab-width", row.offsetWidth + "px");
       strip.classList.add("frozen");
       row.classList.add("closing");
-      setTimeout(() => act("close-tab", { id: close.dataset.close }), 120);
-    } else act("close-tab", { id: close.dataset.close });
+      setTimeout(() => closeFromRow(close), 120);
+    } else closeFromRow(close);
     return;
   }
   const tab = e.target.closest("[data-tab]");
