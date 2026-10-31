@@ -92,6 +92,15 @@ async function main() {
             CFBundleURLSchemes: ["http", "https"],
           },
         ],
+        // macOS lists an app as a default browser only if it also opens web pages.
+        CFBundleDocumentTypes: [
+          {
+            CFBundleTypeName: "Web page",
+            CFBundleTypeRole: "Viewer",
+            LSHandlerRank: "Alternate",
+            LSItemContentTypes: ["public.html", "public.xhtml"],
+          },
+        ],
         NSCameraUsageDescription:
           "Websites can request your permission to use the camera.",
         NSMicrophoneUsageDescription:

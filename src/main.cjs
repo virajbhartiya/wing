@@ -2197,3 +2197,10 @@ function openExternalLink(url) {
   } catch (error) { console.error("External link rejected:", error.message); }
 }
 app.on("open-url", (event, url) => { event.preventDefault(); openExternalLink(url); });
+// Page tabs only load web addresses, so a local file goes to Safari.
+app.on("open-file", (event, file) => {
+  event.preventDefault();
+  DevTools.openInBrowser("Safari", file).catch(() => {});
+  if (win && !win.isDestroyed())
+    sendCommand({ type: "toast", message: "Wing can't open local files yet. Opened in Safari." });
+});

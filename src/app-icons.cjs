@@ -1,6 +1,6 @@
 "use strict";
 const path = require("node:path");
-const APP_ICONS = ["violet", "midnight", "coral", "paper", "letter", "chevron", "split"];
+const APP_ICONS = ["violet", "midnight", "paper", "coral", "ocean", "forest", "gold"];
 const iconFile = (id) =>
   path.join(__dirname, "../assets/icons", `${APP_ICONS.includes(id) ? id : APP_ICONS[0]}.png`);
 // macOS only lets a running app change its Dock icon, not the icon on disk.
