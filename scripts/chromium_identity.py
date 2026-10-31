@@ -24,12 +24,33 @@ def apply_identity(source, team_id=""):
             raise RuntimeError(f"Unexpected upstream keychain identity: {field}")
         text = text.replace(old, new)
     keychain.write_text(text)
+    apply_product_name(source)
     upstream = (source / "chrome/app/theme/ardia/BRANDING").read_text()
     fields = dict(line.split("=", 1) for line in upstream.splitlines() if "=" in line)
     fields.update(MAC_BUNDLE_ID=IDENTITY["bundleId"], MAC_TEAM_ID=team_id)
     branding = source / "chrome/app/theme/wing/BRANDING"
     branding.parent.mkdir(parents=True, exist_ok=True)
     branding.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+
+
+def apply_product_name(source):
+    # The Web Store label, engine UI strings and keychain alerts are user visible.
+    for relative, previous, replacement in [
+        ("components/extstore_fixups/chrome-webstore.js", "CHROME_NAME_REGEX, 'Ardia'", "CHROME_NAME_REGEX, 'Wing'"),
+        ("ardia/core/ac_strings.cc", 'kTo = u"Ardia"', 'kTo = u"Wing"'),
+    ]:
+        path = source / relative
+        text = path.read_text()
+        if replacement in text:
+            continue
+        if text.count(previous) != 1:
+            raise RuntimeError(f"Unexpected upstream product name: {relative}")
+        path.write_text(text.replace(previous, replacement))
+    alerts = source / "ardia/core/ac_safe_storage.mm"
+    lines = alerts.read_text().splitlines(keepends=True)
+    alerts.write_text("".join(
+        line.replace("Ardia Safe Storage", IDENTITY["safeStorageService"]).replace("Ardia", "Wing")
+        if '@"' in line and "Ardia" in line else line for line in lines))
 
 
 def configure_args(path):
@@ -74,6 +95,8 @@ def keep_devtools_overrides(path):
 def apply_host_api(source):
     keep_devtools_overrides(source / "ardia/core/ac_devtools_call.mm")
     api = source / "ardia/core/ardiacore_api.mm"
+    if not api.exists():
+        api = source / "ardia/core/ardiacore_profile.mm"
     header = source / "ardia/core/public/ArdiaCore.h"
     implementation = '''- (BOOL)setDownloadDirectory:(NSString*)directory {
   if (!_profile || !directory.length) return NO;
@@ -87,16 +110,23 @@ def apply_host_api(source):
 
 '''
     text = api.read_text()
-    imports = ['chrome/browser/password_manager/factories/profile_password_store_factory.h', 'components/password_manager/core/browser/password_store/stored_credential.h', 'content/public/browser/storage_partition.h', 'services/network/public/mojom/cookie_manager.mojom.h']
+    imports = ['base/files/file_util.h', 'base/strings/sys_string_conversions.h', 'chrome/common/pref_names.h', 'components/prefs/pref_service.h', 'chrome/browser/password_manager/factories/profile_password_store_factory.h', 'components/password_manager/core/browser/password_store/stored_credential.h', 'content/public/browser/storage_partition.h', 'services/network/public/mojom/cookie_manager.mojom.h']
     for name in reversed(imports):
         include = f'#include "{name}"\n'
         if include not in text:
             text = include + text
     implementation += (ROOT / 'native/chromium/wing-profile-api.inc').read_text() + "\n"
     anchor = "- (NSNumber*)boolPreference:(NSString*)name {"
-    if text.count(anchor) != 1:
+    if anchor not in text:
+        anchor = "\n@end\n"
+        if not text.endswith(anchor) and anchor not in text[-200:]:
+            raise RuntimeError("Native profile API anchor changed")
+        tail = text.rindex(anchor) + 1
+        begin = text.find("- (BOOL)setDownloadDirectory:")
+        text = text[:begin if begin >= 0 else tail] + implementation + text[tail:]
+    elif text.count(anchor) != 1:
         raise RuntimeError("Native profile API anchor changed")
-    if "- (BOOL)setDownloadDirectory:" in text:
+    elif "- (BOOL)setDownloadDirectory:" in text:
         begin = text.index("- (BOOL)setDownloadDirectory:")
         end = text.index(anchor, begin)
         text = text[:begin] + implementation + text[end:]
@@ -106,10 +136,10 @@ def apply_host_api(source):
     declaration = "- (BOOL)setDownloadDirectory:(NSString*)directory;"
     text = header.read_text()
     if declaration not in text:
-        anchor = "- (nullable NSNumber*)boolPreference:(NSString*)name;"
+        anchor = "@interface ArdiaCoreProfile : NSObject\n"
         if text.count(anchor) != 1:
             raise RuntimeError("Native profile API header anchor changed")
-        header.write_text(text.replace(anchor, declaration + "\n" + anchor))
+        header.write_text(text.replace(anchor, anchor + declaration + "\n"))
 
     text = header.read_text()
     if "- (void)importLogins:" not in text:

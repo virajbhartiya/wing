@@ -18,8 +18,8 @@ from chromium_identity import apply_identity, configure_args, apply_host_api
 from chromium_artifact import write_receipt
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD = ROOT.parent / (ROOT.name + "-chromium-build")
-PINS = json.loads((ROOT / "native/chromium-sources.json").read_text())
+BUILD = Path(os.environ.get("WING_CHROMIUM_BUILD", ROOT.parent / (ROOT.name + "-chromium-build")))
+PINS = json.loads(Path(os.environ.get("WING_CHROMIUM_SOURCES", ROOT / "native/chromium-sources.json")).read_text())
 
 
 def run(command, env, cwd=ROOT):

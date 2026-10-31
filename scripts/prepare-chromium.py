@@ -16,8 +16,8 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD = ROOT.parent / (ROOT.name + "-chromium-build")
-PINS = json.loads((ROOT / "native/chromium-sources.json").read_text())
+BUILD = Path(os.environ.get("WING_CHROMIUM_BUILD", ROOT.parent / (ROOT.name + "-chromium-build")))
+PINS = json.loads(Path(os.environ.get("WING_CHROMIUM_SOURCES", ROOT / "native/chromium-sources.json")).read_text())
 RESERVE = 15 * 1024**3
 
 

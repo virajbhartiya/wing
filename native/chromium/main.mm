@@ -537,6 +537,10 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 - (void)engine:(ArdiaCoreEngine *)engine
     extensionInstallPrompt:(NSDictionary *)prompt
                        tab:(ArdiaCoreTab *)tab {
+  if (getenv("WING_CHROMIUM_TEST_SCRIPT") && getenv("WING_TEST_ACCEPT_EXTENSIONS")) {
+    [ArdiaCoreEngine resolveExtensionInstallPrompt:prompt[@"requestId"] accepted:YES];
+    return;
+  }
   NSArray *permissions = [prompt[@"permissions"] isKindOfClass:NSArray.class] ? prompt[@"permissions"] : @[];
   [WingPromptPopover
       showInView:_window.hostView
