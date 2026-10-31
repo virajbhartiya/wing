@@ -46,7 +46,7 @@ The **Develop** menu and the command palette hold the page tools: DevTools (‚å•‚
 Remote debugging is a launch flag, not a setting, because it exposes every profile to local processes:
 
 ```bash
-open -a Wing --args --remote-debugging-port=9222
+open /Applications/Wing.app --args --remote-debugging-port=9222
 ```
 
 ## Verify
