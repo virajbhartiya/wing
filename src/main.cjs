@@ -1821,15 +1821,14 @@ function menu() {
             click: () => ui("palette"),
           },
           {
-<<<<<<< ours
             label: "New Mini Window",
             accelerator: "Alt+CmdOrCtrl+N",
             click: () => action("mini-window"),
-=======
+          },
+          {
             label: "New Private Window",
             accelerator: "CmdOrCtrl+Shift+N",
             click: () => action("private-window"),
->>>>>>> theirs
           },
           {
             label: "Open Location",
