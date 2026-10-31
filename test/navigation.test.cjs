@@ -89,8 +89,8 @@ test("command bar ranks a typed host first and keeps one row per page", () => {
   assert.deepEqual(
     ranked.map((r) => [r.kind, r.url]),
     [
-      ["tab", "https://github.com/pulls"],
       ["history", "https://github.com/"],
+      ["tab", "https://github.com/pulls"],
       ["history", "https://example.com/digit"],
     ],
   );
@@ -109,5 +109,50 @@ test("command bar ranks a typed host first and keeps one row per page", () => {
   assert.deepEqual(
     N.rankResults("  ", [{ title: "x", url: "https://x.com" }]),
     [],
+  );
+});
+
+test("command bar keeps searches and redirects from hijacking an address", () => {
+  const now = Date.parse("2026-10-25T12:00:00Z");
+  const history = [
+    { title: "flavour - Google Search", url: "https://www.google.com/search?q=flavour", visits: 9, typed: 5, at: now },
+    { title: "SOC 2 cost - Google Search", url: "https://www.google.com/search?q=SOC+2+cost", visits: 1, at: now },
+    { title: "SOC 2 cost - Google Search", url: "https://www.google.com/search?q=soc+2+cost&ie=UTF-8", visits: 1, at: now },
+    { title: "https://www.google.com/url?q=https://x.io", url: "https://www.google.com/url?q=https://x.io", visits: 7, at: now },
+    { title: "Google", url: "https://www.google.com/", visits: 30, typed: 3, at: now },
+    { title: "Hermes", url: "https://hermes.com/", visits: 1, at: now },
+    { title: "Pricing", url: "https://only-deep.io/pricing", visits: 4, at: now },
+  ].map((h) => ({ kind: "history", ...h }));
+  const rank = (q) => N.rankResults(q, history, now);
+
+  const address = rank("google.com");
+  assert.ok(!address.some((r) => r.topHit), "typed address is not overridden");
+  assert.ok(!address.some((r) => /\/search|\/url/.test(r.url)));
+  assert.ok(!address.some((r) => r.url === "https://www.google.com/"));
+
+  assert.equal(rank("goo")[0].url, "https://www.google.com/");
+  assert.equal(rank("goo")[0].topHit, true);
+
+  const searches = rank("soc");
+  assert.equal(searches.length, 1);
+  assert.equal(searches[0].title, "SOC 2 cost");
+  assert.equal(searches[0].topHit, false);
+  assert.equal(rank("flavour").length, 0, "same as the search row");
+
+  assert.equal(rank("hermes")[0].topHit, false, "one visit does not take ↵");
+  assert.equal(rank("only-deep")[0].url, "https://only-deep.io/");
+  assert.equal(rank("only-deep")[0].topHit, true);
+  assert.equal(rank("node.js tutorial").some((r) => r.topHit), false);
+
+  const many = Array.from({ length: 8 }, (_, i) => ({
+    kind: "history",
+    title: `Doc ${i}`,
+    url: `https://docs.site.dev/page/${i}`,
+    visits: 3,
+    at: now,
+  }));
+  assert.equal(
+    N.rankResults("docs", many, now).filter((r) => r.host === "docs.site.dev").length,
+    3,
   );
 });

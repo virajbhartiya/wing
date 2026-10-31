@@ -2427,8 +2427,10 @@ body.tabs-top #toolbar-spaces {
 }
 #toolbar-spaces .space-dot {
   width: 26px;
+  min-width: 26px;
   height: 26px;
   padding: 0;
+  justify-content: center;
   border-radius: 8px;
 }
 #toolbar-spaces .space-dot.active {
@@ -2680,4 +2682,14 @@ body.tabs-top #toolbar-add-space {
   width: 100%;
   height: 100%;
   opacity: 0;
+}
+.import-browser-profiles[hidden] {
+  display: none;
+}
+.import-browser .import-count:not(:empty) {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--selected);
+  font-size: 11px;
 }

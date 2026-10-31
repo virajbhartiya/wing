@@ -1111,9 +1111,13 @@ function renderPalette(rebuild = true) {
             }
           : {
               label: page.title,
-              detail: host(page.url),
+              detail: page.term ? `Searched on ${host(page.url)}` : host(page.url),
               siteTab: { url: page.url },
-              hint: page.kind === "bookmark" ? "Bookmark" : "History",
+              hint: page.term
+                ? "Search"
+                : page.kind === "bookmark"
+                  ? "Bookmark"
+                  : "History",
               topHit: page.topHit,
               run: () => {
                 closeModal();
@@ -1138,7 +1142,7 @@ function renderPalette(rebuild = true) {
     );
     const nav = {
       label: q,
-      detail: /^(https?:|localhost|[\w.-]+\.[a-z]{2,})/i.test(q)
+      detail: /^(https?:\/\/\S+|localhost(:\d+)?(\/\S*)?|[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?([/?#]\S*)?)$/i.test(q)
         ? "Go to address"
         : `Search ${state.settings.search === "duckduckgo" ? "DuckDuckGo" : "Google"}`,
       glyph: "search",
@@ -1166,12 +1170,12 @@ function renderPalette(rebuild = true) {
         },
       });
     // Safari's Top Hit: a site whose address starts with what you typed opens on ↵.
-    if (q && paletteResults[0]?.topHit && !/\s|\//.test(q)) {
+    if (q && paletteResults[0]?.topHit) {
       paletteResults[0] = { ...paletteResults[0], hint: "Top Hit" };
       paletteResults.splice(1, 0, nav);
     } else if (q) {
       const exact = paletteResults.findIndex(
-        (r) => r.label.toLowerCase() === lower,
+        (r) => !r.siteTab && r.label.toLowerCase() === lower,
       );
       if (exact >= 0) {
         const [match] = paletteResults.splice(exact, 1);
@@ -1880,7 +1884,7 @@ async function openBrowserImport() {
         ? `<div class="import-browsers" role="radiogroup" aria-label="Browser">${browsers
             .map(
               (b, i) =>
-                `<label class="import-browser"><input type="radio" name="browser" value="${b.id}" ${i ? "" : "checked"}><span>${esc(b.name)}</span></label>`,
+                `<label class="import-browser"><input type="radio" name="browser" value="${b.id}" ${i ? "" : "checked"}><span>${esc(b.name)}</span><small class="import-count" data-import-count="${b.id}"></small></label>`,
             )
             .join("")}</div><div id="import-profiles"></div>
       <div class="section-label">WHAT TO BRING</div>${IMPORT_DATA.map(
@@ -1893,48 +1897,56 @@ async function openBrowserImport() {
   if (!browsers.length) return;
   const form = $("#browser-import-form");
   const chosen = () => [...form.querySelectorAll("[name=profile]:checked")];
+  // Every browser's list stays in the form, so ticks survive switching browsers.
+  const lists = () => [...form.querySelectorAll(".import-browser-profiles")];
   function updateCount() {
     const count = chosen().length;
     $("#import-start").disabled = !count;
     $("#import-start").textContent =
       count > 1 ? `Import ${count} profiles` : "Import";
-    const all = $("#import-all");
-    if (all)
-      all.checked = count === form.querySelectorAll("[name=profile]").length;
+    for (const list of lists()) {
+      const boxes = list.querySelectorAll("[name=profile]"),
+        ticked = list.querySelectorAll("[name=profile]:checked").length,
+        all = list.querySelector("[data-import-all]");
+      if (all) all.checked = ticked === boxes.length;
+      form.querySelector(
+        `[data-import-count="${list.dataset.browser}"]`,
+      ).textContent = ticked ? String(ticked) : "";
+    }
   }
   function showBrowser() {
-    const browser = browsers.find(
-      (b) => b.id === form.querySelector("[name=browser]:checked").value,
-    );
-    const many = browser.profiles.length > 1;
-    $("#import-profiles").innerHTML =
-      (many
-        ? `<div class="section-label import-profiles-head"><span>PROFILES</span><label><input type="checkbox" id="import-all"> Select all</label></div>`
-        : "") +
-      `<div class="import-profile-list" ${many ? "" : "hidden"}>${browser.profiles
-        .map(
-          (p, i) =>
-            `<label class="import-profile"><input type="checkbox" name="profile" value="${esc(p.id)}" data-name="${esc(p.name)}" ${i ? "" : "checked"}><span>${esc(p.name)}</span></label>`,
-        )
-        .join("")}</div>`;
-    $("#import-note").textContent = IMPORT_NOTES[browser.id] || "";
-    const all = $("#import-all");
-    if (all)
-      all.onchange = () => {
-        form
-          .querySelectorAll("[name=profile]")
-          .forEach((box) => (box.checked = all.checked));
-        updateCount();
-      };
-    updateCount();
+    const id = form.querySelector("[name=browser]:checked").value;
+    for (const list of lists()) list.hidden = list.dataset.browser !== id;
+    $("#import-note").textContent = IMPORT_NOTES[id] || "";
   }
+  $("#import-profiles").innerHTML = browsers
+    .map(
+      (browser, b) =>
+        `<div class="import-browser-profiles" data-browser="${browser.id}"><div class="section-label import-profiles-head"><span>PROFILES</span>${
+          browser.profiles.length > 1
+            ? `<label><input type="checkbox" data-import-all> Select all</label>`
+            : ""
+        }</div><div class="import-profile-list">${browser.profiles
+          .map(
+            (p, i) =>
+              `<label class="import-profile"><input type="checkbox" name="profile" value="${esc(p.id)}" data-name="${esc(p.name)}" ${b || i ? "" : "checked"}><span>${esc(p.name)}</span></label>`,
+          )
+          .join("")}</div></div>`,
+    )
+    .join("");
   form.querySelectorAll("[name=browser]").forEach((radio) => {
     radio.onchange = showBrowser;
   });
   $("#import-profiles").onchange = (event) => {
-    if (event.target.name === "profile") updateCount();
+    if (event.target.matches("[data-import-all]"))
+      event.target
+        .closest(".import-browser-profiles")
+        .querySelectorAll("[name=profile]")
+        .forEach((box) => (box.checked = event.target.checked));
+    updateCount();
   };
   showBrowser();
+  updateCount();
   form.onsubmit = async (event) => {
     event.preventDefault();
     const values = new FormData(form);
