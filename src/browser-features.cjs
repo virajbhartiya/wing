@@ -1,4 +1,5 @@
 "use strict";
+const AppIcons = require("./app-icons.cjs");
 const {
   dialog,
   clipboard,
@@ -187,8 +188,17 @@ function createBrowserFeatures(api) {
     switch (name) {
       case "features-settings": {
         const next = {};
-        for (const key of ["cleanCopy", "toolbarHidden", "pinnedCollapsed"])
+        for (const key of [
+          "cleanCopy",
+          "toolbarHidden",
+          "pinnedCollapsed",
+          "onboarded",
+        ])
           if (typeof data[key] === "boolean") next[key] = data[key];
+        if (AppIcons.APP_ICONS.includes(data.appIcon)) {
+          next.appIcon = data.appIcon;
+          AppIcons.applyAppIcon(data.appIcon);
+        }
         if (["system", "light", "dark"].includes(data.appearance)) {
           next.appearance = data.appearance;
           next.dark =

@@ -456,3 +456,25 @@ com.docke 14 me 9u IPv4 0x6 0t0 TCP *:5432 (LISTEN)`);
     { port: 8000, command: "python3.1" },
   ]);
 });
+test("default browser prompt skips onboarding, dev builds and opted-out users", () => {
+  const { shouldAskDefaultBrowser: ask } = require("../src/interactions.cjs");
+  const base = { packaged: true, isDefault: false };
+  assert.equal(ask({ ...base, settings: {} }), true);
+  assert.equal(ask({ ...base, settings: { onboarded: true } }), true);
+  assert.equal(ask({ ...base, settings: { onboarded: false } }), false);
+  assert.equal(ask({ ...base, settings: { defaultBrowserPromptOff: true } }), false);
+  assert.equal(ask({ ...base, isDefault: true, settings: {} }), false);
+  assert.equal(ask({ ...base, packaged: false, settings: {} }), false);
+});
+test("every app icon variant is built and offered in Settings", () => {
+  const { APP_ICONS, iconFile } = require("../src/app-icons.cjs");
+  const renderer = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "../src/renderer.js"),
+    "utf8",
+  );
+  for (const id of APP_ICONS) {
+    assert.ok(require("node:fs").existsSync(iconFile(id)), id);
+    assert.ok(renderer.includes(`["${id}",`), id);
+  }
+  assert.ok(iconFile("nope").endsWith("violet.png"));
+});

@@ -347,7 +347,11 @@ var require_interactions = __commonJS({
       ).map((t, i) => [t, i]).sort((a, b) => rank[a[0].kind] - rank[b[0].kind] || a[1] - b[1]).map(([t]) => t);
       return index === 8 ? ordered.at(-1) : ordered[index];
     }
+    function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
+      return !!packaged && !isDefault && settings.onboarded !== false && !settings.defaultBrowserPromptOff;
+    }
     module2.exports = {
+      shouldAskDefaultBrowser,
       spaceForProfile,
       tabForShortcut,
       sidebarVisible,

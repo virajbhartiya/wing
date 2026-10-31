@@ -1459,6 +1459,15 @@ const SHORTCUTS = [
   ["View page source", "⌥⌘U"],
   ["Full screen", "⌃⌘F"],
 ];
+const APP_ICONS = [
+  ["violet", "Violet"],
+  ["midnight", "Midnight"],
+  ["coral", "Coral"],
+  ["paper", "Paper"],
+  ["letter", "Letter"],
+  ["chevron", "Chevron"],
+  ["split", "Split"],
+];
 function settingRow(label, detail, control, keywords = "") {
   return `<div class="setting-row" data-search="${esc((label + " " + detail + " " + keywords).toLowerCase())}"><span>${label}${detail ? `<small>${detail}</small>` : ""}</span>${control}</div>`;
 }
@@ -1492,6 +1501,17 @@ function settingsPanes() {
           ],
           s.appearance || (s.dark ? "dark" : "light"),
         ) +
+        (chromium
+          ? ""
+          : settingRow(
+              "App icon",
+              "Shown in the Dock while Wing is open.",
+              `<div class="app-icons" role="radiogroup" aria-label="App icon">${APP_ICONS.map(
+                ([id, label], i) =>
+                  `<button type="button" data-app-icon="${id}" title="${label}" aria-label="${label}" class="${(s.appIcon || "violet") === id ? "selected" : ""}"><img src="../assets/icons/${id}.png" alt=""></button>`,
+              ).join("")}</div>`,
+              "logo dock icon variant",
+            )) +
         settingSelect(
           "search-engine",
           "Search engine",
@@ -1778,6 +1798,14 @@ function bindSettings() {
   };
   const feature = (key) => (e) =>
     act("features-settings", { [key]: e.target.checked });
+  document.querySelectorAll("[data-app-icon]").forEach((button) => {
+    button.onclick = () => {
+      document
+        .querySelectorAll("[data-app-icon]")
+        .forEach((b) => b.classList.toggle("selected", b === button));
+      act("features-settings", { appIcon: button.dataset.appIcon });
+    };
+  });
   on("appearance", "onchange", (e) =>
     act("features-settings", { appearance: e.target.value }),
   );

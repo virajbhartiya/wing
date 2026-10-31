@@ -2693,3 +2693,27 @@ body.tabs-top #toolbar-add-space {
   background: var(--selected);
   font-size: 11px;
 }
+.app-icons {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+.app-icons button {
+  width: 40px;
+  height: 40px;
+  padding: 2px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+}
+.app-icons button img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.app-icons button:hover {
+  background: var(--selected);
+}
+.app-icons button.selected {
+  box-shadow: inset 0 0 0 2px var(--accent, currentColor);
+}

@@ -14,6 +14,7 @@ const {
   autoUpdater,
 } = require("electron");
 const DevTools = require("./dev-tools.cjs");
+const { applyAppIcon } = require("./app-icons.cjs");
 // Local development servers commonly use self-signed certificates.
 app.commandLine.appendSwitch("allow-insecure-localhost");
 const fs = require("node:fs");
@@ -2013,6 +2014,35 @@ function handleRecentTabsInput(event, input) {
   event.preventDefault();
   return true;
 }
+// Asks on launch, like Safari, until Wing is the default or told to stop.
+async function askDefaultBrowser() {
+  if (
+    !win ||
+    win.isDestroyed() ||
+    !I.shouldAskDefaultBrowser({
+      packaged: app.isPackaged,
+      isDefault: app.isDefaultProtocolClient("https"),
+      settings: state.settings,
+    })
+  )
+    return;
+  const { response, checkboxChecked } = await dialog.showMessageBox(win, {
+    type: "question",
+    message: "Make Wing your default browser?",
+    detail: "Links from other apps will open in Wing.",
+    buttons: ["Use Wing", "Not Now"],
+    defaultId: 0,
+    cancelId: 1,
+    checkboxLabel: "Don't ask again",
+  });
+  if (response === 0) {
+    app.setAsDefaultProtocolClient("http");
+    app.setAsDefaultProtocolClient("https");
+  } else if (checkboxChecked) {
+    state.settings.defaultBrowserPromptOff = true;
+    save();
+  }
+}
 app.whenReady().then(async () => {
   // Keep crash dumps on this Mac for diagnosis; nothing is uploaded.
   crashReporter.start({ uploadToServer: false });
@@ -2129,12 +2159,8 @@ app.whenReady().then(async () => {
   menu();
   for (const url of pendingExternalLinks.splice(0)) openExternalLink(url);
   if (!process.env.WING_ENGINE_TEST) updateController.start();
-  if (app.dock) {
-    const icon = nativeImage.createFromPath(
-      path.join(__dirname, "../assets/icon.png"),
-    );
-    if (!icon.isEmpty()) app.dock.setIcon(icon);
-  }
+  setTimeout(askDefaultBrowser, 1500);
+  applyAppIcon(state.settings.appIcon);
   M.autoArchive(state);
   memoryTimer = setInterval(() => {
     const protectedIds = [

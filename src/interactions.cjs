@@ -252,7 +252,17 @@ function tabForShortcut(tabs, splits, index) {
   return index === 8 ? ordered.at(-1) : ordered[index];
 }
 
+// New workspaces get this choice in onboarding instead.
+function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
+  return (
+    !!packaged &&
+    !isDefault &&
+    settings.onboarded !== false &&
+    !settings.defaultBrowserPromptOff
+  );
+}
 module.exports = {
+  shouldAskDefaultBrowser,
   spaceForProfile,
   tabForShortcut,
   sidebarVisible,

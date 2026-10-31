@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 from PIL import Image
 root = Path(__file__).resolve().parents[1]
+for icon in (root/'assets/icons').glob('*.svg'):
+    subprocess.run(['rsvg-convert', '-w', '512', str(icon), '-o', str(icon.with_suffix('.png'))], check=True)
 subprocess.run(['rsvg-convert', str(root/'assets/wing-app.svg'), '-o', str(root/'assets/icon.png')], check=True)
 im = Image.open(root/'assets/icon.png')
 iconset = root/'assets/wing.iconset'
