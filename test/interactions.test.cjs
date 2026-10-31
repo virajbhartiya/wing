@@ -442,3 +442,17 @@ test("command-number follows on-screen tab order and nine means last", () => {
   assert.equal(I.tabForShortcut(tabs, splits, 8).id, "t2");
   assert.equal(I.tabForShortcut(tabs, splits, 6), undefined);
 });
+test("local server detection lists development processes only", () => {
+  const { parseListeningPorts } = require("../src/dev-tools.cjs");
+  const rows = parseListeningPorts(`COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+node 10 me 20u IPv6 0x1 0t0 TCP *:3000 (LISTEN)
+node 10 me 21u IPv4 0x2 0t0 TCP 127.0.0.1:3000 (LISTEN)
+python3.1 11 me 3u IPv4 0x3 0t0 TCP 127.0.0.1:8000 (LISTEN)
+Spotify 12 me 9u IPv4 0x4 0t0 TCP *:5353 (LISTEN)
+node 13 me 9u IPv4 0x5 0t0 TCP 127.0.0.1:80 (LISTEN)
+com.docke 14 me 9u IPv4 0x6 0t0 TCP *:5432 (LISTEN)`);
+  assert.deepEqual(rows, [
+    { port: 3000, command: "node" },
+    { port: 8000, command: "python3.1" },
+  ]);
+});

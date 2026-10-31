@@ -833,9 +833,30 @@ function closeModal() {
 function dialogHead(title) {
   return `<div class="dialog-head"><h2>${title}</h2><button class="icon" data-dismiss aria-label="Close dialog">${icon("close")}</button></div>`;
 }
+let localServers = [];
+const DEV_COMMANDS = [
+  ["Reload Ignoring Cache", "Develop", "dev-reload"],
+  ["View Page Source", "Develop", "dev-source"],
+  ["Toggle Cache", "Develop · this tab", "dev", { tool: "cache" }],
+  ["Toggle JavaScript", "Develop · this tab", "dev", { tool: "javascript" }],
+  ["Emulate iPhone", "Develop · this tab", "dev", { tool: "device", value: "iphone" }],
+  ["Emulate iPad", "Develop · this tab", "dev", { tool: "device", value: "ipad" }],
+  ["Back to Window Size", "Develop · this tab", "dev", { tool: "device" }],
+  ["Page in Dark Mode", "Develop · this tab", "dev", { tool: "scheme", value: "dark" }],
+  ["Page in Light Mode", "Develop · this tab", "dev", { tool: "scheme", value: "light" }],
+  ["Slow 3G", "Develop · this tab", "dev", { tool: "network", value: "slow3g" }],
+  ["No Network Throttling", "Develop · this tab", "dev", { tool: "network" }],
+  ["Clear Data for This Site", "Develop", "dev-clear-site"],
+  ["Open Page in Safari", "Develop", "dev-open-in", { browser: "Safari" }],
+  ["Open Page in Chrome", "Develop", "dev-open-in", { browser: "Google Chrome" }],
+];
 function openPalette(mode = "new", value = "") {
   paletteMode = mode;
   paletteIndex = 0;
+  window.wing.invoke("local-servers").then((data) => {
+    localServers = data?.servers || [];
+    if (modalType === "palette") renderPalette();
+  }, () => {});
   window.wing.invoke("library-data").then((data) => {
     state = { ...state, ...data };
     if (modalType === "palette") renderPalette();
@@ -879,6 +900,24 @@ function renderPalette(rebuild = true) {
         glyph: "split",
         run: () => openSplit(),
       },
+      ...localServers.map(({ port, command }) => ({
+        label: `localhost:${port}`,
+        detail: `Local server · ${command}`,
+        glyph: "globe",
+        run: () => {
+          closeModal();
+          act("new-tab", { url: `http://localhost:${port}` });
+        },
+      })),
+      ...DEV_COMMANDS.map(([label, detail, name, data]) => ({
+        label,
+        detail,
+        glyph: "settings",
+        run: () => {
+          closeModal();
+          act(name, data);
+        },
+      })),
       {
         label: "Edit This Space",
         detail: "Change its name, icon, or color",
@@ -1411,7 +1450,9 @@ const SHORTCUTS = [
   ["History / downloads", "⌘Y / ⇧⌘J"],
   ["Print", "⌘P"],
   ["Settings", "⌘,"],
-  ["Developer tools", "⌥⌘I"],
+  ["Developer tools", "⌥⌘I / ⌥⌘J"],
+  ["Reload ignoring cache", "⇧⌘R"],
+  ["View page source", "⌥⌘U"],
   ["Full screen", "⌃⌘F"],
 ];
 function settingRow(label, detail, control, keywords = "") {
@@ -2780,6 +2821,9 @@ window.wing.onCommand((c) => {
   switch (c.type) {
     case "update-status":
       renderUpdateStatus(c.status);
+      break;
+    case "toast":
+      toast(c.message);
       break;
     case "sidebar-frame":
       applySidebarReveal(c);

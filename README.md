@@ -39,6 +39,16 @@ The real production-engine fixture verifies MV3 service workers, storage, messag
 
 **This is not universal Chrome compatibility.** Web Store links can be installed from Settings → Extensions with CRX3 signature verification and a permission review; the store webpage’s own install button is not integrated. Some Chromium APIs remain unsupported, including complete native Chrome window/tab-group semantics. In the tested Electron engine, a static DNR ruleset marked `enabled: true` in its manifest was initially inactive; explicit activation from the extension worked. Verify an extension's behavior before relying on it. An unmodified official uBlock Origin Lite release starts after the namespace compatibility fix, but failed its blocking qualification; it is not currently supported reliably. See `docs/ubol-electron-qualification.json`. Native messaging, DRM, password-manager integration and arbitrary popular extensions have not been qualified.
 
+## Developer tools
+
+The **Develop** menu and the command palette hold the page tools: DevTools (⌥⌘I / ⌥⌘J), Reload Ignoring Cache (⇧⌘R), View Page Source (⌥⌘U), Clear Data for This Site, and Open Page in Safari, Chrome or Firefox. Per-tab overrides cover cache, JavaScript, device size, color scheme, network speed and user agent. The palette also lists web servers listening on this machine as `localhost:PORT`. Self-signed certificates are accepted on localhost.
+
+Remote debugging is a launch flag, not a setting, because it exposes every profile to local processes:
+
+```bash
+open -a Wing --args --remote-debugging-port=9222
+```
+
 ## Verify
 
 ```sh

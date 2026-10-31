@@ -13,6 +13,9 @@ const {
   safeStorage,
   autoUpdater,
 } = require("electron");
+const DevTools = require("./dev-tools.cjs");
+// Local development servers commonly use self-signed certificates.
+app.commandLine.appendSwitch("allow-insecure-localhost");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -626,6 +629,7 @@ function animateSidebarReveal(animate) {
     }
   }, 16);
 }
+const dev = (tool, value) => action("dev", { tool, value });
 function layout() {
   if (!win || win.isDestroyed()) return;
   const [width, height] = win.getContentSize();
@@ -1522,6 +1526,49 @@ async function action(name, data = {}) {
               ),
         );
       break;
+    case "dev": {
+      if (!wc) return { error: "Open a website first." };
+      const message = await DevTools.apply(wc, String(data.tool), data.value);
+      sendCommand({ type: "toast", message });
+      return { ok: true };
+    }
+    case "dev-reload":
+      wc?.reloadIgnoringCache();
+      return { ok: true };
+    case "dev-source":
+      if (wc && allowedWeb(wc.getURL())) {
+        const source = new BrowserWindow({
+          width: 900,
+          height: 700,
+          webPreferences: { session: wc.session, sandbox: true },
+        });
+        source.loadURL("view-source:" + wc.getURL());
+      }
+      return { ok: true };
+    case "dev-clear-site": {
+      if (!wc || !allowedWeb(wc.getURL())) return { ok: false };
+      const origin = new URL(wc.getURL()).origin;
+      const { response } = await dialog.showMessageBox(win, {
+        type: "warning",
+        message: `Clear all data for ${origin}?`,
+        detail: "This removes its cookies and storage, so you will be signed out of this site.",
+        buttons: ["Clear Data", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+      });
+      if (response) return { ok: false };
+      await wc.session.clearStorageData({ origin });
+      await wc.session.clearCache();
+      wc.reloadIgnoringCache();
+      sendCommand({ type: "toast", message: `Cleared data for ${origin}` });
+      return { ok: true };
+    }
+    case "dev-open-in":
+      if (wc && allowedWeb(wc.getURL()) && ["Safari", "Google Chrome", "Firefox"].includes(data.browser))
+        await DevTools.openInBrowser(data.browser, wc.getURL());
+      return { ok: true };
+    case "local-servers":
+      return { servers: await DevTools.localServers() };
     case "devtools":
       wc?.openDevTools({ mode: "detach" });
       break;
@@ -1784,6 +1831,74 @@ function menu() {
             accelerator: "Alt+CmdOrCtrl+I",
             click: () => action("devtools"),
           },
+        ],
+      },
+      {
+        label: "Develop",
+        submenu: [
+          {
+            label: "Developer Tools",
+            accelerator: "Alt+CmdOrCtrl+J",
+            click: () => action("devtools"),
+          },
+          {
+            label: "Reload Ignoring Cache",
+            accelerator: "CmdOrCtrl+Shift+R",
+            click: () => action("dev-reload"),
+          },
+          {
+            label: "View Page Source",
+            accelerator: "Alt+CmdOrCtrl+U",
+            click: () => action("dev-source"),
+          },
+          { label: "Clear Data for This Site…", click: () => action("dev-clear-site") },
+          { type: "separator" },
+          { label: "Toggle Cache", click: () => dev("cache") },
+          { label: "Toggle JavaScript", click: () => dev("javascript") },
+          {
+            label: "Device Size",
+            submenu: [
+              { label: "Window Size", click: () => dev("device") },
+              ...Object.entries(DevTools.DEVICES).map(([key, d]) => ({
+                label: d.label,
+                click: () => dev("device", key),
+              })),
+            ],
+          },
+          {
+            label: "Color Scheme",
+            submenu: [
+              { label: "System", click: () => dev("scheme") },
+              { label: "Light", click: () => dev("scheme", "light") },
+              { label: "Dark", click: () => dev("scheme", "dark") },
+            ],
+          },
+          {
+            label: "Network Speed",
+            submenu: [
+              { label: "No Throttling", click: () => dev("network") },
+              ...Object.entries(DevTools.NETWORKS).map(([key, n]) => ({
+                label: n.label,
+                click: () => dev("network", key),
+              })),
+            ],
+          },
+          {
+            label: "User Agent",
+            submenu: [
+              { label: "Default", click: () => dev("agent") },
+              ...Object.entries(DevTools.AGENTS).map(([key, a]) => ({
+                label: a.label,
+                click: () => dev("agent", key),
+              })),
+            ],
+          },
+          { type: "separator" },
+          ...["Safari", "Google Chrome", "Firefox"].map((browser) => ({
+            label: `Open Page in ${browser}`,
+            click: () => action("dev-open-in", { browser }),
+          })),
+          { label: "Performance Monitor", click: () => ui("performance") },
         ],
       },
       {
