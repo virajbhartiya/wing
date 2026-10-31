@@ -3,6 +3,15 @@ const { ChromiumWorkspace } = require("./chromium-workspace.cjs");
 const M = require("./model.cjs");
 const theme = require("./themes.cjs");
 const swipe = require("./interactions.cjs").createSwipeTracker();
+const DevPlan = require("./dev-plan.cjs");
+const Pulls = require("./pull-requests.cjs");
+const { shouldAskDefaultBrowser } = require("./interactions.cjs");
+const devStates = new Map();
+const runTool = async (tool, args) => {
+  const result = await native("run-tool", { tool, args });
+  if (result.status !== 0) throw Pulls.toolError(result);
+  return result.stdout;
+};
 const navigation = require("./navigation.cjs");
 const pending = new Map(),
   states = new Set(),
@@ -25,6 +34,9 @@ function native(action, data = {}) {
       [
         "browser-import",
         "default-browser",
+        "run-tool",
+        "default-browser-prompt",
+        "confirm",
         "extensions-install",
         "file-save",
         "image-export",
@@ -192,7 +204,107 @@ async function library() {
     archive: workspace.state.archive.filter((row) => spaces.has(row.spaceId)),
   };
 }
+function openMini(url, spaceId) {
+  const s = workspace.state;
+  return native("mini-open", {
+    url: url || "",
+    spaceId: spaceId || s.activeSpaceId,
+    search:
+      s.settings.search === "duckduckgo"
+        ? "https://duckduckgo.com/?q="
+        : "https://www.google.com/search?q=",
+    spaces: s.spaces.map(({ id, name, icon, profileId }) => ({ id, name, icon, profileId })),
+  });
+}
+async function developerAction(action, data) {
+  const id = data.id || workspace.state.activeTabId;
+  switch (action) {
+    case "dev": {
+      if (!devStates.has(id)) devStates.set(id, { cache: false, script: false });
+      const plan = DevPlan.devPlan(devStates.get(id), String(data.tool), data.value);
+      const calls = plan.calls.map(([method, params]) => ({ method, params: params || {} }));
+      if (plan.agent !== undefined)
+        calls.push({
+          method: "Emulation.setUserAgentOverride",
+          params: { userAgent: plan.agent },
+        });
+      await invoke("dev-cdp", { id, calls, reload: !!plan.reload });
+      return { ok: true, message: plan.message };
+    }
+    case "dev-clear-site": {
+      const url = workspace.state.tabs.find((t) => t.id === id)?.url || "";
+      if (!/^https?:/.test(url)) return { ok: false };
+      const { origin } = new URL(url);
+      const { confirmed } = await native("confirm", {
+        message: `Clear all data for ${origin}?`,
+        detail: "This removes its cookies and storage, so you will be signed out of this site.",
+        button: "Clear Data",
+      });
+      if (!confirmed) return { ok: false };
+      await invoke("clear-site-data", { id });
+      return { ok: true, message: `Cleared data for ${origin}` };
+    }
+    case "dev-open-in": {
+      const url = workspace.state.tabs.find((t) => t.id === id)?.url || "";
+      if (!/^https?:/.test(url)) return { ok: false };
+      return native("open-in-browser", { browser: data.browser, url });
+    }
+    case "local-servers":
+      return {
+        servers: DevPlan.parseListeningPorts(
+          await runTool("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"]).catch(() => ""),
+        ),
+      };
+    case "pulls-data": {
+      const result = await Pulls.fetchPullRequests(runTool);
+      await invoke("pulls-title", {
+        count: result.items.filter((p) => p.section === "review").length,
+      });
+      return result;
+    }
+    case "mini-window":
+      return openMini(data.url);
+    case "mini-expand":
+      await invoke("space", { id: data.spaceId });
+      return invoke("new-tab", { url: data.url });
+    case "emoji-panel":
+      return native("emoji-panel");
+  }
+}
+const DEVELOPER_ACTIONS = new Set([
+  "dev",
+  "dev-clear-site",
+  "dev-open-in",
+  "local-servers",
+  "pulls-data",
+  "mini-window",
+  "mini-expand",
+  "emoji-panel",
+]);
 async function invoke(action, data = {}) {
+  if (DEVELOPER_ACTIONS.has(action)) {
+    await ready;
+    const result = await developerAction(action, data);
+    if (result?.message) window.__wingToast?.(result.message);
+    return result;
+  }
+  if (action === "external-url") {
+    await ready;
+    if (workspace.state.settings.linksInMini !== false) {
+      const s = workspace.state;
+      const url = new URL(data.url);
+      if (["http:", "https:"].includes(url.protocol))
+        return openMini(
+          url.href,
+          navigation.routeURL(
+            url.href,
+            s.settings.routes,
+            s.spaces,
+            s.settings.defaultSpaceId || s.activeSpaceId,
+          ),
+        );
+    }
+  }
   if (action === "browser-profiles" || action === "browser-import") {
     await ready;
     return native(action, data);
@@ -452,6 +564,7 @@ async function invoke(action, data = {}) {
       return native("test-extension", data);
     if (action === "native-archive-idle")
       return native("test-archive-idle", data);
+    if (action === "native-minis") return native("test-minis", data);
     if (action === "native-diagnostics" || action === "native-evaluate")
       return native(
         action === "native-diagnostics" ? "diagnostics" : "evaluate-page",
@@ -494,6 +607,8 @@ async function invoke(action, data = {}) {
       );
       return service(action, { ...data, url: tab?.url });
     }
+    if (action === "features-settings" && data.appIcon)
+      native("app-icon", { icon: data.appIcon }).catch(() => {});
     if (action === "features-settings")
       data = {
         ...data,
@@ -607,6 +722,9 @@ async function invoke(action, data = {}) {
         "zoom",
         "mute",
         "clear-site-data",
+        "dev-cdp",
+        "dev-reload",
+        "dev-source",
         "capture-preview",
         "capture-page",
         "capture-full-page",
@@ -685,3 +803,12 @@ window.wing = {
   },
 };
 require("./chromium-actions.cjs").installBrowserActions(window.wing);
+// App icon and the default browser question wait for the saved workspace.
+ready.then(async () => {
+  const { settings } = workspace.state;
+  if (settings.appIcon) native("app-icon", { icon: settings.appIcon }).catch(() => {});
+  if (!shouldAskDefaultBrowser({ packaged: true, isDefault: false, settings })) return;
+  const reply = await native("default-browser-prompt").catch(() => null);
+  if (reply?.use) native("default-browser").catch(() => {});
+  else if (reply?.off) invoke("features-settings", { defaultBrowserPromptOff: true });
+});

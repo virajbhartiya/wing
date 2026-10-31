@@ -51,7 +51,7 @@ class ChromiumWorkspace {
     const snapshot = this.snapshot();
     const ids = snapshot.splitIds.filter(
       (id) =>
-        this.state.tabs.find((tab) => tab.id === id)?.url !== "wing://home" &&
+        !M.isShellPage(this.state.tabs.find((tab) => tab.id === id)?.url) &&
         !this.runtime.get(id)?.crashed,
     );
     const frame = M.splits.frame(
@@ -149,8 +149,11 @@ class ChromiumWorkspace {
           "pinnedCollapsed",
           "automaticPictureInPicture",
           "onboarded",
+          "linksInMini",
+          "defaultBrowserPromptOff",
         ])
           if (typeof data[key] === "boolean") next[key] = data[key];
+        if (I.APP_ICONS.includes(data.appIcon)) next.appIcon = data.appIcon;
         if (["system", "light", "dark"].includes(data.appearance)) {
           next.appearance = data.appearance;
           next.dark =
@@ -345,6 +348,34 @@ class ChromiumWorkspace {
       }
       case "close-peek":
         if (this.peekId) this.closed(this.peekId);
+        break;
+      case "pulls-open": {
+        const existing = s.tabs.find((tab) => tab.url === M.PULLS_URL);
+        if (existing) {
+          s.activeSpaceId = existing.spaceId;
+          M.activate(s, existing.id);
+        } else {
+          const created = M.newTab(s.activeSpaceId, M.PULLS_URL);
+          s.tabs.push(created);
+          M.splits.setKind(s, created.id, "pinned");
+          M.activate(s, created.id);
+        }
+        break;
+      }
+      case "pulls-title":
+        for (const tab of s.tabs)
+          if (tab.url === M.PULLS_URL)
+            tab.title = data.count ? `Pull Requests (${data.count})` : "Pull Requests";
+        break;
+      case "mini-visit":
+        s.history.unshift({
+          id: M.id(),
+          url: new URL(data.url).href,
+          title: String(data.title || new URL(data.url).hostname).slice(0, 300),
+          at: Date.now(),
+          profileId: s.spaces.find((space) => space.id === data.spaceId)?.profileId,
+        });
+        s.history = s.history.slice(0, 2000);
         break;
       case "external-url": {
         const url = new URL(data.url);

@@ -15,7 +15,7 @@ const {
   autoUpdater,
 } = require("electron");
 const DevTools = require("./dev-tools.cjs");
-const { fetchPullRequests } = require("./pull-requests.cjs");
+const { fetchPullRequests, toolError } = require("./pull-requests.cjs");
 const { createMiniWindows } = require("./mini-window.cjs");
 const { applyAppIcon } = require("./app-icons.cjs");
 // Local development servers commonly use self-signed certificates.
@@ -654,6 +654,23 @@ function animateSidebarReveal(animate) {
   }, 16);
 }
 const dev = (tool, value) => action("dev", { tool, value });
+const FORGE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+const runForgeTool = (tool, args) =>
+  new Promise((resolve, reject) =>
+    require("node:child_process").execFile(
+      tool,
+      args,
+      {
+        timeout: 20000,
+        maxBuffer: 20 * 1024 * 1024,
+        env: { ...process.env, PATH: `${process.env.PATH || ""}:${FORGE_PATH}` },
+      },
+      (error, stdout, stderr) =>
+        error
+          ? reject(toolError({ missing: error.code === "ENOENT", stderr }))
+          : resolve(stdout),
+    ),
+  );
 const showMain = () => {
   if (win && !win.isDestroyed()) {
     win.show();
@@ -1616,7 +1633,7 @@ async function action(name, data = {}) {
       break;
     }
     case "pulls-data": {
-      const data = await fetchPullRequests();
+      const data = await fetchPullRequests(runForgeTool);
       const count = data.items.filter((p) => p.section === "review").length;
       for (const tab of state.tabs)
         if (tab.url === M.PULLS_URL)

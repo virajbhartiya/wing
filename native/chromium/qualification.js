@@ -986,6 +986,130 @@
   checks.push(
     "closing a saved split preserves its destinations and reopening recreates pages",
   );
+  // Developer overrides reach the page through the DevTools protocol.
+  await invoke("new-tab", { url: WING_TEST.base + "/dev" });
+  const devTab = (await snapshot()).activeTabId;
+  await waitFor(
+    async () => (await evaluate(devTab, "document.readyState")) === "complete",
+    "developer test page loads",
+  );
+  const devApplied = await invoke("dev", { id: devTab, tool: "scheme", value: "dark" });
+  assert(devApplied.ok && /dark/.test(devApplied.message), "scheme override reports");
+  assert(
+    await evaluate(devTab, "matchMedia('(prefers-color-scheme: dark)').matches"),
+    "scheme override reaches the page",
+  );
+  await invoke("dev", { id: devTab, tool: "device", value: "iphone" });
+  await waitFor(
+    async () => (await evaluate(devTab, "screen.width")) === 390,
+    "device override resizes the page",
+  );
+  await invoke("dev", { id: devTab, tool: "device" });
+  await invoke("dev", { id: devTab, tool: "agent", value: "firefox" });
+  await waitFor(
+    async () => /Firefox/.test(await evaluate(devTab, "navigator.userAgent")),
+    "user agent override reaches the page",
+  );
+  await invoke("dev", { id: devTab, tool: "agent" });
+  await waitFor(
+    async () => !/Firefox/.test(await evaluate(devTab, "navigator.userAgent")),
+    "user agent override clears",
+  );
+  await invoke("dev", { id: devTab, tool: "cache" });
+  await invoke("dev", { id: devTab, tool: "cache" });
+  await invoke("dev", { id: devTab, tool: "network", value: "fast3g" });
+  await invoke("dev", { id: devTab, tool: "network" });
+  await invoke("dev-reload", { id: devTab });
+  checks.push("developer overrides apply and clear on the native engine");
+  const { servers } = await invoke("local-servers");
+  const basePort = Number(new URL(WING_TEST.base).port);
+  assert(
+    servers.some((server) => server.port === basePort),
+    `local servers lists the test server: ${JSON.stringify(servers)}`,
+  );
+  checks.push("local servers are listed through the tool bridge");
+  // Pull Requests is a shell page, so it must never get a native page.
+  await invoke("pulls-open");
+  let pullsState = await snapshot();
+  const pullsTab = pullsState.tabs.find((tab) => tab.url === "wing://pulls");
+  assert(pullsTab && pullsState.activeTabId === pullsTab.id, "pull requests tab opens");
+  assert(
+    !(await invoke("native-diagnostics")).tabs.some((tab) => tab.id === pullsTab.id),
+    "pull requests has no native page",
+  );
+  await invoke("pulls-open");
+  pullsState = await snapshot();
+  assert(
+    pullsState.tabs.filter((tab) => tab.url === "wing://pulls").length === 1,
+    "pull requests tab is not duplicated",
+  );
+  await invoke("select-tab", { id: devTab });
+  checks.push("pull requests opens as a single shell tab");
+  // A mini window stays out of the tab list and honors the chosen profile.
+  const tabsBeforeMini = (await snapshot()).tabs.length;
+  const miniState = await snapshot();
+  const miniSpace = miniState.spaces[miniState.spaces.length - 1];
+  await invoke("mini-window", { url: WING_TEST.base + "/mini" });
+  await invoke("native-minis", { close: true });
+  await window.wing.invoke("features-settings", { linksInMini: true });
+  await invoke("external-url", { url: WING_TEST.base + "/mini-link" });
+  await waitFor(
+    async () =>
+      (await invoke("native-minis")).windows.some(
+        (mini) => mini.url === WING_TEST.base + "/mini-link" && mini.visible,
+      ),
+    "external link opens in a mini window",
+  );
+  const [miniWindow] = (await invoke("native-minis")).windows;
+  const expectedProfile = miniState.spaces.find((s) => s.id === miniWindow.spaceId)?.profileId;
+  assert(
+    miniWindow.profile.endsWith(expectedProfile),
+    `mini window uses its space's profile: ${JSON.stringify(miniWindow)} ${miniSpace.id}`,
+  );
+  assert((await snapshot()).tabs.length === tabsBeforeMini, "mini window adds no tab");
+  await waitFor(
+    async () =>
+      (await invoke("library-data")).history.some(
+        (entry) => entry.url === WING_TEST.base + "/mini-link",
+      ),
+    "mini window visit reaches history",
+  );
+  await invoke("mini-expand", {
+    url: WING_TEST.base + "/mini-link",
+    spaceId: miniWindow.spaceId,
+  });
+  await waitFor(
+    async () => {
+      const state = await snapshot();
+      return state.tabs.find((tab) => tab.id === state.activeTabId)?.url ===
+        WING_TEST.base + "/mini-link";
+    },
+    "mini window expands into a tab",
+  );
+  await invoke("native-minis", { close: true });
+  await waitFor(
+    async () => (await invoke("native-minis")).windows.length === 0,
+    "mini windows close cleanly",
+  );
+  await invoke("features-settings", { linksInMini: false });
+  checks.push("mini window opens links, keeps its profile, records history and expands");
+  await invoke("features-settings", { appIcon: "ocean" });
+  assert((await snapshot()).settings.appIcon === "ocean", "app icon setting saves");
+  const iconLoaded = await new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve(image.naturalWidth > 0);
+    image.onerror = () => resolve(false);
+    image.src = "../assets/icons/ocean.png";
+  });
+  assert(iconLoaded, "app icon previews load in the native shell");
+  checks.push("app icon setting saves and its previews load");
+  // The restart phase expects the saved split to be what was on screen.
+  await invoke("select-tab", { id: first });
+  await waitFor(
+    async () =>
+      (await invoke("native-diagnostics")).tabs.filter((tab) => tab.visible).length === 2,
+    "saved split is back on screen",
+  );
   post(
     "result",
     JSON.stringify({

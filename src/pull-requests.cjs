@@ -1,7 +1,6 @@
 "use strict";
 // Pull requests come through the developer's own signed-in gh and glab, so Wing
 // never stores a forge token.
-const { execFile } = require("node:child_process");
 const GITHUB_FIELDS = `nodes { ... on PullRequest {
   number title url isDraft updatedAt additions deletions mergeable reviewDecision
   author { login } repository { nameWithOwner } comments { totalCount }
@@ -75,28 +74,16 @@ function parseGitLab(requests, section) {
       updatedAt: mr.updated_at || "",
     }));
 }
-const SEARCH_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-function run(command, args) {
-  return new Promise((resolve, reject) =>
-    execFile(
-      command,
-      args,
-      {
-        timeout: 20000,
-        maxBuffer: 20 * 1024 * 1024,
-        env: { ...process.env, PATH: `${process.env.PATH || ""}:${SEARCH_PATH}` },
-      },
-      (error, stdout, stderr) => {
-        if (!error) return resolve(stdout);
-        error.missing = error.code === "ENOENT";
-        error.signedOut = /auth login|not logged|authenticat|no token/i.test(
-          String(stderr),
-        );
-        reject(error);
-      },
-    ),
-  );
+// run(tool, args) resolves with stdout, or rejects with an error from toolError.
+function toolError({ missing, stderr }) {
+  const error = Error("Forge command failed.");
+  error.missing = !!missing;
+  error.signedOut = /auth login|not logged|authenticat|no token/i.test(String(stderr));
+  return error;
 }
+const GITHUB_ARGS = ["api", "graphql", "-f", `query=${GITHUB_QUERY}`];
+const GITLAB_MINE = "merge_requests?scope=created_by_me&state=opened&per_page=50";
+const GITLAB_REVIEW = "merge_requests?scope=all&state=opened&per_page=50&reviewer_username=";
 function failure(id, name, command, error) {
   const status = error.missing ? "missing" : error.signedOut ? "signedout" : "error";
   const message = {
@@ -106,9 +93,9 @@ function failure(id, name, command, error) {
   }[status];
   return { provider: { id, name, status, message }, items: [] };
 }
-async function github() {
+async function github(run) {
   try {
-    const out = await run("gh", ["api", "graphql", "-f", `query=${GITHUB_QUERY}`]);
+    const out = await run("gh", GITHUB_ARGS);
     return {
       provider: { id: "github", name: "GitHub", status: "ok" },
       items: parseGitHub(JSON.parse(out).data),
@@ -117,15 +104,12 @@ async function github() {
     return failure("github", "GitHub", "gh", error);
   }
 }
-async function gitlab() {
+async function gitlab(run) {
   try {
     const user = JSON.parse(await run("glab", ["api", "user"]));
     const [mine, review] = await Promise.all([
-      run("glab", ["api", "merge_requests?scope=created_by_me&state=opened&per_page=50"]),
-      run("glab", [
-        "api",
-        `merge_requests?scope=all&state=opened&per_page=50&reviewer_username=${encodeURIComponent(user.username)}`,
-      ]),
+      run("glab", ["api", GITLAB_MINE]),
+      run("glab", ["api", GITLAB_REVIEW + encodeURIComponent(user.username)]),
     ]);
     return {
       provider: { id: "gitlab", name: "GitLab", status: "ok" },
@@ -138,12 +122,12 @@ async function gitlab() {
     return failure("gitlab", "GitLab", "glab", error);
   }
 }
-async function fetchPullRequests() {
-  const results = await Promise.all([github(), gitlab()]);
+async function fetchPullRequests(run) {
+  const results = await Promise.all([github(run), gitlab(run)]);
   return {
     providers: results.map((r) => r.provider),
     items: results.flatMap((r) => r.items),
     fetchedAt: Date.now(),
   };
 }
-module.exports = { fetchPullRequests, parseGitHub, parseGitLab };
+module.exports = { fetchPullRequests, toolError, parseGitHub, parseGitLab };

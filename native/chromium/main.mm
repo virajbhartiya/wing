@@ -6,6 +6,7 @@
 #import "ImportProcess.h"
 #import "DeviceChooser.h"
 #import "PromptPopover.h"
+#import "MiniWindow.h"
 #import "PrivateWindow.h"
 #import <AppKit/AppKit.h>
 #include <cmath>
@@ -161,7 +162,8 @@ static BOOL ValidSync(NSDictionary *data) {
     if (![tab isKindOfClass:NSDictionary.class] || !Identifier(tab[@"id"]) ||
         ![spaces containsObject:tab[@"spaceId"]] ||
         [tabs containsObject:tab[@"id"]] ||
-        (![tab[@"url"] isEqual:@"wing://home"] && !WebURL(tab[@"url"])))
+        (![tab[@"url"] isEqual:@"wing://home"] && ![tab[@"url"] isEqual:@"wing://pulls"] &&
+         !WebURL(tab[@"url"])))
       return NO;
     [tabs addObject:tab[@"id"]];
   }
@@ -1329,6 +1331,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                        : nil;
   if (name && [WingPrivateWindow performMenuAction:name args:data[@"args"] ?: @{}])
     return;
+  if (name && [WingMiniWindow performMenuAction:name args:data[@"args"] ?: @{}])
+    return;
   if (!_window.window.visible) [self showMainWindow:nil];
   [self send:payload[@"kind"] data:payload[@"data"]];
   if ([payload[@"kind"] isEqual:@"command"]) [_shell focus];
@@ -1384,6 +1388,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   privateWindow.keyEquivalentModifierMask = cmd | shift;
   privateWindow.target = self;
   [file addItem:privateWindow];
+  [file addItem:[self action:@"New Mini Window" key:@"n" modifiers:cmd | option name:@"mini-window" args:nil]];
   [file addItem:[self command:@"Open Location…" key:@"l" modifiers:cmd data:@{@"type" : @"palette", @"mode" : @"navigate"}]];
   [file addItem:NSMenuItem.separatorItem];
   [file addItem:[self action:@"Close Tab" key:@"w" modifiers:cmd name:@"close-tab" args:nil]];
@@ -1437,6 +1442,40 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   [developer addItem:[self action:@"Developer Tools" key:@"i" modifiers:cmd | option name:@"devtools" args:nil]];
   [developer addItem:[self command:@"Task Manager" key:nil modifiers:0 data:@{@"type" : @"performance"}]];
   [view addItem:developerHolder];
+
+  NSMenu *develop = [self addMenu:@"Develop" to:bar];
+  [develop addItem:[self action:@"Developer Tools" key:@"j" modifiers:cmd | option name:@"devtools" args:nil]];
+  [develop addItem:[self action:@"Reload Ignoring Cache" key:nil modifiers:0 name:@"dev-reload" args:nil]];
+  [develop addItem:[self action:@"View Page Source" key:@"u" modifiers:cmd | option name:@"dev-source" args:nil]];
+  [develop addItem:[self action:@"Clear Data for This Site…" key:nil modifiers:0 name:@"dev-clear-site" args:nil]];
+  [develop addItem:[self action:@"Pull Requests" key:nil modifiers:0 name:@"pulls-open" args:nil]];
+  [develop addItem:NSMenuItem.separatorItem];
+  [develop addItem:[self action:@"Toggle Cache" key:nil modifiers:0 name:@"dev" args:@{@"tool" : @"cache"}]];
+  [develop addItem:[self action:@"Toggle JavaScript" key:nil modifiers:0 name:@"dev" args:@{@"tool" : @"javascript"}]];
+  NSArray *devSubmenus = @[
+    @[ @"Device Size", @"device", @[ @[ @"Window Size", NSNull.null ], @[ @"iPhone (390 × 844)", @"iphone" ], @[ @"iPad (820 × 1180)", @"ipad" ], @[ @"Laptop (1440 × 900)", @"laptop" ] ] ],
+    @[ @"Color Scheme", @"scheme", @[ @[ @"System", NSNull.null ], @[ @"Light", @"light" ], @[ @"Dark", @"dark" ] ] ],
+    @[ @"Network Speed", @"network", @[ @[ @"No Throttling", NSNull.null ], @[ @"Fast 3G", @"fast3g" ], @[ @"Slow 3G", @"slow3g" ], @[ @"Offline", @"offline" ] ] ],
+    @[ @"User Agent", @"agent", @[ @[ @"Default", NSNull.null ], @[ @"Safari", @"safari" ], @[ @"Safari on iPhone", @"iphone" ], @[ @"Firefox", @"firefox" ] ] ],
+  ];
+  for (NSArray *group in devSubmenus) {
+    NSMenuItem *holder = [[NSMenuItem alloc] initWithTitle:group[0] action:nil keyEquivalent:@""];
+    NSMenu *choices = [[NSMenu alloc] initWithTitle:group[0]];
+    holder.submenu = choices;
+    for (NSArray *choice in group[2]) {
+      NSMutableDictionary *args = [@{@"tool" : group[1]} mutableCopy];
+      if (choice[1] != NSNull.null) args[@"value"] = choice[1];
+      [choices addItem:[self action:choice[0] key:nil modifiers:0 name:@"dev" args:args]];
+    }
+    [develop addItem:holder];
+  }
+  [develop addItem:NSMenuItem.separatorItem];
+  for (NSString *browser in @[ @"Safari", @"Google Chrome", @"Firefox" ])
+    [develop addItem:[self action:[@"Open Page in " stringByAppendingString:browser]
+                              key:nil
+                        modifiers:0
+                             name:@"dev-open-in"
+                             args:@{@"browser" : browser}]];
 
   NSMenu *history = [self addMenu:@"History" to:bar];
   [history addItem:[self action:@"Back" key:@"[" modifiers:cmd name:@"back" args:nil]];
@@ -1591,6 +1630,152 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                          (ArdiaCoreProfile *)profile
                                                    type:(NSString *)type {
   return [WingPrivateWindow engineWindowForProfile:profile] ?: _window;
+}
+// Only the page overrides in the Develop menu may reach the protocol.
+- (void)runDevCalls:(NSArray *)calls
+              index:(NSUInteger)index
+               page:(ArdiaCoreTab *)page
+             reload:(BOOL)reload
+              reply:(NSNumber *)rid {
+  static NSSet *allowed;
+  if (!allowed)
+    allowed = [NSSet setWithArray:@[
+      @"Network.enable", @"Network.setCacheDisabled", @"Network.emulateNetworkConditions",
+      @"Emulation.setScriptExecutionDisabled", @"Emulation.setDeviceMetricsOverride",
+      @"Emulation.clearDeviceMetricsOverride", @"Emulation.setEmulatedMedia",
+      @"Emulation.setUserAgentOverride"
+    ]];
+  if (![calls isKindOfClass:NSArray.class] || index >= calls.count) {
+    if (reload) [page reload];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  NSDictionary *call = calls[index];
+  if (![call isKindOfClass:NSDictionary.class] || ![allowed containsObject:call[@"method"]]) {
+    [self reply:rid result:nil error:@"Unknown developer override."];
+    return;
+  }
+  [page devToolsCall:call[@"method"]
+              params:call[@"params"]
+          completion:^(NSDictionary *result, NSString *error) {
+            if (error) {
+              [self reply:rid result:nil error:error];
+              return;
+            }
+            [self runDevCalls:calls index:index + 1 page:page reload:reload reply:rid];
+          }];
+}
+// gh and glab read pull requests with the developer's own sign-in; lsof lists
+// local servers. Nothing else can be run, and only with these argument shapes.
+- (void)runTool:(NSDictionary *)data reply:(NSNumber *)rid {
+  NSString *tool = data[@"tool"];
+  NSArray *args = data[@"args"];
+  BOOL strings = [args isKindOfClass:NSArray.class];
+  for (id arg in strings ? args : @[])
+    if (![arg isKindOfClass:NSString.class]) strings = NO;
+  BOOL valid =
+      strings &&
+      (([tool isEqual:@"lsof"] && [args isEqual:@[ @"-nP", @"-iTCP", @"-sTCP:LISTEN" ]]) ||
+       ([tool isEqual:@"gh"] && args.count == 4 && [args[0] isEqual:@"api"] &&
+        [args[1] isEqual:@"graphql"] && [args[2] isEqual:@"-f"] && [args[3] hasPrefix:@"query={"]) ||
+       ([tool isEqual:@"glab"] && args.count == 2 && [args[0] isEqual:@"api"] &&
+        ([args[1] isEqual:@"user"] || [args[1] hasPrefix:@"merge_requests?"])));
+  if (!valid) {
+    [self reply:rid result:nil error:@"That tool cannot be run."];
+    return;
+  }
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    NSString *path = nil;
+    for (NSString *directory in @[ @"/opt/homebrew/bin", @"/usr/local/bin", @"/usr/bin", @"/usr/sbin" ]) {
+      NSString *candidate = [directory stringByAppendingPathComponent:tool];
+      if ([NSFileManager.defaultManager isExecutableFileAtPath:candidate]) {
+        path = candidate;
+        break;
+      }
+    }
+    if (!path) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [self reply:rid result:@{@"status" : @127, @"missing" : @YES, @"stdout" : @"", @"stderr" : @""} error:nil];
+      });
+      return;
+    }
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:path];
+    task.arguments = args;
+    NSMutableDictionary *environment = [NSProcessInfo.processInfo.environment mutableCopy];
+    environment[@"PATH"] = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin";
+    task.environment = environment;
+    NSPipe *output = [NSPipe pipe], *errors = [NSPipe pipe];
+    task.standardOutput = output;
+    task.standardError = errors;
+    NSError *launch = nil;
+    if (![task launchAndReturnError:&launch]) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [self reply:rid result:@{@"status" : @127, @"missing" : @YES, @"stdout" : @"", @"stderr" : @""} error:nil];
+      });
+      return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                     if (task.running) [task terminate];
+                   });
+    __block NSData *errorData = nil;
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+      errorData = [errors.fileHandleForReading readDataToEndOfFile];
+    });
+    NSData *outputData = [output.fileHandleForReading readDataToEndOfFile];
+    dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+    [task waitUntilExit];
+    NSDictionary *result = @{
+      @"status" : @(task.terminationStatus),
+      @"stdout" : [[NSString alloc] initWithData:outputData encoding:NSUTF8StringEncoding] ?: @"",
+      @"stderr" : [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding] ?: @""
+    };
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self reply:rid result:result error:nil];
+    });
+  });
+}
+- (void)openMini:(NSDictionary *)data reply:(NSNumber *)rid {
+  NSArray *spaces = data[@"spaces"];
+  NSString *spaceId = data[@"spaceId"], *url = data[@"url"], *search = data[@"search"];
+  if (![spaces isKindOfClass:NSArray.class] || !spaces.count || ![spaceId isKindOfClass:NSString.class] ||
+      ![search isKindOfClass:NSString.class] || ![search hasPrefix:@"https://"] ||
+      ([url length] && !WebURL(url))) {
+    [self reply:rid result:nil error:@"Invalid mini window."];
+    return;
+  }
+  __weak __typeof(self) weak = self;
+  [WingMiniWindow
+      openURL:[url length] ? url : nil
+       spaces:spaces
+      spaceId:spaceId
+       search:search
+       loader:^(NSString *profileId, void (^ready)(ArdiaCoreProfile *)) {
+         __typeof(self) strong = weak;
+         if (!strong || !Identifier(profileId)) return ready(nil);
+         if (strong->_profiles[profileId]) return ready(strong->_profiles[profileId]);
+         [ArdiaCoreEngine.sharedEngine
+             loadProfile:[@"Wing-" stringByAppendingString:profileId]
+              completion:^(ArdiaCoreProfile *profile) {
+                if (profile) strong->_profiles[profileId] = profile;
+                ready(profile);
+              }];
+       }
+       expand:^(NSString *target, NSString *space) {
+         [self showMainWindow:nil];
+         [self send:@"action"
+               data:@{@"name" : @"mini-expand", @"args" : @{@"url" : target, @"spaceId" : space}}];
+       }
+        visit:^(NSString *target, NSString *title, NSString *space) {
+          [self send:@"action"
+                data:@{
+                  @"name" : @"mini-visit",
+                  @"args" : @{@"url" : target, @"title" : title, @"spaceId" : space}
+                }];
+        }];
+  [self reply:rid result:@{@"ok" : @YES, @"open" : @(WingMiniWindow.openCount)} error:nil];
 }
 - (void)newPrivateWindow:(id)sender {
   BOOL duck = [_lastSync[@"workspace"][@"settings"][@"search"] isEqual:@"duckduckgo"];
@@ -2262,6 +2447,11 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       ![@[ @"sync", @"diagnostics", @"evaluate-page", @"extension-actions" ]
           containsObject:action])
     fprintf(stderr, "Qualification request: %s\n", action.UTF8String);
+  if ([action isEqual:@"test-minis"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    if ([data[@"close"] boolValue]) [WingMiniWindow closeAll];
+    [self reply:rid result:@{@"windows" : WingMiniWindow.diagnostics} error:nil];
+    return;
+  }
   if ([action isEqual:@"diagnostics"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
     NSMutableArray *tabs = [NSMutableArray new];
     NSMutableArray *protectionPages = [NSMutableArray new];
@@ -2472,6 +2662,97 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                    completion:^{
                      [self reply:rid result:@{@"ok" : @YES} error:nil];
                    }];
+    return;
+  }
+  if ([action isEqual:@"run-tool"]) {
+    [self runTool:data reply:rid];
+    return;
+  }
+  if ([action isEqual:@"mini-open"]) {
+    [self openMini:data reply:rid];
+    return;
+  }
+  if ([action isEqual:@"emoji-panel"]) {
+    [NSApp orderFrontCharacterPalette:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"app-icon"]) {
+    NSSet *known = [NSSet setWithArray:@[ @"violet", @"midnight", @"paper", @"coral", @"ocean", @"forest", @"gold" ]];
+    if (![known containsObject:data[@"icon"]]) {
+      [self reply:rid result:nil error:@"Unknown app icon."];
+      return;
+    }
+    NSString *path = [NSBundle.mainBundle pathForResource:data[@"icon"]
+                                                   ofType:@"png"
+                                              inDirectory:@"assets/icons"];
+    NSImage *image = path ? [[NSImage alloc] initWithContentsOfFile:path] : nil;
+    if (image) NSApp.applicationIconImage = image;
+    [self reply:rid result:@{@"ok" : @(image != nil)} error:nil];
+    return;
+  }
+  if ([action isEqual:@"confirm"]) {
+    NSAlert *alert = [NSAlert new];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = [data[@"message"] isKindOfClass:NSString.class] ? data[@"message"] : @"Are you sure?";
+    alert.informativeText = [data[@"detail"] isKindOfClass:NSString.class] ? data[@"detail"] : @"";
+    [alert addButtonWithTitle:[data[@"button"] isKindOfClass:NSString.class] ? data[@"button"] : @"OK"];
+    [alert addButtonWithTitle:@"Cancel"];
+    alert.buttons.lastObject.keyEquivalent = @"\r";
+    alert.buttons.firstObject.keyEquivalent = @"";
+    [alert beginSheetModalForWindow:_window.window
+                  completionHandler:^(NSModalResponse response) {
+                    [self reply:rid
+                         result:@{@"confirmed" : @(response == NSAlertFirstButtonReturn)}
+                          error:nil];
+                  }];
+    return;
+  }
+  if ([action isEqual:@"default-browser-prompt"]) {
+    NSURL *current = [NSWorkspace.sharedWorkspace
+        URLForApplicationToOpenURL:[NSURL URLWithString:@"https://example.com"]];
+    if ([[NSBundle.mainBundle objectForInfoDictionaryKey:@"WingQualificationOnly"] boolValue] ||
+        getenv("WING_CHROMIUM_TEST_SCRIPT") ||
+        [current.path isEqual:NSBundle.mainBundle.bundleURL.path]) {
+      [self reply:rid result:@{@"skipped" : @YES} error:nil];
+      return;
+    }
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Make Wing your default browser?";
+    alert.informativeText = @"Links from other apps will open in Wing.";
+    [alert addButtonWithTitle:@"Use Wing"];
+    [alert addButtonWithTitle:@"Not Now"];
+    alert.showsSuppressionButton = YES;
+    alert.suppressionButton.title = @"Don't ask again";
+    [alert beginSheetModalForWindow:_window.window
+                  completionHandler:^(NSModalResponse response) {
+                    BOOL use = response == NSAlertFirstButtonReturn;
+                    [self reply:rid
+                         result:@{
+                           @"use" : @(use),
+                           @"off" : @(!use && alert.suppressionButton.state == NSControlStateValueOn)
+                         }
+                          error:nil];
+                  }];
+    return;
+  }
+  if ([action isEqual:@"open-in-browser"]) {
+    NSDictionary *bundles = @{
+      @"Safari" : @"com.apple.Safari",
+      @"Google Chrome" : @"com.google.Chrome",
+      @"Firefox" : @"org.mozilla.firefox"
+    };
+    NSString *identifier = [data[@"browser"] isKindOfClass:NSString.class] ? bundles[data[@"browser"]] : nil;
+    NSURL *application = identifier ? [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:identifier] : nil;
+    if (!application || !WebURL(data[@"url"])) {
+      [self reply:rid result:nil error:@"That browser could not open this page."];
+      return;
+    }
+    [NSWorkspace.sharedWorkspace openURLs:@[ [NSURL URLWithString:data[@"url"]] ]
+                     withApplicationAtURL:application
+                            configuration:[NSWorkspaceOpenConfiguration configuration]
+                        completionHandler:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
     return;
   }
   if ([action isEqual:@"private-window"]) {
@@ -2973,6 +3254,17 @@ static NSString *PermissionSymbol(NSArray *kinds) {
     return;
   } else if ([action isEqual:@"focus"])
     [page focus];
+  else if ([action isEqual:@"dev-reload"])
+    [page reloadIgnoringCache];
+  else if ([action isEqual:@"dev-source"]) {
+    if (![page executeChromeCommand:35002]) {
+      [self reply:rid result:nil error:@"The page source could not open."];
+      return;
+    }
+  } else if ([action isEqual:@"dev-cdp"]) {
+    [self runDevCalls:data[@"calls"] index:0 page:page reload:[data[@"reload"] boolValue] reply:rid];
+    return;
+  }
   else if ([action isEqual:@"devtools"]) {
     if ([data[@"close"] boolValue])
       [page closeDevTools];

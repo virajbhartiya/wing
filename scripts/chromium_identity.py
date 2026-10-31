@@ -48,7 +48,31 @@ def configure_args(path):
     path.write_text("\n".join(result) + "\n")
 
 
+def keep_devtools_overrides(path):
+    # Chromium resets emulation and network overrides when the session detaches,
+    # so a tab that set one keeps its session until the tab closes.
+    text = path.read_text()
+    if "keep_attached_" in text:
+        return
+    edits = [
+        ("    EndAheadBlank(&GetWebContents());\n",
+         "    EndAheadBlank(&GetWebContents());\n"
+         "    if (method.starts_with(\"Emulation.\") || method.starts_with(\"Network.\")) {\n"
+         "      keep_attached_ = true;\n"
+         "    }\n"),
+        ("    if (generation != generation_ || !pending_.empty() || !host_) {\n",
+         "    if (keep_attached_ || generation != generation_ || !pending_.empty() || !host_) {\n"),
+        ("  int generation_ = 0;\n", "  int generation_ = 0;\n  bool keep_attached_ = false;\n"),
+    ]
+    for anchor, replacement in edits:
+        if text.count(anchor) != 1:
+            raise RuntimeError("DevTools session anchor changed")
+        text = text.replace(anchor, replacement)
+    path.write_text(text)
+
+
 def apply_host_api(source):
+    keep_devtools_overrides(source / "ardia/core/ac_devtools_call.mm")
     api = source / "ardia/core/ardiacore_api.mm"
     header = source / "ardia/core/public/ArdiaCore.h"
     implementation = '''- (BOOL)setDownloadDirectory:(NSString*)directory {

@@ -83,6 +83,7 @@ async function act(name, data = {}) {
     toast(e.message);
   }
 }
+window.__wingToast = (message) => toast(message);
 function toast(message) {
   $("#toast").textContent = message;
   $("#toast").hidden = false;
@@ -922,32 +923,24 @@ function renderPalette(rebuild = true) {
           act("new-tab", { url: `http://localhost:${port}` });
         },
       })),
-      ...(window.wing.engine === "chromium"
-        ? []
-        : [
-            {
-              label: "New Mini Window",
-              detail: "A quick look, outside your tabs  ⌥⌘N",
-              glyph: "globe",
-              run: () => {
-                closeModal();
-                act("mini-window");
-              },
-            },
-          ]),
-      ...(window.wing.engine === "chromium"
-        ? []
-        : [
-            {
-              label: "Pull Requests",
-              detail: "Your reviews and open PRs, always current",
-              glyph: "split",
-              run: () => {
-                closeModal();
-                act("pulls-open");
-              },
-            },
-          ]),
+      {
+        label: "New Mini Window",
+        detail: "A quick look, outside your tabs  ⌥⌘N",
+        glyph: "globe",
+        run: () => {
+          closeModal();
+          act("mini-window");
+        },
+      },
+      {
+        label: "Pull Requests",
+        detail: "Your reviews and open PRs, always current",
+        glyph: "split",
+        run: () => {
+          closeModal();
+          act("pulls-open");
+        },
+      },
       ...DEV_COMMANDS.map(([label, detail, name, data]) => ({
         label,
         detail,
@@ -1621,9 +1614,7 @@ function settingsPanes() {
           ],
           s.appearance || (s.dark ? "dark" : "light"),
         ) +
-        (chromium
-          ? ""
-          : settingRow(
+        (settingRow(
               "App icon",
               "Shown in the Dock while Wing is open.",
               `<div class="app-icons" role="radiogroup" aria-label="App icon">${APP_ICONS.map(
@@ -1642,9 +1633,7 @@ function settingsPanes() {
           ],
           s.search,
         ) +
-        (chromium
-          ? ""
-          : settingToggle(
+        (settingToggle(
               "links-in-mini",
               "Open links from other apps in a mini window",
               "Take a quick look without leaving what you're doing.",
