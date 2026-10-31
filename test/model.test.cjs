@@ -127,3 +127,18 @@ test("tab position defaults to the top bar and page frame follows it", () => {
     { x: 0, y: 88, width: 1000, height: 612 },
   );
 });
+test("reordering Spaces keeps profile shortcuts in the same order", () => {
+  const s = m.initialState();
+  const [personal, work] = s.spaces;
+  m.reorderSpace(s, work.id, personal.id);
+  assert.deepEqual(s.spaces.map((x) => x.id), [work.id, personal.id]);
+  assert.deepEqual(s.profiles.map((p) => p.id), ["work", "default"]);
+  m.reorderSpace(s, work.id, undefined);
+  assert.deepEqual(s.spaces.map((x) => x.id), [personal.id, work.id]);
+  assert.deepEqual(s.profiles.map((p) => p.id), ["default", "work"]);
+});
+test("Space icons keep whole emoji and fall back when empty", () => {
+  assert.equal(m.spaceIcon("🏳️‍🌈x"), "🏳️‍🌈");
+  assert.equal(m.spaceIcon("Work"), "W");
+  assert.equal(m.spaceIcon("  "), "✳");
+});

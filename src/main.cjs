@@ -1284,6 +1284,12 @@ async function action(name, data = {}) {
       closeOverlay(false);
       layout();
       break;
+    case "reorder-space":
+      M.reorderSpace(state, data.id, data.before);
+      break;
+    case "emoji-panel":
+      app.showEmojiPanel();
+      return { ok: true };
     case "save-space": {
       const colors =
         data.colors === undefined
@@ -1312,7 +1318,7 @@ async function action(name, data = {}) {
         Object.assign(existing, {
           name,
           theme,
-          icon: String(data.icon || "✳").slice(0, 4),
+          icon: M.spaceIcon(data.icon),
           profileId,
           ...(colors === undefined ? {} : { colors }),
         });
@@ -1321,7 +1327,7 @@ async function action(name, data = {}) {
           id: M.id(),
           name,
           theme,
-          icon: String(data.icon || "✳").slice(0, 4),
+          icon: M.spaceIcon(data.icon),
           profileId,
           ...(colors === undefined ? {} : { colors }),
         };
@@ -1629,6 +1635,7 @@ async function action(name, data = {}) {
     "toggle-folder",
     "sidebar",
     "tab-layout",
+    "reorder-space",
     "sidebar-width",
     "restore",
     "clear-today",

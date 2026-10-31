@@ -209,6 +209,9 @@ class ChromiumWorkspace {
             50000,
           );
         break;
+      case "reorder-space":
+        M.reorderSpace(s, data.id, data.before);
+        break;
       case "save-space": {
         const existing = s.spaces.find((space) => space.id === data.id);
         const name =
@@ -226,7 +229,7 @@ class ChromiumWorkspace {
           name,
           profileId,
           theme: M.themes.includes(data.theme) ? data.theme : "lavender",
-          icon: String(data.icon || "✳").slice(0, 4),
+          icon: M.spaceIcon(data.icon),
         };
         if (data.colors !== undefined)
           fields.colors = M.normalizeCustomColors(data.colors);

@@ -57,13 +57,14 @@ function esc(value) {
   );
 }
 const palettes = {
-  lavender: ["#d4cfe2", "#e3d7e0", "#79658d"],
-  sage: ["#cdd9cf", "#dee2d2", "#647d69"],
-  peach: ["#e7cebd", "#efded0", "#a17b65"],
-  ocean: ["#c5d8df", "#d5d9e6", "#628396"],
-  rose: ["#e4ccd7", "#e6d8dd", "#a0768e"],
-  graphite: ["#cacbd0", "#dcdbe0", "#767681"],
+  lavender: ["#d9d4f5", "#e9d5ef"],
+  sage: ["#cfe3d2", "#e0ecc9"],
+  peach: ["#f6d5c3", "#f7e3b8"],
+  ocean: ["#c7e0f2", "#cfd9f7"],
+  rose: ["#f3cfe0", "#f0d7f0"],
+  graphite: ["#dcdfe6", "#e7e3ec"],
 };
+const SPACE_EMOJI = [..."✳️⭐🔥🌈🌊🌿🍀🌸🌙☀️⚡🎯🚀💼📚🎨🎵🎮🏠💡🧠💰🛠️🧪🌍❤️🐱🐶🦊🍕☕✈️🏃"];
 let themePreview = null;
 let state = null,
   modalType = null,
@@ -298,6 +299,9 @@ function render() {
   );
   const tabsOnTop = state.settings.tabLayout === "top";
   document.body.classList.toggle("tabs-top", tabsOnTop);
+  $("#show-sidebar").title = tabsOnTop
+    ? "Move tabs to sidebar · ⌘S"
+    : "Show sidebar · ⌘S";
   document.body.classList.toggle(
     "pins-collapsed",
     !!state.settings.pinnedCollapsed,
@@ -428,7 +432,7 @@ function render() {
   const spaceButtons = state.spaces
       .map(
         (s) =>
-          `<button class="space-dot ${s.id === space.id ? "active" : ""}" data-space="${s.id}" title="${esc(s.name)} · ${esc(state.profiles.find((p) => p.id === s.profileId)?.name)} profile" aria-label="${esc(s.name)} space" aria-pressed="${s.id === space.id}"><span aria-hidden="true">${esc(s.icon)}</span><span class="space-label">${esc(s.name)}</span></button>`,
+          `<button class="space-dot ${s.id === space.id ? "active" : ""}" data-space="${s.id}" draggable="true" title="${esc(s.name)} · ${esc(state.profiles.find((p) => p.id === s.profileId)?.name)} profile. Drag to reorder, right-click to edit" aria-label="${esc(s.name)} space" aria-pressed="${s.id === space.id}"><span aria-hidden="true">${esc(s.icon)}</span><span class="space-label">${esc(s.name)}</span></button>`,
       )
       .join("");
   patchHTML("#spaces", spaceButtons);
@@ -876,6 +880,12 @@ function renderPalette(rebuild = true) {
         run: () => openSplit(),
       },
       {
+        label: "Edit This Space",
+        detail: "Change its name, icon, or color",
+        glyph: "more",
+        run: () => openSpace(currentSpace()),
+      },
+      {
         label: "New Space",
         detail: "A fresh context for a different part of your day",
         glyph: "sparkle",
@@ -1153,16 +1163,16 @@ function openSpace(space = null) {
   s.colors ||= { light: {}, dark: {} };
   showModal(
     "space",
-    `<form id="space-form" class="dialog-content">${dialogHead(space ? "Edit Space" : "New Space")}<p>Separate the different parts of your day. Each Space has its own tabs, folders, and color.</p><div class="form-row"><label class="field" style="max-width:85px"><span>Icon</span><input name="icon" value="${esc(s.icon)}" maxlength="4" aria-label="Space icon"></label><label class="field"><span>Space name</span><input name="name" placeholder="Work, weekends, a big idea…" value="${esc(s.name)}" required maxlength="60" autofocus></label></div><div class="field"><span>Color preset</span><div class="swatches">${Object.entries(
+    `<form id="space-form" class="dialog-content">${dialogHead(space ? "Edit Space" : "New Space")}<p>Separate the different parts of your day. Each Space has its own tabs, folders, and color.</p><div class="form-row"><label class="field" style="max-width:85px"><span>Icon</span><input name="icon" id="space-icon" value="${esc(s.icon)}" aria-label="Space icon"></label><label class="field"><span>Space name</span><input name="name" placeholder="Work, weekends, a big idea…" value="${esc(s.name)}" required maxlength="60" autofocus></label></div><div class="field"><span>Icon or emoji</span><div class="emoji-grid">${[...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(SPACE_EMOJI.join(""))].map(({ segment }) => `<button type="button" class="emoji-choice" data-emoji="${segment}" aria-label="Use ${segment}">${segment}</button>`).join("")}${window.wing.engine === "chromium" ? "" : `<button type="button" class="secondary" id="emoji-panel">More…</button>`}</div></div><div class="field"><span>Color</span><div class="swatches">${Object.entries(
       palettes,
     )
       .map(
         ([key, c]) =>
-          `<button type="button" class="swatch ${key === s.theme ? "selected" : ""}" data-theme="${key}" style="background:${c[0]}" title="${key}" aria-label="${key}"></button>`,
+          `<button type="button" class="swatch ${key === s.theme ? "selected" : ""}" data-theme="${key}" style="background:linear-gradient(135deg,${c[0]},${c[1]})" title="${key}" aria-label="${key}"></button>`,
       )
       .join(
         "",
-      )}</div><input type="hidden" name="theme" value="${s.theme}"></div><details class="theme-editor"><summary>Customize every interface color</summary><div class="theme-editor-head"><select id="color-mode" aria-label="Color appearance"><option value="light">Light appearance</option><option value="dark">Dark appearance</option></select><button type="button" class="secondary" id="reset-colors">Reset colors</button></div><div id="color-fields" class="color-fields"></div><p>Colors apply to Wing’s interface in this Space. Website colors stay under the site’s control.</p></details><label class="field"><span>Browser profile</span><select name="profileId">${state.profiles.map((p) => `<option value="${p.id}" ${p.id === s.profileId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}<option value="new">Create a separate profile</option></select></label><p style="font-size:11px;color:var(--muted)">Spaces using the same profile share logins and favorites. A separate profile starts with a clean session.</p><div class="dialog-actions">${space && state.spaces.length > 1 ? '<button type="button" class="danger" id="delete-space">Archive & remove Space</button>' : ""}<button type="button" class="secondary" data-dismiss>Cancel</button><button class="primary">${space ? "Save changes" : "Create Space"}</button></div></form>`,
+      )}<label class="swatch custom-swatch" title="Custom color"><input type="color" id="custom-color" value="${esc(s.colors.light?.accent?.slice(0, 7) || "#5b4bd6")}" aria-label="Custom color"></label></div><input type="hidden" name="theme" value="${s.theme}"></div><details class="theme-editor"><summary>Customize every interface color</summary><div class="theme-editor-head"><select id="color-mode" aria-label="Color appearance"><option value="light">Light appearance</option><option value="dark">Dark appearance</option></select><button type="button" class="secondary" id="reset-colors">Reset colors</button></div><div id="color-fields" class="color-fields"></div><p>Colors apply to Wing’s interface in this Space. Website colors stay under the site’s control.</p></details><label class="field"><span>Browser profile</span><select name="profileId">${state.profiles.map((p) => `<option value="${p.id}" ${p.id === s.profileId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}<option value="new">Create a separate profile</option></select></label><p style="font-size:11px;color:var(--muted)">Spaces using the same profile share logins and favorites. A separate profile starts with a clean session.</p><div class="dialog-actions">${space && state.spaces.length > 1 ? '<button type="button" class="danger" id="delete-space">Archive & remove Space</button>' : ""}<button type="button" class="secondary" data-dismiss>Cancel</button><button class="primary">${space ? "Save changes" : "Create Space"}</button></div></form>`,
   );
   $("#space-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1179,6 +1189,10 @@ function openSpace(space = null) {
         (b.onclick = () => {
           $("[name=theme]").value = b.dataset.theme;
           s.theme = b.dataset.theme;
+          // A preset replaces any custom frame color; other overrides stay.
+          for (const mode of ["light", "dark"])
+            for (const key of ["sidebar", "frame", "accent", "focus"])
+              delete s.colors[mode]?.[key];
           drawColorFields();
           previewColors();
           $("#modal")
@@ -1186,6 +1200,54 @@ function openSpace(space = null) {
             .forEach((el) => el.classList.toggle("selected", el === b));
         }),
     );
+  // One picked color becomes a soft gradient for light and a deep one for dark.
+  const mixHex = (hex, target, amount) =>
+    "#" +
+    [1, 3, 5]
+      .map((i) =>
+        Math.round(
+          parseInt(hex.slice(i, i + 2), 16) * (1 - amount) + target * amount,
+        )
+          .toString(16)
+          .padStart(2, "0"),
+      )
+      .join("");
+  $("#custom-color").oninput = (e) => {
+    const c = e.target.value;
+    s.colors.light = {
+      ...s.colors.light,
+      sidebar: mixHex(c, 255, 0.72),
+      frame: mixHex(c, 255, 0.82),
+      accent: c,
+      focus: c,
+    };
+    s.colors.dark = {
+      ...s.colors.dark,
+      sidebar: mixHex(c, 20, 0.78),
+      frame: mixHex(c, 20, 0.68),
+      accent: mixHex(c, 255, 0.45),
+      focus: mixHex(c, 255, 0.45),
+    };
+    $("#modal")
+      .querySelectorAll(".swatch.selected")
+      .forEach((el) => el.classList.remove("selected"));
+    drawColorFields();
+    previewColors();
+  };
+  $("#modal")
+    .querySelectorAll("[data-emoji]")
+    .forEach(
+      (b) =>
+        (b.onclick = () => {
+          $("#space-icon").value = b.dataset.emoji;
+        }),
+    );
+  if ($("#emoji-panel"))
+    $("#emoji-panel").onclick = () => {
+      $("#space-icon").value = "";
+      $("#space-icon").focus();
+      act("emoji-panel");
+    };
   const colorMode = () => $("#color-mode").value;
   function previewColors() {
     themePreview = { space: s, dark: colorMode() === "dark" };
@@ -2279,6 +2341,8 @@ const stripReducedMotion = window.matchMedia(
 );
 const releaseStripWidths = () => $("#strip-tabs").classList.remove("frozen");
 $("#tab-strip").addEventListener("pointerleave", releaseStripWidths);
+$("#toolbar-add-space").onclick = () => openSpace();
+$("#move-tabs-top").onclick = () => act("tab-layout", { layout: "top" });
 $("#strip-new-tab").onclick = () => {
   releaseStripWidths();
   $("#new-tab").click();
@@ -2320,8 +2384,22 @@ $("#find-prev").onclick = () =>
   act("find", { text: $("#find-input").value, next: true, forward: false });
 $("#find-next").onclick = () =>
   act("find", { text: $("#find-input").value, next: true });
-let dragged = null;
+let dragged = null,
+  draggedSpace = null;
+function spaceDropBefore(event, dot) {
+  const rect = dot.getBoundingClientRect();
+  return event.clientX - rect.left < rect.width / 2
+    ? dot.dataset.space
+    : dot.nextElementSibling?.dataset.space;
+}
 document.addEventListener("dragstart", (e) => {
+  const dot = e.target.closest?.("[data-space]");
+  if (dot) {
+    draggedSpace = dot.dataset.space;
+    e.dataTransfer.setData("text/plain", draggedSpace);
+    e.dataTransfer.effectAllowed = "move";
+    return;
+  }
   const tab = e.target.closest("[data-tab]");
   if (tab) {
     dragged = tab.dataset.tab;
@@ -2347,6 +2425,16 @@ function dropMode(event, tab) {
     : "split";
 }
 document.addEventListener("dragover", (e) => {
+  if (draggedSpace) {
+    const dot = e.target.closest("[data-space]");
+    clearDropHints();
+    if (dot && dot.dataset.space !== draggedSpace) {
+      e.preventDefault();
+      const before = spaceDropBefore(e, dot) === dot.dataset.space;
+      dot.classList.add(before ? "drop-before" : "drop-after");
+    }
+    return;
+  }
   if (!dragged) return;
   const target = e.target.closest(
     "[data-folder],[data-space],[data-tab],#favorites,#tab-strip",
@@ -2363,6 +2451,16 @@ document.addEventListener("dragover", (e) => {
   else if (target.id === "favorites") target.classList.add("drop-favorite");
 });
 document.addEventListener("drop", (e) => {
+  if (draggedSpace) {
+    e.preventDefault();
+    const dot = e.target.closest("[data-space]"),
+      id = draggedSpace;
+    draggedSpace = null;
+    clearDropHints();
+    if (dot && dot.dataset.space !== id)
+      act("reorder-space", { id, before: spaceDropBefore(e, dot) });
+    return;
+  }
   if (!dragged) return;
   e.preventDefault();
   const id = dragged;
@@ -2392,6 +2490,7 @@ document.addEventListener("drop", (e) => {
 });
 document.addEventListener("dragend", () => {
   dragged = null;
+  draggedSpace = null;
   clearDropHints();
 });
 let revealTimer;
@@ -2645,6 +2744,8 @@ const assignments = {
   "#edit-space": "more",
   "#add-space": "plus",
   "#strip-new-tab": "plus",
+  "#toolbar-add-space": "plus",
+  "#move-tabs-top": "up",
   "#new-tab .new-tab-icon": "plus",
   "#find-prev": "up",
   "#find-next": "down",

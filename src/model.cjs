@@ -400,8 +400,33 @@ function validateState(value) {
   };
 }
 
+// One grapheme, so multi-part emoji are never cut in half.
+function spaceIcon(value) {
+  const [first] = new Intl.Segmenter(undefined, {
+    granularity: "grapheme",
+  }).segment(String(value || "").trim());
+  return first && first.segment.length <= 10 ? first.segment : "✳";
+}
+// ⌃N follows this order, so profiles are ranked by their first Space.
+function reorderSpace(state, id, beforeId) {
+  const moving = state.spaces.find((s) => s.id === id);
+  if (!moving || id === beforeId) return;
+  state.spaces = state.spaces.filter((s) => s !== moving);
+  const index = state.spaces.findIndex((s) => s.id === beforeId);
+  state.spaces.splice(index < 0 ? state.spaces.length : index, 0, moving);
+  const rank = (profile) => {
+    const at = state.spaces.findIndex((s) => s.profileId === profile.id);
+    return at < 0 ? state.spaces.length : at;
+  };
+  state.profiles = state.profiles
+    .map((profile, order) => [profile, order])
+    .sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1])
+    .map(([profile]) => profile);
+}
 module.exports = {
   splits,
+  spaceIcon,
+  reorderSpace,
   id,
   themes,
   normalizeURL,
