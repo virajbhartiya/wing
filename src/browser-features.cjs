@@ -193,6 +193,7 @@ function createBrowserFeatures(api) {
           "toolbarHidden",
           "pinnedCollapsed",
           "onboarded",
+          "linksInMini",
         ])
           if (typeof data[key] === "boolean") next[key] = data[key];
         if (AppIcons.APP_ICONS.includes(data.appIcon)) {

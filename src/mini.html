@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'"
+    />
+    <title>Mini Wing</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ecebf1;
+        --field: rgba(0, 0, 0, 0.06);
+        --text: #1d1d22;
+        --muted: rgba(29, 29, 34, 0.45);
+        --hover: rgba(0, 0, 0, 0.08);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1d1d22;
+          --field: rgba(255, 255, 255, 0.08);
+          --text: #f4f3f8;
+          --muted: rgba(244, 243, 248, 0.45);
+          --hover: rgba(255, 255, 255, 0.1);
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      form {
+        height: 44px;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 8px 0 78px;
+        -webkit-app-region: drag;
+      }
+      button,
+      input {
+        -webkit-app-region: no-drag;
+      }
+      button {
+        height: 28px;
+        min-width: 28px;
+        border: 0;
+        border-radius: 7px;
+        background: none;
+        color: inherit;
+        font: inherit;
+      }
+      button:hover:not(:disabled) {
+        background: var(--hover);
+      }
+      button:disabled {
+        color: var(--muted);
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        height: 28px;
+        margin: 0 4px;
+        padding: 0 10px;
+        box-sizing: border-box;
+        border: 0;
+        border-radius: 7px;
+        outline: 0;
+        background: var(--field);
+        color: inherit;
+        font: inherit;
+      }
+      select {
+        -webkit-app-region: no-drag;
+        max-width: 110px;
+        height: 28px;
+        margin-right: 4px;
+        border: 0;
+        border-radius: 7px;
+        background: var(--field);
+        color: inherit;
+        font: inherit;
+      }
+      #expand {
+        padding: 0 10px;
+        background: var(--field);
+        font-weight: 550;
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <form id="bar">
+      <button type="button" id="back" aria-label="Back" title="Back">‹</button>
+      <button type="button" id="forward" aria-label="Forward" title="Forward">›</button>
+      <input id="address" placeholder="Search or enter website" aria-label="Address" spellcheck="false" autocomplete="off" />
+      <select id="space" aria-label="Profile" title="Open in profile"></select>
+      <button type="button" id="expand" title="Move this page to a tab in Wing">Open in Wing</button>
+    </form>
+    <script src="mini.js"></script>
+  </body>
+</html>

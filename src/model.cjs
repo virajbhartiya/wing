@@ -5,6 +5,9 @@ const id = () => randomUUID();
 const themes = ["lavender", "sage", "peach", "ocean", "rose", "graphite"];
 // Chromium's own management pages Wing exposes. Everything else under
 // chrome:// stays blocked.
+// Drawn by the app shell rather than a page view, like the home tab.
+const PULLS_URL = "wing://pulls";
+const isShellPage = (url) => url === "wing://home" || url === PULLS_URL;
 const INTERNAL_PAGES = {
   "wing://passwords": "chrome://password-manager/passwords",
   "wing://history": "chrome://history/",
@@ -18,6 +21,7 @@ function internalPage(url) {
 function normalizeURL(input, search = "https://www.google.com/search?q=") {
   const value = String(input || "").trim();
   if (!value || value === "wing://home") return "wing://home";
+  if (value === PULLS_URL) return value;
   if (INTERNAL_PAGES[value]) return INTERNAL_PAGES[value];
   if (internalPage(value)) return value;
   if (value === "about:blank") return value;
@@ -45,7 +49,12 @@ function newTab(spaceId, url = "wing://home", extras = {}) {
     id: id(),
     spaceId,
     url,
-    title: url === "wing://home" ? "New tab" : new URL(url).hostname,
+    title:
+      url === "wing://home"
+        ? "New tab"
+        : url === PULLS_URL
+          ? "Pull Requests"
+          : new URL(url).hostname,
     kind: "today",
     folderId: null,
     homeURL: url,
@@ -424,6 +433,8 @@ function reorderSpace(state, id, beforeId) {
     .map(([profile]) => profile);
 }
 module.exports = {
+  PULLS_URL,
+  isShellPage,
   splits,
   spaceIcon,
   reorderSpace,

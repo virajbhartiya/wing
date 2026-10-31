@@ -3,6 +3,7 @@ const {
   BrowserWindow,
   WebContentsView,
   ipcMain,
+  nativeTheme,
   Menu,
   session,
   dialog,
@@ -14,6 +15,8 @@ const {
   autoUpdater,
 } = require("electron");
 const DevTools = require("./dev-tools.cjs");
+const { fetchPullRequests } = require("./pull-requests.cjs");
+const { createMiniWindows } = require("./mini-window.cjs");
 const { applyAppIcon } = require("./app-icons.cjs");
 // Local development servers commonly use self-signed certificates.
 app.commandLine.appendSwitch("allow-insecure-localhost");
@@ -541,7 +544,7 @@ function wireContents(view, tab, isPeek = false) {
   });
 }
 function ensureView(tab) {
-  if (!tab || tab.url === "wing://home") return null;
+  if (!tab || M.isShellPage(tab.url)) return null;
   if (views.has(tab.id)) return views.get(tab.id);
   const view = new WebContentsView({
     webPreferences: {
@@ -631,6 +634,53 @@ function animateSidebarReveal(animate) {
   }, 16);
 }
 const dev = (tool, value) => action("dev", { tool, value });
+const showMain = () => {
+  if (win && !win.isDestroyed()) {
+    win.show();
+    win.focus();
+  }
+};
+const miniWindows = createMiniWindows({
+  electron: { BrowserWindow, WebContentsView, ipcMain, nativeTheme },
+  spaces: () =>
+    state.spaces.map(({ id, name, icon }) => ({ id, name, icon })),
+  sessionForSpace: (spaceId) =>
+    sessionFor(
+      (state.spaces.find((s) => s.id === spaceId) || currentSpaceOf()).profileId,
+    ),
+  allowedWeb,
+  resolve: (input) =>
+    M.normalizeURL(
+      Navigation.resolveInput(input, state.settings),
+      state.settings.search === "duckduckgo"
+        ? "https://duckduckgo.com/?q="
+        : undefined,
+    ),
+  userAgent: (agent) =>
+    agent.replace(/\sElectron\/\S+/g, "").replace(/\swing-browser\/\S+/gi, ""),
+  openInTab: (url, spaceId) => {
+    openTab(url, state.spaces.some((s) => s.id === spaceId) ? spaceId : undefined);
+    showMain();
+  },
+  focusMain: showMain,
+  recordVisit: (url, title, spaceId) => {
+    state.history.unshift({
+      id: M.id(),
+      url,
+      title: title || new URL(url).hostname,
+      at: Date.now(),
+      profileId: state.spaces.find((s) => s.id === spaceId)?.profileId,
+    });
+    state.history = state.history.slice(0, 2000);
+    save();
+  },
+});
+function openMini(url, spaceId = state.activeSpaceId) {
+  const space = state.spaces.find((s) => s.id === spaceId) || currentSpaceOf();
+  return miniWindows.open({ url, spaceId: space.id });
+}
+const currentSpaceOf = () =>
+  state.spaces.find((s) => s.id === state.activeSpaceId) || state.spaces[0];
 function layout() {
   if (!win || win.isDestroyed()) return;
   const [width, height] = win.getContentSize();
@@ -931,7 +981,7 @@ function navigate(input, tabId = state.activeTabId) {
   runtime.delete(tab.id);
   clearTabFaviconForNavigation(tab, url);
   tab.url = url;
-  if (url === "wing://home") closeView(tab.id);
+  if (M.isShellPage(url)) closeView(tab.id);
   else {
     const view = views.get(tab.id);
     if (view) view.webContents.loadURL(url).catch(() => {});
@@ -1533,6 +1583,30 @@ async function action(name, data = {}) {
       sendCommand({ type: "toast", message });
       return { ok: true };
     }
+    case "pulls-open": {
+      const existing = state.tabs.find((t) => t.url === M.PULLS_URL);
+      if (existing) {
+        M.activate(state, existing.id);
+        const space = state.spaces.find((s) => s.id === existing.spaceId);
+        if (space) state.activeSpaceId = space.id;
+      } else {
+        const tab = openTab(M.PULLS_URL);
+        M.splits.setKind(state, tab.id, "pinned");
+      }
+      break;
+    }
+    case "pulls-data": {
+      const data = await fetchPullRequests();
+      const count = data.items.filter((p) => p.section === "review").length;
+      for (const tab of state.tabs)
+        if (tab.url === M.PULLS_URL)
+          tab.title = count ? `Pull Requests (${count})` : "Pull Requests";
+      publish(false);
+      return data;
+    }
+    case "mini-window":
+      openMini(data.url ? M.normalizeURL(data.url) : "");
+      return { ok: true };
     case "dev-reload":
       wc?.reloadIgnoringCache();
       return { ok: true };
@@ -1724,6 +1798,11 @@ function menu() {
             click: () => ui("palette"),
           },
           {
+            label: "New Mini Window",
+            accelerator: "Alt+CmdOrCtrl+N",
+            click: () => action("mini-window"),
+          },
+          {
             label: "Open Location",
             accelerator: "CmdOrCtrl+L",
             click: () =>
@@ -1853,6 +1932,7 @@ function menu() {
             click: () => action("dev-source"),
           },
           { label: "Clear Data for This Site…", click: () => action("dev-clear-site") },
+          { label: "Pull Requests", click: () => action("pulls-open") },
           { type: "separator" },
           { label: "Toggle Cache", click: () => dev("cache") },
           { label: "Toggle JavaScript", click: () => dev("javascript") },
@@ -2122,6 +2202,7 @@ app.whenReady().then(async () => {
     win.destroy();
   });
   win.on("closed", () => {
+    miniWindows.closeAll();
     win = null;
     app.quit();
   });
@@ -2192,6 +2273,10 @@ function openExternalLink(url) {
     if (!["http:","https:"].includes(parsed.protocol)) return;
     if (!win || win.isDestroyed()) { pendingExternalLinks.push(parsed.href); return; }
     const destination = Navigation.routeURL(parsed.href, state.settings.routes, state.spaces, state.settings.defaultSpaceId || state.activeSpaceId);
+    if (state.settings.linksInMini !== false) {
+      openMini(parsed.href, destination);
+      return;
+    }
     openTab(parsed.href, destination);
     win.show(); win.focus();
   } catch (error) { console.error("External link rejected:", error.message); }

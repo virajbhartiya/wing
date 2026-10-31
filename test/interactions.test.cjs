@@ -478,3 +478,36 @@ test("every app icon variant is built and offered in Settings", () => {
   }
   assert.ok(iconFile("nope").endsWith("violet.png"));
 });
+test("mini window keeps menu shortcuts from reaching the main window", () => {
+  const { miniKeyAction: key } = require("../src/mini-window.cjs");
+  const down = (k, mods = {}) => key({ type: "keyDown", key: k, ...mods });
+  assert.equal(down("w", { meta: true }), "close");
+  assert.equal(down("l", { meta: true }), "address");
+  assert.equal(down("t", { meta: true }), "block");
+  assert.equal(down("1", { control: true }), "block");
+  assert.equal(down("c", { meta: true }), "pass");
+  assert.equal(down("a"), "pass");
+  assert.equal(key({ type: "keyUp", key: "w", meta: true }), "pass");
+});
+test("pull request parsers normalize status from GitHub and GitLab", () => {
+  const { parseGitHub, parseGitLab } = require("../src/pull-requests.cjs");
+  const [review, mine] = parseGitHub({
+    review: { nodes: [{ number: 1, title: "A", url: "https://github.com/o/r/pull/1", repository: { nameWithOwner: "o/r" }, reviewDecision: "REVIEW_REQUIRED", mergeable: "CONFLICTING", commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] } }] },
+    mine: { nodes: [{ number: 2, title: "B", url: "https://github.com/o/r/pull/2", isDraft: true, reviewDecision: "APPROVED", commits: { nodes: [{ commit: { statusCheckRollup: null } }] } }, {}] },
+  });
+  assert.equal(review.section, "review");
+  assert.equal(review.ci, "failing");
+  assert.equal(review.review, "waiting");
+  assert.equal(review.conflict, true);
+  assert.equal(mine.section, "mine");
+  assert.equal(mine.ci, "none");
+  assert.equal(mine.review, "approved");
+  assert.equal(mine.draft, true);
+  const [mr] = parseGitLab(
+    [{ iid: 7, title: "C", web_url: "https://gitlab.com/o/r/-/merge_requests/7", references: { full: "o/r!7" }, detailed_merge_status: "ci_still_running", has_conflicts: false }, { web_url: "javascript:alert(1)" }],
+    "mine",
+  );
+  assert.equal(mr.repo, "o/r");
+  assert.equal(mr.ci, "pending");
+  assert.equal(parseGitLab({ message: "401" }, "mine").length, 0);
+});

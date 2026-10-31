@@ -135,6 +135,7 @@ function host(url) {
 function tabIcon(t) {
   if (t.url === "wing://home")
     return '<span class="wing-mark" aria-hidden="true"></span>';
+  if (t.url === "wing://pulls") return icon("split");
   let page;
   try {
     page = new URL(t.url);
@@ -373,7 +374,12 @@ function render() {
       '<p class="launch-empty">Use the star in the toolbar to keep a page here.</p>',
   );
   const openTabs = tabs
-    .filter((t) => t.url !== "wing://home" && t.kind !== "favorite")
+    .filter(
+      (t) =>
+        t.url !== "wing://home" &&
+        t.url !== "wing://pulls" &&
+        t.kind !== "favorite",
+    )
     .slice(0, 5);
   $("#home-tab-count").textContent =
     `${openTabs.length} ${openTabs.length === 1 ? "tab" : "tabs"}`;
@@ -458,7 +464,11 @@ function render() {
     });
   }
   $("#address-text").textContent =
-    t && t.url !== "wing://home" ? host(t.url) : "New tab";
+    t?.url === "wing://pulls"
+      ? "Pull Requests"
+      : t && t.url !== "wing://home"
+        ? host(t.url)
+        : "New tab";
   $("#address").title = (t?.url || "New Tab") + " · ⌘L";
   $("#security-icon").innerHTML = icon(
     t?.url.startsWith("https:")
@@ -483,6 +493,9 @@ function render() {
   $("#zoom-badge").textContent = zoom + "%";
   const failed = t?.error || t?.crashed;
   $("#home").hidden = !!t && t.url !== "wing://home" && !failed;
+  const showingPulls = t?.url === "wing://pulls" && !failed;
+  if (showingPulls && $("#pulls").hidden) refreshPulls();
+  $("#pulls").hidden = !showingPulls;
   $("#page-error").hidden = !failed;
   if (failed) $("#page-error").innerHTML = errorPage(t);
   $("#peek-frame").hidden = !state.peek;
@@ -909,6 +922,32 @@ function renderPalette(rebuild = true) {
           act("new-tab", { url: `http://localhost:${port}` });
         },
       })),
+      ...(window.wing.engine === "chromium"
+        ? []
+        : [
+            {
+              label: "New Mini Window",
+              detail: "A quick look, outside your tabs  ⌥⌘N",
+              glyph: "globe",
+              run: () => {
+                closeModal();
+                act("mini-window");
+              },
+            },
+          ]),
+      ...(window.wing.engine === "chromium"
+        ? []
+        : [
+            {
+              label: "Pull Requests",
+              detail: "Your reviews and open PRs, always current",
+              glyph: "split",
+              run: () => {
+                closeModal();
+                act("pulls-open");
+              },
+            },
+          ]),
       ...DEV_COMMANDS.map(([label, detail, name, data]) => ({
         label,
         detail,
@@ -1368,7 +1407,8 @@ function openRename(id, value) {
 function openSplit() {
   const ids = state.splitIds || [state.activeTabId];
   const candidates = tabsForSpace().filter(
-    (t) => !ids.includes(t.id) && t.url !== "wing://home",
+    (t) =>
+      !ids.includes(t.id) && t.url !== "wing://home" && t.url !== "wing://pulls",
   );
   showModal(
     "split",
@@ -1459,6 +1499,77 @@ const SHORTCUTS = [
   ["View page source", "⌥⌘U"],
   ["Full screen", "⌃⌘F"],
 ];
+// The Pull Requests smart tab.
+const PR_CI = {
+  passing: ["Checks passing", "good"],
+  failing: ["Checks failing", "bad"],
+  pending: ["Checks running", "wait"],
+};
+const PR_REVIEW = {
+  approved: ["Approved", "good"],
+  changes: ["Changes requested", "bad"],
+  waiting: ["Review needed", "wait"],
+};
+let pullsData = null,
+  pullsBusy = false;
+function prAge(at) {
+  const minutes = Math.max(0, (Date.now() - Date.parse(at)) / 60000);
+  if (!Number.isFinite(minutes)) return "";
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / 1440)}d`;
+}
+function prRow(p) {
+  const badge = ([text, tone]) =>
+    `<span class="pr-badge ${tone}">${esc(text)}</span>`;
+  const badges = [
+    p.draft && badge(["Draft", "quiet"]),
+    p.conflict && badge(["Conflicts", "bad"]),
+    PR_CI[p.ci] && badge(PR_CI[p.ci]),
+    PR_REVIEW[p.review] && badge(PR_REVIEW[p.review]),
+  ]
+    .filter(Boolean)
+    .join("");
+  const size = p.additions || p.deletions ? ` · +${p.additions} −${p.deletions}` : "";
+  const notes = p.comments ? ` · ${p.comments} ${p.comments === 1 ? "comment" : "comments"}` : "";
+  return `<button class="pr-row" data-pr-url="${esc(p.url)}"><span class="pr-main"><strong>${esc(p.title)}</strong><small>${esc(p.repo)} #${esc(String(p.number))}${p.author ? ` · ${esc(p.author)}` : ""} · ${prAge(p.updatedAt)}${size}${notes}</small></span><span class="pr-badges">${badges}</span></button>`;
+}
+function renderPulls() {
+  const data = pullsData;
+  const section = (title, items) =>
+    items.length
+      ? `<div class="section-label">${title} · ${items.length}</div>${items.map(prRow).join("")}`
+      : "";
+  const notices = (data?.providers || [])
+    .filter((p) => p.status !== "ok")
+    .map((p) => `<p class="pr-notice">${esc(p.message)}</p>`)
+    .join("");
+  const body = !data
+    ? "<p class=\"pr-notice\">Fetching pull requests…</p>"
+    : section("NEEDS YOUR REVIEW", data.items.filter((p) => p.section === "review")) +
+        section("YOURS", data.items.filter((p) => p.section === "mine")) ||
+      (data.providers.some((p) => p.status === "ok")
+        ? "<p class=\"pr-notice\">No open pull requests.</p>"
+        : "");
+  $("#pulls").innerHTML = `<div class="pr-page"><div class="pr-head"><h1>Pull Requests</h1><button class="secondary" id="pulls-refresh" ${pullsBusy ? "disabled" : ""}>${pullsBusy ? "Refreshing…" : "Refresh"}</button></div>${body}${notices}</div>`;
+  $("#pulls-refresh").onclick = refreshPulls;
+  $("#pulls").querySelectorAll("[data-pr-url]").forEach((row) => {
+    row.onclick = () => act("new-tab", { url: row.dataset.prUrl });
+  });
+}
+async function refreshPulls() {
+  if (pullsBusy) return;
+  pullsBusy = true;
+  renderPulls();
+  const data = await act("pulls-data");
+  pullsBusy = false;
+  if (data && !data.error) pullsData = data;
+  renderPulls();
+}
+setInterval(() => {
+  if (!document.hidden && state?.tabs.some((t) => t.url === "wing://pulls"))
+    refreshPulls();
+}, 120000);
 const APP_ICONS = [
   ["violet", "Violet"],
   ["midnight", "Midnight"],
@@ -1522,6 +1633,15 @@ function settingsPanes() {
           ],
           s.search,
         ) +
+        (chromium
+          ? ""
+          : settingToggle(
+              "links-in-mini",
+              "Open links from other apps in a mini window",
+              "Take a quick look without leaving what you're doing.",
+              s.linksInMini !== false,
+              "little arc mini wing external",
+            )) +
         settingRow(
           "Default web browser",
           "Open links from other apps in Wing.",
@@ -1824,6 +1944,7 @@ function bindSettings() {
   on("pins-collapsed", "onchange", feature("pinnedCollapsed"));
   on("toolbar-hidden", "onchange", feature("toolbarHidden"));
   on("clean-copy", "onchange", feature("cleanCopy"));
+  on("links-in-mini", "onchange", feature("linksInMini"));
   on("automatic-pip", "onchange", feature("automaticPictureInPicture"));
   on("make-default", "onclick", async () => {
     const r = await act("default-browser");
