@@ -1461,7 +1461,7 @@ static NSString *const kHasUnsavedInputScript =
               index:0
           remaining:remaining
               limit:[_lastSync[@"workspace"][@"settings"][@"maxLiveTabs"]
-                        integerValue] ?: 8
+                        integerValue] ?: 4
           automatic:automatic
          completion:^{
            if (automatic)
@@ -1483,7 +1483,7 @@ static NSString *const kHasUnsavedInputScript =
       continue;
     BOOL idle = NSDate.date.timeIntervalSince1970 * 1000 -
                     [record[@"lastActive"] doubleValue] >
-                600000;
+                300000;
     if (automatic && !idle && remaining <= limit)
       continue;
     if (![self mayDiscardPage:page])

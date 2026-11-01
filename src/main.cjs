@@ -213,7 +213,7 @@ function trimMemory() {
   }));
   evictionCandidates(entries, {
     activeIds: M.splits.visibleIds(state),
-    maxLive: state.settings.maxLiveTabs || 8,
+    maxLive: state.settings.maxLiveTabs || 4,
   }).forEach((id) => {
     const wc = views.get(id).webContents;
     try {
