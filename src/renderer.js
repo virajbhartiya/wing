@@ -363,7 +363,7 @@ function render() {
       )
       .join(""),
   );
-  $("#favorites").style.display = favorites.length ? "grid" : "none";
+  $("#favorites").style.display = favorites.length ? "grid" : "";
   $("#home-context").textContent =
     `${space.name} / ${state.profiles.find((p) => p.id === space.profileId)?.name || "Default"}`;
   patchHTML(
@@ -2795,14 +2795,65 @@ document.addEventListener("dragstart", (e) => {
     dragged = tab.dataset.tab;
     e.dataTransfer.setData("text/plain", dragged);
     e.dataTransfer.effectAllowed = "move";
+    // Empty sections open up a frame later; moving them now would cancel the drag.
+    setTimeout(() => {
+      if (dragged) document.body.classList.add("dragging-tab");
+    });
   }
 });
 function clearDropHints() {
   document
-    .querySelectorAll(".drop-split,.drop-before,.drop-after,.drop-favorite")
+    .querySelectorAll(".drop-split,.drop-before,.drop-after,.drop-zone")
     .forEach((el) =>
-      el.classList.remove("drop-split", "drop-before", "drop-after", "drop-favorite"),
+      el.classList.remove("drop-split", "drop-before", "drop-after", "drop-zone"),
     );
+}
+// Where a tab dragged over the sidebar would land, Arc-style: Favorites, pinned
+// (or a folder) and Today each take it; the middle of a tab still makes a split.
+function sidebarPlacement(event) {
+  const zone = event.target.closest?.(
+    "#favorites,#pinned,#today,.today-heading,#new-tab",
+  );
+  if (!zone) return null;
+  const kind =
+    zone.id === "favorites" ? "favorite" : zone.id === "pinned" ? "pinned" : "today";
+  const folderId =
+    kind === "pinned"
+      ? event.target.closest("[data-folder]")?.dataset.folder || null
+      : null;
+  const tab = event.target.closest("[data-tab]");
+  if (!tab) {
+    const beforeId =
+      zone.id === "today" || kind !== "today"
+        ? null
+        : $("#today [data-tab]")?.dataset.tab;
+    return { kind, folderId, beforeId, hint: zone };
+  }
+  if (tab.dataset.tab === dragged) return { own: true, hint: null };
+  const rect = tab.getBoundingClientRect();
+  const position =
+    kind === "favorite"
+      ? (event.clientX - rect.left) / rect.width
+      : (event.clientY - rect.top) / rect.height;
+  if (position >= 0.3 && position <= 0.7)
+    return { split: tab.dataset.tab, hint: tab, hintClass: "drop-split" };
+  if (position < 0.3)
+    return {
+      kind,
+      folderId,
+      beforeId: tab.dataset.tab,
+      hint: tab,
+      hintClass: "drop-before",
+    };
+  let next = tab.nextElementSibling;
+  if (next?.dataset.tab === dragged) next = next.nextElementSibling;
+  return {
+    kind,
+    folderId,
+    beforeId: next?.dataset.tab || null,
+    hint: tab,
+    hintClass: "drop-after",
+  };
 }
 function dropMode(event, tab) {
   const rect = tab.getBoundingClientRect();
@@ -2826,9 +2877,14 @@ document.addEventListener("dragover", (e) => {
     return;
   }
   if (!dragged) return;
-  const target = e.target.closest(
-    "[data-folder],[data-space],[data-tab],#favorites,#tab-strip",
-  );
+  const placement = sidebarPlacement(e);
+  if (placement) {
+    e.preventDefault();
+    clearDropHints();
+    placement.hint?.classList.add(placement.hintClass || "drop-zone");
+    return;
+  }
+  const target = e.target.closest("[data-space],[data-tab],#tab-strip");
   if (!target) return;
   e.preventDefault();
   clearDropHints();
@@ -2853,13 +2909,28 @@ document.addEventListener("drop", (e) => {
   }
   if (!dragged) return;
   e.preventDefault();
+  const placement = sidebarPlacement(e);
   const id = dragged;
   dragged = null;
+  document.body.classList.remove("dragging-tab");
   clearDropHints();
-  const folder = e.target.closest("[data-folder]"),
-    space = e.target.closest("[data-space]"),
+  const space = e.target.closest("[data-space]"),
     tab = e.target.closest("[data-tab]");
-  if (space) act("move-tab", { id, spaceId: space.dataset.space });
+  if (placement?.split)
+    act("split", {
+      id,
+      targetId: placement.split,
+      orientation: state.splitOrientation || "horizontal",
+    });
+  else if (placement?.kind)
+    act("place-tab", {
+      id,
+      kind: placement.kind,
+      folderId: placement.folderId,
+      beforeId: placement.beforeId,
+    });
+  else if (placement);
+  else if (space) act("move-tab", { id, spaceId: space.dataset.space });
   else if (tab && tab.dataset.tab !== id) {
     const mode = dropMode(e, tab);
     if (mode === "reorder") act("reorder-tab", { id, before: tab.dataset.tab });
@@ -2873,13 +2944,11 @@ document.addEventListener("drop", (e) => {
         targetId: tab.dataset.tab,
         orientation: state.splitOrientation || "horizontal",
       });
-  } else if (e.target.closest("#favorites"))
-    act("favorite", { id, favorite: true });
-  else if (folder) act("move-tab", { id, folderId: folder.dataset.folder });
-  else if (e.target.closest("#tab-strip")) act("reorder-tab", { id, end: true });
+  } else if (e.target.closest("#tab-strip")) act("reorder-tab", { id, end: true });
 });
 document.addEventListener("dragend", () => {
   dragged = null;
+  document.body.classList.remove("dragging-tab");
   draggedSpace = null;
   clearDropHints();
 });

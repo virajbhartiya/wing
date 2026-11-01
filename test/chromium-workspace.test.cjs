@@ -486,3 +486,29 @@ test("a tab keeps its site icon through closing, reopening and an empty report w
   workspace.pageChanged({ id, url: "https://today.example/", favicon: "javascript:alert(1)" });
   assert.equal(s.tabs.find((t) => t.id === id).favicon, icon);
 });
+
+test("a dragged tab moves between Favorites, pinned tabs, folders and Today", () => {
+  const workspace = new ChromiumWorkspace();
+  const s = workspace.state;
+  const open = (url) => {
+    workspace.action("new-tab", { url });
+    return s.activeTabId;
+  };
+  const a = open("https://a.example/"),
+    b = open("https://b.example/");
+  const tab = (id) => s.tabs.find((t) => t.id === id);
+  workspace.action("place-tab", { id: b, kind: "favorite" });
+  assert.equal(tab(b).kind, "favorite");
+  workspace.action("place-tab", { id: a, kind: "favorite", beforeId: b });
+  const favorites = s.tabs.filter((t) => t.kind === "favorite").map((t) => t.id);
+  assert.ok(favorites.indexOf(a) === favorites.indexOf(b) - 1);
+  workspace.action("save-folder", { name: "Work" });
+  const folder = s.folders.at(-1).id;
+  workspace.action("place-tab", { id: a, kind: "pinned", folderId: folder });
+  assert.equal(tab(a).kind, "pinned");
+  assert.equal(tab(a).folderId, folder);
+  assert.equal(tab(a).spaceId, s.activeSpaceId);
+  workspace.action("place-tab", { id: a, kind: "today", folderId: folder });
+  assert.equal(tab(a).kind, "today");
+  assert.equal(tab(a).folderId, null);
+});

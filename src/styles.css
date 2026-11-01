@@ -272,10 +272,11 @@ kbd {
 .today-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
+  min-height: 12px;
   border-top: 1px solid var(--border);
-  margin: 13px 4px 6px;
-  padding-top: 14px;
+  margin: 10px 4px 6px;
+  padding-top: 4px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -284,7 +285,12 @@ kbd {
 .today-heading button {
   font-size: 11px;
   color: var(--muted);
-  padding: 3px;
+  padding: 0 3px;
+  opacity: 0;
+}
+.today-heading:hover button,
+.today-heading button:focus-visible {
+  opacity: 1;
 }
 .new-tab {
   display: flex;
@@ -1423,9 +1429,44 @@ body.sidebar-revealed #sidebar {
 .tab.drop-before {
   box-shadow: 0 -2px 0 var(--accent);
 }
-#favorites.drop-favorite {
+.drop-zone {
   outline: 2px dashed var(--accent);
+  outline-offset: 1px;
   border-radius: 8px;
+}
+.tab.drop-after {
+  box-shadow: 0 2px 0 var(--accent);
+}
+.favorite.drop-before {
+  box-shadow: -2px 0 0 var(--accent);
+}
+.favorite.drop-after {
+  box-shadow: 2px 0 0 var(--accent);
+}
+/* Room below any folders to drop a tab back at the top level. */
+body.dragging-tab #pinned {
+  padding-bottom: 14px;
+}
+/* Empty sections stay out of the way until a tab is being dragged. */
+#favorites:empty {
+  display: none;
+}
+body.dragging-tab #favorites:empty,
+body.dragging-tab #pinned:empty {
+  display: block;
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+body.dragging-tab #favorites:empty::before {
+  content: "Drop here to add to Favorites";
+}
+body.dragging-tab #pinned:empty::before {
+  content: "Drop here to pin";
 }
 .theme-editor {
   margin: 16px 0;

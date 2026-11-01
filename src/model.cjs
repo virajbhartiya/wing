@@ -290,6 +290,28 @@ function moveTab(state, tabId, spaceId, folderId = null) {
   }
   activate(state, tab.id);
 }
+// Puts a tab in a sidebar section: Favorites, pinned (optionally a folder) or Today.
+function placeTab(state, tabId, { kind, folderId = null, beforeId = null }) {
+  const moving = splits.members(state, tabId);
+  if (!moving.length || !["favorite", "pinned", "today"].includes(kind)) return;
+  if (moving[0].kind !== kind) splits.setKind(state, tabId, kind);
+  if (kind !== "favorite")
+    for (const tab of moving) {
+      tab.spaceId = state.activeSpaceId;
+      tab.folderId =
+        kind === "pinned" &&
+        state.folders.some(
+          (f) => f.id === folderId && f.spaceId === state.activeSpaceId,
+        )
+          ? folderId
+          : null;
+    }
+  const before = beforeId && splits.members(state, beforeId)[0];
+  if (before && moving.includes(before)) return;
+  state.tabs = state.tabs.filter((t) => !moving.includes(t));
+  const index = before ? state.tabs.indexOf(before) : state.tabs.length;
+  state.tabs.splice(index, 0, ...moving);
+}
 function validateState(value) {
   const fail = () => {
     throw Error("Invalid or unsupported workspace file");
@@ -560,5 +582,6 @@ module.exports = {
   autoArchive,
   restoreTab,
   moveTab,
+  placeTab,
   validateState,
 };

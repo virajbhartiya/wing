@@ -525,6 +525,10 @@ class ChromiumWorkspace {
           else tab.customTitle = tab.title = title;
         }
         break;
+      case "place-tab":
+        this.journal.record(s);
+        M.placeTab(s, data.id, data);
+        break;
       case "move-tab":
         this.journal.record(s);
         M.moveTab(s, data.id, data.spaceId || s.activeSpaceId, data.folderId);
