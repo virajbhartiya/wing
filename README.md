@@ -49,6 +49,8 @@ wing --debug 9222
 
 ## What works
 
+Tabs come back with their scroll position and back/forward list, for the 25 most recently closed tabs. Chromium keeps no more than that. Also: throwaway Spaces deleted at next launch, duplicate tab cleanup, grouping tabs by site into folders, a per-site ad-blocking switch, a Space picker for links from other apps, capture annotation, and an estimate of memory saved by sleeping tabs.
+
 - Safari-style toolbar and top tab bar by default. Move tabs to an Arc-style sidebar in **Settings → Tabs** or with ⌥⌘S.
 - ⌃1–9 switches profiles.
 - Custom window chrome, vertical tabs, pinned tabs, favorites and folders.
@@ -74,6 +76,8 @@ The real production-engine fixture verifies MV3 service workers, storage, messag
 **This is not universal Chrome compatibility.** Web Store links can be installed from Settings → Extensions with CRX3 signature verification and a permission review; the store webpage’s own install button is not integrated. Some Chromium APIs remain unsupported, including complete native Chrome window/tab-group semantics. In the tested Electron engine, a static DNR ruleset marked `enabled: true` in its manifest was initially inactive; explicit activation from the extension worked. Verify an extension's behavior before relying on it. An unmodified official uBlock Origin Lite release starts after the namespace compatibility fix, but failed its blocking qualification; it is not currently supported reliably. See `docs/ubol-electron-qualification.json`. Native messaging, DRM, password-manager integration and arbitrary popular extensions have not been qualified.
 
 ## Developer tools
+
+From the command palette or Site Controls: view, delete and copy a site's cookies, view a page as a JSON tree, and reload unpacked extensions on demand or whenever their files change.
 
 The **Develop** menu and the command palette hold the page tools: DevTools (⌥⌘I / ⌥⌘J), Reload Ignoring Cache (⇧⌘R), View Page Source (⌥⌘U), Clear Data for This Site, and Open Page in Safari, Chrome or Firefox. Per-tab overrides cover cache, JavaScript, device size, color scheme, network speed and user agent. The palette also lists web servers listening on this machine as `localhost:PORT`. Self-signed certificates are accepted on localhost.
 

@@ -152,6 +152,7 @@ class ChromiumWorkspace {
           "automaticPictureInPicture",
           "onboarded",
           "linksInMini",
+          "askSpaceForLinks",
           "defaultBrowserPromptOff",
         ])
           if (typeof data[key] === "boolean") next[key] = data[key];
@@ -195,6 +196,10 @@ class ChromiumWorkspace {
       }
       case "delete-space": {
         if (s.spaces.length < 2) throw Error("Keep at least one Space.");
+        if (s.spaces.find((space) => space.id === data.id)?.throwaway) {
+          this.removedProfiles.push(...M.removeThrowawaySpaces(s, data.id));
+          break;
+        }
         for (const target of [...s.tabs].filter((t) => t.spaceId === data.id))
           M.archiveTab(s, target.id);
         s.spaces = s.spaces.filter((space) => space.id !== data.id);
@@ -242,6 +247,8 @@ class ChromiumWorkspace {
         if (existing) Object.assign(existing, fields);
         else {
           const space = { id: M.id(), ...fields };
+          if (data.throwaway === true && data.profileId === "new")
+            space.throwaway = true;
           s.spaces.push(space);
           M.selectSpace(s, space.id);
         }
@@ -273,6 +280,30 @@ class ChromiumWorkspace {
           this.journal.record(s);
           s.tabs = s.tabs.filter((t) => !moving.includes(t));
           s.tabs.splice(s.tabs.indexOf(destination), 0, ...moving);
+        }
+        break;
+      }
+      case "group-by-site": {
+        const inSplit = new Set(s.splits.flatMap((split) => split.tabIds));
+        const sites = new Map();
+        for (const tab of s.tabs) {
+          if (tab.spaceId !== s.activeSpaceId || tab.kind !== "today") continue;
+          if (tab.closed || inSplit.has(tab.id) || !/^https?:/.test(tab.url))
+            continue;
+          const host = new URL(tab.url).hostname.replace(/^www\./, "");
+          sites.set(host, [...(sites.get(host) || []), tab]);
+        }
+        const groups = [...sites].filter(([, tabs]) => tabs.length > 1);
+        if (!groups.length) return false;
+        this.journal.record(s);
+        for (const [host, tabs] of groups) {
+          O.saveFolder(s, { name: host });
+          const folder = s.folders[s.folders.length - 1];
+          for (const tab of tabs) {
+            tab.kind = "pinned";
+            tab.homeURL = tab.url;
+            tab.folderId = folder.id;
+          }
         }
         break;
       }
@@ -384,12 +415,14 @@ class ChromiumWorkspace {
         const url = new URL(data.url);
         if (!["http:", "https:"].includes(url.protocol))
           throw Error("Only web links can be opened externally.");
-        const named = data.space
-          ? s.spaces.find(
-              (space) =>
-                space.name.toLowerCase() === String(data.space).toLowerCase(),
-            )
-          : null;
+        const named = data.spaceId
+          ? s.spaces.find((space) => space.id === data.spaceId)
+          : data.space
+            ? s.spaces.find(
+                (space) =>
+                  space.name.toLowerCase() === String(data.space).toLowerCase(),
+              )
+            : null;
         const destination =
           named?.id ||
           N.routeURL(

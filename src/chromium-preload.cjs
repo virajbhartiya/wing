@@ -124,6 +124,7 @@ const ready = native("bootstrap").then(async (result) => {
     native("workspace-recover", { after }),
   );
   workspace = opened.workspace;
+  workspace.removedProfiles.push(...M.removeThrowawaySpaces(workspace.state));
   version = result.version;
   const notice = startupNotice(opened.recovery, result.uncleanExit);
   if (notice)
@@ -336,7 +337,17 @@ async function invoke(action, data = {}) {
   }
   if (action === "external-url") {
     await ready;
-    if (!data.space && workspace.state.settings.linksInMini !== false) {
+    if (
+      !data.space &&
+      !data.spaceId &&
+      workspace.state.settings.askSpaceForLinks &&
+      workspace.state.spaces.length > 1
+    ) {
+      const spaceId = await window.__wingPickSpace?.(data.url);
+      if (!spaceId) return { ok: false };
+      data = { ...data, spaceId };
+    }
+    if (!data.space && !data.spaceId && workspace.state.settings.linksInMini !== false) {
       const s = workspace.state;
       const url = new URL(data.url);
       if (["http:", "https:"].includes(url.protocol))
@@ -354,6 +365,26 @@ async function invoke(action, data = {}) {
   if (action === "browser-profiles" || action === "browser-import") {
     await ready;
     return native(action, data);
+  }
+  if (action === "close-duplicates") {
+    await ready;
+    const ids = M.duplicateTabIds(workspace.state, workspace.state.activeSpaceId);
+    if (ids.length) await invoke("bulk-tabs", { ids, operation: "close", archive: true });
+    return { count: ids.length };
+  }
+  if (action === "new-throwaway") {
+    await ready;
+    await invoke("save-space", {
+      name: "Throwaway",
+      profileId: "new",
+      theme: "lavender",
+      throwaway: true,
+    });
+    const space = workspace.state.spaces.find(
+      (s) => s.id === workspace.state.activeSpaceId,
+    );
+    await native("throwaway-profile", { id: space.profileId });
+    return { ok: true };
   }
   if (
     action === "clear-today" ||
@@ -377,7 +408,7 @@ async function invoke(action, data = {}) {
     for (const tab of targets)
       await invoke("close-tab", {
         id: tab.id,
-        archive: action !== "bulk-tabs",
+        archive: action !== "bulk-tabs" || !!data.archive,
       });
     const deadline = Date.now() + 15000;
     while (
@@ -426,6 +457,15 @@ async function invoke(action, data = {}) {
     if (action === "recent-tabs-focus" && !data.id)
       return native("focus", { id: workspace.state.activeTabId });
     if (action === "metrics" || action === "trim-memory") return native(action);
+    if (["site-cookies", "page-json", "adblock-site"].includes(action))
+      return native(action, {
+        ...data,
+        id: data.id || workspace.state.activeTabId,
+      });
+    if (action === "password-apps" || action === "password-app-open")
+      return native(action, data);
+    if (["extensions-unpacked", "extensions-reload", "extensions-watch"].includes(action))
+      return native(action, { ...data, profile: profileId() });
     if (action === "extension-actions") return native(action);
     if (action === "private-window") return native(action);
     if (action === "extension-action")
@@ -621,6 +661,8 @@ async function invoke(action, data = {}) {
     if (action === "native-archive-idle")
       return native("test-archive-idle", data);
     if (action === "native-minis") return native("test-minis", data);
+    if (action === "native-install-unpacked")
+      return native("test-install-unpacked", { ...data, profile: profileId() });
     if (action === "native-diagnostics" || action === "native-evaluate")
       return native(
         action === "native-diagnostics" ? "diagnostics" : "evaluate-page",

@@ -437,6 +437,67 @@ function reorderSpace(state, id, beforeId) {
 const BUILT_IN_PROFILES = new Set(["default", "work"]);
 // Deleting a profile's last Space leaves nothing to reach it by. Drop the empty
 // profile, and keep its history and archived tabs in a surviving Space's profile.
+// Today tabs showing a page another tab already shows; the active or most
+// recently used copy stays. Pinned tabs and splits are deliberate, so they stay.
+function duplicateTabIds(state, spaceId) {
+  const inSplit = new Set((state.splits || []).flatMap((split) => split.tabIds));
+  const copies = new Map();
+  for (const tab of state.tabs) {
+    if (tab.spaceId !== spaceId || tab.kind !== "today" || tab.closed) continue;
+    if (inSplit.has(tab.id) || !/^https?:/.test(tab.url)) continue;
+    const key = tab.url.split("#")[0];
+    copies.set(key, [...(copies.get(key) || []), tab]);
+  }
+  const rank = (tab) =>
+    tab.id === state.activeTabId ? Infinity : tab.lastActive || 0;
+  return [...copies.values()].flatMap((tabs) =>
+    tabs
+      .sort((a, b) => rank(b) - rank(a))
+      .slice(1)
+      .map((tab) => tab.id),
+  );
+}
+// Throwaway Spaces leave nothing behind: no tabs, archive rows or history.
+function removeThrowawaySpaces(state, onlyId) {
+  let gone = state.spaces.filter(
+    (space) => space.throwaway && (!onlyId || space.id === onlyId),
+  );
+  if (!gone.length) return [];
+  if (gone.length === state.spaces.length) {
+    const kept = gone.shift();
+    delete kept.throwaway;
+    state.tabs = state.tabs.filter((tab) => tab.spaceId !== kept.id);
+    state.folders = state.folders.filter((f) => f.spaceId !== kept.id);
+    state.archive = state.archive.filter((row) => row.spaceId !== kept.id);
+    state.history = state.history.filter((row) => row.profileId !== kept.profileId);
+    Object.assign(kept, { name: "Personal", profileId: "default" });
+    state.tabs.push(newTab(kept.id));
+  }
+  const spaces = new Set(gone.map((space) => space.id)),
+    profiles = new Set(gone.map((space) => space.profileId));
+  const tabs = new Set(
+    state.tabs.filter((tab) => spaces.has(tab.spaceId)).map((tab) => tab.id),
+  );
+  state.tabs = state.tabs.filter((tab) => !tabs.has(tab.id));
+  state.splits = (state.splits || []).filter(
+    (split) => !split.tabIds.some((id) => tabs.has(id)),
+  );
+  state.folders = state.folders.filter((f) => !spaces.has(f.spaceId));
+  state.archive = state.archive.filter((row) => !spaces.has(row.spaceId));
+  state.spaces = state.spaces.filter((space) => !spaces.has(space.id));
+  const shared = new Set(state.spaces.map((space) => space.profileId));
+  state.history = state.history.filter(
+    (row) => !profiles.has(row.profileId) || shared.has(row.profileId),
+  );
+  state.settings.routes = (state.settings.routes || []).filter(
+    (route) => !spaces.has(route.spaceId),
+  );
+  if (spaces.has(state.settings.defaultSpaceId))
+    state.settings.defaultSpaceId = state.spaces[0].id;
+  if (spaces.has(state.activeSpaceId) || !state.tabs.some((t) => t.id === state.activeTabId))
+    selectSpace(state, state.spaces[0].id);
+  return removeEmptyProfiles(state);
+}
 function removeEmptyProfiles(state) {
   const spaceIds = new Set(state.spaces.map((s) => s.id));
   const owners = new Set(state.spaces.map((s) => s.profileId));
@@ -460,6 +521,8 @@ function removeEmptyProfiles(state) {
 module.exports = {
   BUILT_IN_PROFILES,
   removeEmptyProfiles,
+  removeThrowawaySpaces,
+  duplicateTabIds,
   PULLS_URL,
   isShellPage,
   splits,

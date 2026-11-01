@@ -2931,3 +2931,66 @@ body.tabs-top #toolbar-add-space {
 .pr-notice {
   opacity: 0.7;
 }
+
+.capture-ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.capture-tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.capture-tools input:not([type="color"]) {
+  flex: 1;
+  min-width: 0;
+}
+.cookie-list,
+.json-tree {
+  max-height: 55vh;
+  overflow: auto;
+}
+.cookie-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+.cookie-row > div {
+  min-width: 0;
+}
+.cookie-row small,
+.cookie-row code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.json-tree {
+  font: 12px/1.6 ui-monospace, Menlo, monospace;
+}
+.json-tree details,
+.json-tree details > div {
+  padding-left: 14px;
+}
+.json-tree summary {
+  cursor: pointer;
+  margin-left: -14px;
+}
+.json-key {
+  font-weight: 600;
+}
+.json-string {
+  color: #2f8f4e;
+  overflow-wrap: anywhere;
+}
+.json-number,
+.json-boolean {
+  color: #3b6fd4;
+}
+.json-null {
+  opacity: 0.6;
+}

@@ -32,10 +32,12 @@
           ["dark", "Dark"],
         ],
         s.appearance || (s.dark ? "dark" : "light"),
-      )}</select></label><label class="setting-row"><span>Hide top toolbar</span><input id="toolbar-hidden" type="checkbox" ${s.toolbarHidden ? "checked" : ""}></label><label class="setting-row"><span>Collapse pinned section</span><input id="pins-collapsed" type="checkbox" ${s.pinnedCollapsed ? "checked" : ""}></label><label class="setting-row"><span>Remove tracking parameters when copying links</span><input id="clean-copy" type="checkbox" ${s.cleanCopy !== false ? "checked" : ""}></label>${window.wing.engine === "chromium" ? `<label class="setting-row"><span>Automatic picture-in-picture<small>Let eligible playing videos follow you when switching tabs.</small></span><input id="automatic-pip" type="checkbox" ${s.automaticPictureInPicture ? "checked" : ""}></label>` : ""}<div class="setting-row"><span>Download folder<small>${esc(s.downloadDirectory || "Ask when downloading")}</small></span><button id="download-directory" class="secondary">Choose folder</button></div><div class="setting-row"><span>Default web browser</span><button id="make-default" class="secondary">Set Wing as default</button></div><div class="dialog-actions"><button id="search-settings" class="secondary">Site searches</button><button id="routing-settings" class="secondary">Link routing</button><button id="folders-settings" class="secondary">Folders</button></div></div>`,
+      )}</select></label><label class="setting-row"><span>Ask which Space opens links from other apps</span><input id="ask-space" type="checkbox" ${s.askSpaceForLinks ? "checked" : ""}></label><label class="setting-row"><span>Hide top toolbar</span><input id="toolbar-hidden" type="checkbox" ${s.toolbarHidden ? "checked" : ""}></label><label class="setting-row"><span>Collapse pinned section</span><input id="pins-collapsed" type="checkbox" ${s.pinnedCollapsed ? "checked" : ""}></label><label class="setting-row"><span>Remove tracking parameters when copying links</span><input id="clean-copy" type="checkbox" ${s.cleanCopy !== false ? "checked" : ""}></label>${window.wing.engine === "chromium" ? `<label class="setting-row"><span>Automatic picture-in-picture<small>Let eligible playing videos follow you when switching tabs.</small></span><input id="automatic-pip" type="checkbox" ${s.automaticPictureInPicture ? "checked" : ""}></label>` : ""}<div class="setting-row"><span>Download folder<small>${esc(s.downloadDirectory || "Ask when downloading")}</small></span><button id="download-directory" class="secondary">Choose folder</button></div><div class="setting-row"><span>Default web browser</span><button id="make-default" class="secondary">Set Wing as default</button></div><div class="dialog-actions"><button id="search-settings" class="secondary">Site searches</button><button id="routing-settings" class="secondary">Link routing</button><button id="folders-settings" class="secondary">Folders</button></div></div>`,
     );
     $("#appearance").onchange = (e) =>
       act("features-settings", { appearance: e.target.value });
+    $("#ask-space").onchange = (e) =>
+      act("features-settings", { askSpaceForLinks: e.target.checked });
     $("#toolbar-hidden").onchange = (e) =>
       act("features-settings", { toolbarHidden: e.target.checked });
     $("#pins-collapsed").onchange = (e) =>
@@ -149,6 +151,39 @@
           "",
         )}<p>Permission changes apply to new requests. Reload the page to apply them to an existing session.</p><div class="dialog-actions"><button id="site-reload" class="secondary">Reload</button><button id="clear-site-data" class="danger">Clear this site’s data</button></div></div>`,
     );
+    document
+      .getElementById("site-zoom-reset")
+      .closest(".setting-row")
+      .insertAdjacentHTML(
+        "afterend",
+        `<label class="setting-row"><span>Block ads and trackers</span><input id="site-adblock" type="checkbox" disabled></label><div class="setting-row"><span>Cookies</span><button class="secondary" id="site-cookies">View…</button></div><div class="setting-row" id="site-passwords" hidden><span>Password manager</span><span id="site-password-apps"></span></div>`,
+      );
+    $("#site-cookies").onclick = showCookies;
+    act("adblock-site", {}).then((r) => {
+      const box = $("#site-adblock");
+      if (!box || !r?.host) return;
+      box.disabled = false;
+      box.checked = !r.allowed;
+      box.onchange = async () => {
+        await act("adblock-site", { allow: !box.checked });
+        act("reload");
+      };
+    });
+    act("password-apps").then((r) => {
+      if (!$("#site-passwords") || !r?.apps?.length) return;
+      $("#site-passwords").hidden = false;
+      $("#site-password-apps").innerHTML = r.apps
+        .map(
+          (name) =>
+            `<button class="secondary" data-password-app="${esc(name)}">${esc(name)}</button>`,
+        )
+        .join(" ");
+      document.querySelectorAll("[data-password-app]").forEach(
+        (button) =>
+          (button.onclick = () =>
+            act("password-app-open", { name: button.dataset.passwordApp })),
+      );
+    });
     document.getElementById("site-zoom-reset").onclick = (event) => {
       act("zoom", { reset: true });
       event.currentTarget.textContent = "100%";
@@ -164,6 +199,92 @@
     $("#clear-site-data").onclick = () => perform("clear-site-data");
     $("#site-reload").onclick = () => perform("reload");
   }
+  async function showCookies() {
+    const { cookies } = (await act("site-cookies", {})) || {};
+    if (!cookies) return;
+    showModal(
+      "cookies",
+      `<div class="dialog-content">${dialogHead(`Cookies (${cookies.length})`)}<div class="cookie-list">${
+        cookies
+          .map(
+            (c, i) =>
+              `<div class="cookie-row"><div><strong>${esc(c.name)}</strong><small>${esc(c.domain)}${esc(c.path)}${c.httpOnly ? " · HttpOnly" : ""}${c.secure ? " · Secure" : ""} · ${c.session ? "session" : esc(new Date(c.expires * 1000).toLocaleDateString())}</small><code>${esc(c.value)}</code></div><button class="secondary" data-cookie-delete="${i}">Delete</button></div>`,
+          )
+          .join("") || "<p>This site has no cookies.</p>"
+      }</div><div class="dialog-actions"><button class="secondary" id="cookies-header">Copy as Header</button><button class="secondary" id="cookies-json">Copy as JSON</button></div></div>`,
+    );
+    $("#cookies-header").onclick = () =>
+      act("copy-text", {
+        text: cookies.map((c) => `${c.name}=${c.value}`).join("; "),
+      }).then(() => toast("Cookies copied."));
+    $("#cookies-json").onclick = () =>
+      act("copy-text", { text: JSON.stringify(cookies, null, 2) }).then(() =>
+        toast("Cookies copied."),
+      );
+    document.querySelectorAll("[data-cookie-delete]").forEach(
+      (button) =>
+        (button.onclick = async () => {
+          const { name, domain, path } = cookies[button.dataset.cookieDelete];
+          await act("site-cookies", { operation: "delete", name, domain, path });
+          showCookies();
+        }),
+    );
+  }
+  async function showJSON() {
+    const page = await act("page-json");
+    let value;
+    try {
+      value = JSON.parse(page?.text);
+    } catch {
+      toast("This page isn't JSON.");
+      return;
+    }
+    let budget = 5000;
+    const node = (key, item, depth) => {
+      const label = key === null ? "" : `<span class="json-key">${esc(key)}</span>: `;
+      if (item === null || typeof item !== "object")
+        return `<div>${label}<span class="json-${item === null ? "null" : typeof item}">${esc(JSON.stringify(item))}</span></div>`;
+      const entries = Object.entries(item);
+      const open = Array.isArray(item) ? `[${entries.length}]` : `{${entries.length}}`;
+      if (--budget < 0) return `<div>${label}${open} …</div>`;
+      return `<details ${depth < 2 ? "open" : ""}><summary>${label}${open}</summary>${entries
+        .map(([k, v]) => node(k, v, depth + 1))
+        .join("")}</details>`;
+    };
+    showModal(
+      "json",
+      `<div class="dialog-content">${dialogHead("JSON")}${page.truncated ? "<p>Showing the first 5 MB, which cut the page off.</p>" : ""}<div class="json-tree">${node(null, value, 0)}</div><div class="dialog-actions"><button class="secondary" id="json-copy">Copy Formatted</button></div></div>`,
+    );
+    $("#json-copy").onclick = () =>
+      act("copy-text", { text: JSON.stringify(value, null, 2) }).then(() =>
+        toast("JSON copied."),
+      );
+  }
+  window.__wingPickSpace = (url) =>
+    new Promise((resolve) => {
+      showModal(
+        "space-picker",
+        `<div class="dialog-content">${dialogHead("Open in which Space?")}<p>${esc(url)}</p><div class="dialog-actions">${state.spaces
+          .map(
+            (space) =>
+              `<button class="secondary" data-pick-space="${esc(space.id)}">${esc(space.name)}</button>`,
+          )
+          .join("")}</div></div>`,
+      );
+      const waiting = setInterval(() => {
+        if (modalType === "space-picker") return;
+        clearInterval(waiting);
+        resolve(null);
+      }, 200);
+      document.querySelectorAll("[data-pick-space]").forEach(
+        (button) =>
+          (button.onclick = () => {
+            clearInterval(waiting);
+            closeModal();
+            resolve(button.dataset.pickSpace);
+          }),
+      );
+    });
   function editFolder(folder = null) {
     showModal(
       "folder-edit",
@@ -306,6 +427,8 @@
     showSearches,
     showRoutes,
     showSiteControls,
+    showCookies,
+    showJSON,
     showFolders,
     editFolder,
     commands: () => [
@@ -334,6 +457,28 @@
         : []),
       command("Browsing & workspace settings", showPreferences),
       command("Site controls", showSiteControls),
+      command("View cookies for this site", showCookies),
+      command("View page as JSON", showJSON),
+      command("New throwaway Space", () => perform("new-throwaway")),
+      command("Close duplicate tabs", async () => {
+        const r = await perform("close-duplicates");
+        toast(
+          r?.count
+            ? `Moved ${r.count} duplicate tab${r.count > 1 ? "s" : ""} to the archive.`
+            : "No duplicate tabs in this Space.",
+        );
+      }),
+      command("Group tabs by site", () => perform("group-by-site")),
+      command("Reload unpacked extensions", async () => {
+        const r = await perform("extensions-reload");
+        if (r) toast(`Reloaded ${r.count} unpacked extension${r.count === 1 ? "" : "s"}.`);
+      }),
+      command("Reload extensions when their files change", async () => {
+        const now = await perform("extensions-unpacked");
+        if (!now) return;
+        const r = await act("extensions-watch", { on: !now.watching });
+        toast(r?.watching ? `Watching ${r.count} unpacked extension${r.count === 1 ? "" : "s"}.` : now.watching ? "Stopped watching extensions." : "No unpacked extensions to watch.");
+      }),
       command("Site searches", showSearches),
       command("Link routing", showRoutes),
       command("Manage folders", showFolders),
