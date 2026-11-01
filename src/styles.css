@@ -438,104 +438,38 @@ footer > .icon {
   inherits: true;
   initial-value: 0;
 }
-@property --address-sheen {
-  syntax: "<percentage>";
-  inherits: true;
-  initial-value: -20%;
-}
 #address {
   --progress: 0;
-  --address-edge: calc(var(--progress) * 100%);
-  --address-light: color-mix(in srgb, var(--accent) 34%, white);
   position: relative;
-  isolation: isolate;
-  transition: --progress 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-/* Light gathers behind the address: a fill that fades in from the left and
-   ends in a soft glowing edge. */
-#address::before,
+/* A hairline along the bottom of the field; real load progress sets its length. */
 #address::after {
   content: "";
   position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
   pointer-events: none;
   opacity: 0;
-  transition: opacity 320ms ease;
-}
-#address::before {
-  background:
-    radial-gradient(
-      ellipse 72px 150% at var(--address-edge) 50%,
-      color-mix(in srgb, var(--address-light) 72%, transparent),
-      transparent 72%
-    ),
-    linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--accent) 3%, transparent),
-      color-mix(in srgb, var(--accent) 17%, transparent) var(--address-edge),
-      transparent var(--address-edge)
-    );
-}
-/* A slow glint travels through the part already loaded. */
-#address::after {
-  background: linear-gradient(
-    105deg,
-    transparent calc(var(--address-sheen) - 14%),
-    color-mix(in srgb, white 46%, transparent) var(--address-sheen),
-    transparent calc(var(--address-sheen) + 14%)
-  );
-  mask-image: linear-gradient(
-    90deg,
-    #000 var(--address-edge),
-    transparent var(--address-edge)
-  );
-}
-#address.loading::before,
-#address.loading::after,
-#address.load-done::before,
-#address.load-done::after {
-  opacity: 1;
+  transform: scaleX(var(--progress));
+  transform-origin: left;
+  transition:
+    transform 240ms ease-out,
+    opacity 200ms ease;
 }
 #address.loading::after {
-  animation: address-sheen 1.9s cubic-bezier(0.45, 0, 0.3, 1) infinite;
-}
-/* On arrival one last sweep crosses the whole field and everything dissolves. */
-#address.load-done::before {
-  animation: address-settle 700ms ease forwards;
+  opacity: 1;
 }
 #address.load-done::after {
-  animation:
-    address-sheen 620ms cubic-bezier(0.3, 0, 0.2, 1) forwards,
-    address-settle 700ms ease forwards;
-}
-@keyframes address-sheen {
-  from {
-    --address-sheen: -20%;
-  }
-  to {
-    --address-sheen: 120%;
-  }
-}
-@keyframes address-settle {
-  from {
-    opacity: 1;
-  }
-  55% {
-    opacity: 0.8;
-  }
-  to {
-    opacity: 0;
-  }
+  opacity: 0;
+  transition-delay: 0ms, 160ms;
 }
 @media (prefers-reduced-motion: reduce) {
-  #address {
-    transition: none;
-  }
-  #address.loading::after,
-  #address.load-done::after {
-    display: none;
+  #address::after {
+    transition: opacity 200ms ease;
   }
 }
 #downloads-button .download-track {

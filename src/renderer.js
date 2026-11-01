@@ -481,7 +481,7 @@ function render() {
   );
   $("#back").disabled = !t?.canGoBack;
   $("#forward").disabled = !t?.canGoForward;
-  // Safari-style: real load progress fills the address field.
+  // A hairline in the address field follows real load progress.
   const address = $("#address");
   const finished =
     address.classList.contains("loading") &&
@@ -498,7 +498,7 @@ function render() {
     addressFinish = setTimeout(() => {
       address.classList.remove("load-done");
       address.style.setProperty("--progress", 0);
-    }, 700);
+    }, 400);
   }
   if (t?.loading)
     address.style.setProperty(
