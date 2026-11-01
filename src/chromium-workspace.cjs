@@ -10,7 +10,8 @@ const { TabSwitcher } = require("./recent-tabs.cjs");
 class ChromiumWorkspace {
   constructor(saved) {
     this.state = saved ? M.validateState(saved) : M.initialState();
-    M.removeEmptyProfiles(this.state);
+    // The host deletes these profiles' browser data once the removal is saved.
+    this.removedProfiles = M.removeEmptyProfiles(this.state);
     this.journal = new O.OrganizationJournal();
     this.revealed = false;
     this.runtime = new Map();
@@ -204,7 +205,7 @@ class ChromiumWorkspace {
         if (s.settings.defaultSpaceId === data.id)
           s.settings.defaultSpaceId = s.spaces[0].id;
         M.selectSpace(s, s.spaces[0].id);
-        M.removeEmptyProfiles(s);
+        this.removedProfiles.push(...M.removeEmptyProfiles(s));
         break;
       }
       case "boost":

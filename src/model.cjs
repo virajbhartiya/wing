@@ -453,7 +453,7 @@ function removeEmptyProfiles(state) {
       tab.spaceId = home.id;
       tab.folderId = null;
     }
-  return state;
+  return [...removed];
 }
 module.exports = {
   BUILT_IN_PROFILES,

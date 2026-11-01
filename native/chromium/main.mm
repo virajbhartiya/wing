@@ -877,6 +877,48 @@ static NSString *PermissionSymbol(NSArray *kinds) {
          ready(profile, profile ? nil : @"Import destination could not load.");
        }];
 }
+// The engine's profile deletion ends the app when it targets the last-used
+// profile, so removed profiles are queued and deleted before the next launch
+// loads anything.
+- (NSString *)deletedProfilesPath {
+  return [_workspacePath.stringByDeletingLastPathComponent
+      stringByAppendingPathComponent:@"wing-deleted-profiles.json"];
+}
+- (NSArray *)deletedProfiles {
+  NSData *saved = [NSData dataWithContentsOfFile:self.deletedProfilesPath];
+  id list = saved ? [NSJSONSerialization JSONObjectWithData:saved
+                                                    options:0
+                                                      error:nil]
+                  : nil;
+  return [list isKindOfClass:NSArray.class] ? list : @[];
+}
+- (BOOL)saveDeletedProfiles:(NSArray *)list {
+  NSData *body = [NSJSONSerialization dataWithJSONObject:list
+                                                 options:0
+                                                   error:nil];
+  return body && SaveWorkspace(body, self.deletedProfilesPath);
+}
+- (void)deleteProfileData:(NSString *)identity reply:(NSNumber *)rid {
+  for (ArdiaCoreTab *tab in @[
+         _serviceTabs[identity] ?: (id)NSNull.null,
+         _extensionManagers[identity] ?: (id)NSNull.null
+       ])
+    if ([tab isKindOfClass:ArdiaCoreTab.class]) {
+      tab.delegate = nil;
+      [tab closeNow];
+    }
+  [_serviceTabs removeObjectForKey:identity];
+  [_extensionManagers removeObjectForKey:identity];
+  [_serviceURLs removeObjectForKey:identity];
+  [_profiles removeObjectForKey:identity];
+  NSMutableArray *queued = [self.deletedProfiles mutableCopy];
+  if (![queued containsObject:identity])
+    [queued addObject:identity];
+  if ([self saveDeletedProfiles:queued])
+    [self reply:rid result:@YES error:nil];
+  else
+    [self reply:rid result:nil error:@"Profile could not be queued."];
+}
 - (void)rollbackImportProfile:(NSString *)identity
                    completion:(WingImportReply)completion {
   if (![_importProfiles containsObject:identity] || _importCommitted) {
@@ -2941,6 +2983,20 @@ static NSString *PermissionSymbol(NSArray *kinds) {
         }];
     return;
   }
+  if ([action isEqual:@"delete-profile"]) {
+    NSString *identity = data[@"id"];
+    BOOL live = [[_lastSync[@"workspace"][@"profiles"] valueForKey:@"id"]
+        containsObject:identity];
+    for (NSDictionary *space in _lastSync[@"workspace"][@"spaces"])
+      live = live || [space[@"profileId"] isEqual:identity];
+    if (!Identifier(identity) || [identity isEqual:@"default"] ||
+        [identity isEqual:@"work"] || live || _importProcess) {
+      [self reply:rid result:nil error:@"This profile can't be deleted."];
+      return;
+    }
+    [self deleteProfileData:identity reply:rid];
+    return;
+  }
   if ([action isEqual:@"file-save"]) {
     if (![data[@"text"] isKindOfClass:NSString.class] ||
         ![data[@"name"] isKindOfClass:NSString.class]) {
@@ -3498,6 +3554,86 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   return YES;
 }
 @end
+// Runs before the engine starts: the engine reloads every profile it still
+// knows about, which would recreate a deleted folder.
+static void PurgeDeletedProfiles(NSString *root) {
+  NSFileManager *files = NSFileManager.defaultManager;
+  NSString *queuePath =
+      [root stringByAppendingPathComponent:@"wing-deleted-profiles.json"];
+  NSData *saved = [NSData dataWithContentsOfFile:queuePath];
+  NSArray *queued = saved ? [NSJSONSerialization JSONObjectWithData:saved
+                                                            options:0
+                                                              error:nil]
+                          : nil;
+  if (![queued isKindOfClass:NSArray.class] || !queued.count)
+    return;
+  // Another running copy still has these profiles open.
+  NSString *lock = [files
+      destinationOfSymbolicLinkAtPath:[root stringByAppendingPathComponent:
+                                                @"SingletonLock"]
+                                error:nil];
+  if (lock && kill([lock componentsSeparatedByString:@"-"].lastObject.intValue,
+                   0) == 0)
+    return;
+  NSData *body = [NSData
+      dataWithContentsOfFile:[root stringByAppendingPathComponent:
+                                       @"wing-workspace.json"]];
+  NSDictionary *workspace =
+      body ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil]
+           : nil;
+  if (![workspace isKindOfClass:NSDictionary.class] ||
+      ![workspace[@"profiles"] isKindOfClass:NSArray.class] ||
+      ![workspace[@"spaces"] isKindOfClass:NSArray.class])
+    return;
+  NSMutableSet *live =
+      [NSMutableSet setWithArray:[workspace[@"profiles"] valueForKey:@"id"]];
+  [live addObjectsFromArray:[workspace[@"spaces"] valueForKey:@"profileId"]];
+  NSString *statePath = [root stringByAppendingPathComponent:@"Local State"];
+  NSData *stateBody = [NSData dataWithContentsOfFile:statePath];
+  NSMutableDictionary *state =
+      stateBody ? [NSJSONSerialization
+                      JSONObjectWithData:stateBody
+                                 options:NSJSONReadingMutableContainers
+                                   error:nil]
+                : nil;
+  NSMutableDictionary *known =
+      [state isKindOfClass:NSDictionary.class] ? state[@"profile"][@"info_cache"]
+                                               : nil;
+  if (![known isKindOfClass:NSMutableDictionary.class])
+    known = nil;
+  NSMutableArray *remaining = [NSMutableArray new];
+  for (NSString *identity in queued) {
+    if (!Identifier(identity) || [identity isEqual:@"default"] ||
+        [identity isEqual:@"work"] || [live containsObject:identity])
+      continue;
+    NSString *name = [@"Wing-" stringByAppendingString:identity];
+    NSString *path = [root stringByAppendingPathComponent:name];
+    if ([files fileExistsAtPath:path] &&
+        ![files removeItemAtPath:path error:nil]) {
+      [remaining addObject:identity];
+      continue;
+    }
+    [known removeObjectForKey:name];
+    // The engine reopens its last-used profile at launch.
+    if ([state[@"profile"][@"last_used"] isEqual:name])
+      [state[@"profile"] removeObjectForKey:@"last_used"];
+    id active = state[@"profile"][@"last_active_profiles"];
+    if ([active isKindOfClass:NSMutableArray.class])
+      [active removeObject:name];
+  }
+  if (known) {
+    NSData *updated = [NSJSONSerialization dataWithJSONObject:state
+                                                      options:0
+                                                        error:nil];
+    if (updated)
+      SaveWorkspace(updated, statePath);
+  }
+  NSData *rest = [NSJSONSerialization dataWithJSONObject:remaining
+                                                 options:0
+                                                   error:nil];
+  if (rest)
+    SaveWorkspace(rest, queuePath);
+}
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
     NSNumber *qualification = [NSBundle.mainBundle objectForInfoDictionaryKey:@"WingQualificationOnly"];
@@ -3538,6 +3674,7 @@ int main(int argc, const char *argv[]) {
       return 73;
     }
     setenv("WING_PROFILE_ROOT", directory.UTF8String, 1);
+    PurgeDeletedProfiles(directory);
     std::string profile = std::string("--user-data-dir=") + directory.UTF8String;
     std::vector<const char *> args;
     args.push_back(argv[0]);

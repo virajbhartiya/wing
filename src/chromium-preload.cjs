@@ -155,6 +155,9 @@ async function publish(persist = true) {
         }
       : null,
   });
+  if (persist)
+    for (const id of workspace.removedProfiles.splice(0))
+      native("delete-profile", { id }).catch(() => {});
   states.forEach((callback) => callback(snapshot));
   return snapshot;
 }

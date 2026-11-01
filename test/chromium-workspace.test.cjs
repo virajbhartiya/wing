@@ -252,7 +252,9 @@ test("a profile with no Spaces left is removed without losing its data", () => {
   });
   const archived = M.newTab("gone-space", "https://a.test/");
   saved.archive.push(archived);
-  const { state } = new ChromiumWorkspace(saved);
+  const cleaned = new ChromiumWorkspace(saved);
+  const { state } = cleaned;
+  assert.deepEqual(cleaned.removedProfiles, ["imported"]);
   const ids = state.profiles.map((p) => p.id);
   assert.ok(!ids.includes("imported"));
   assert.ok(ids.includes("work"));
@@ -268,4 +270,5 @@ test("a profile with no Spaces left is removed without losing its data", () => {
   });
   workspace.action("delete-space", { id: "imported-space" });
   assert.ok(!workspace.state.profiles.some((p) => p.id === "imported"));
+  assert.deepEqual(workspace.removedProfiles, ["imported"]);
 });
