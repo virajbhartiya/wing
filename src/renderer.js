@@ -32,6 +32,7 @@ const icons = {
   home: '<path d="m3 10 9-7 9 7M5 9v12h14V9M10 21v-7h4v7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   play: '<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>',
+  pip: '<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="12" width="6" height="4" rx="1" fill="currentColor"/>',
   pause: '<path d="M8 5v14M16 5v14" stroke-width="3"/>',
   warning:
     '<path d="M12 3.5 2.5 20h19L12 3.5Z"/><path d="M12 10v4.5M12 17.5v.01"/>',
@@ -608,7 +609,24 @@ async function toggleReader() {
 let mediaTabId = null,
   mediaPaused = false,
   mediaAudible = false,
-  mediaDismissed = null;
+  mediaDismissed = null,
+  mediaInfo = null,
+  mediaMarkup = "",
+  mediaPoll = null;
+function mediaClock(seconds) {
+  const total = Math.max(0, Math.floor(seconds || 0));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+async function controlMedia(op) {
+  const id = mediaTabId;
+  if (!id) return null;
+  const info = await act("media-control", { id, op });
+  if (id !== mediaTabId) return info;
+  mediaInfo = info;
+  mediaPaused = !info?.playing;
+  renderMediaPlayer();
+  return info;
+}
 function renderMediaPlayer() {
   if (
     mediaDismissed &&
@@ -616,23 +634,58 @@ function renderMediaPlayer() {
   )
     mediaDismissed = null;
   const audible = state.tabs.find(
-    (t) => t.audible && t.id !== state.activeTabId,
+    (t) =>
+      t.audible && t.id !== state.activeTabId && t.id !== mediaDismissed,
   );
-  if (audible && audible.id !== mediaDismissed && audible.id !== mediaTabId) {
+  if (audible && audible.id !== mediaTabId && !state.tabs.find((t) => t.id === mediaTabId)?.audible) {
     mediaTabId = audible.id;
     mediaPaused = false;
     mediaAudible = false;
   }
   const t = state.tabs.find((t) => t.id === mediaTabId && !t.closed);
-  if (!t) mediaTabId = null;
+  if (!t) {
+    mediaTabId = null;
+    mediaInfo = null;
+  }
   // Chromium reports sound for a moment after a pause; only a new start resumes.
   if (t?.audible && !mediaAudible) mediaPaused = false;
   mediaAudible = !!t?.audible;
-  const show = !!t && t.id !== state.activeTabId && (t.audible || mediaPaused);
-  $("#media-player").hidden = !show;
-  if (!show) return;
-  $("#media-player").innerHTML =
-    `<button class="media-info" data-media="open" title="Go to tab"><span class="tab-icon">${tabIcon(t)}</span><span><strong>${esc(t.customTitle || t.title)}</strong><small>${esc(host(t.url))}</small></span></button><button class="icon" data-media="toggle" aria-label="${mediaPaused ? "Play" : "Pause"}" title="${mediaPaused ? "Play" : "Pause"}">${icon(mediaPaused ? "play" : "pause")}</button><button class="icon" data-media="mute" aria-label="${t.muted ? "Unmute" : "Mute"}" title="${t.muted ? "Unmute" : "Mute"}">${icon(t.muted ? "muted" : "volume")}</button><button class="icon" data-media="dismiss" aria-label="Hide player" title="Hide">${icon("close")}</button>`;
+  // A muted tab reports no sound but keeps playing.
+  const show =
+    !!t &&
+    t.id !== state.activeTabId &&
+    (t.audible || mediaPaused || (t.muted && mediaInfo?.playing));
+  const player = $("#media-player");
+  player.hidden = !show;
+  if (show && !mediaPoll) {
+    mediaPoll = setInterval(() => controlMedia("state"), 1000);
+    controlMedia("state");
+  } else if (!show && mediaPoll) {
+    clearInterval(mediaPoll);
+    mediaPoll = null;
+    mediaInfo = null;
+  }
+  if (!show) {
+    mediaMarkup = "";
+    return;
+  }
+  const info = mediaInfo || {};
+  const artwork = /^https?:/.test(info.artwork || "") ? info.artwork : "";
+  const button = (name, label, symbol) =>
+    `<button class="icon" data-media="${name}" aria-label="${label}" title="${label}">${icon(symbol)}</button>`;
+  const markup =
+    `<div class="media-top"><button class="media-info" data-media="open" title="Go to tab"><span class="tab-icon${artwork ? " media-art" : ""}">${artwork ? `<img src="${esc(artwork)}" alt="">` : tabIcon(t)}</span><span><strong>${esc(info.title || t.customTitle || t.title)}</strong><small>${esc(info.artist || host(t.url))}</small></span></button>${button("dismiss", "Hide player", "close")}</div>` +
+    `<div class="media-progress" hidden><span></span></div>` +
+    `<div class="media-controls">${button("back", "Back 10 seconds", "back")}${button("toggle", mediaPaused ? "Play" : "Pause", mediaPaused ? "play" : "pause")}${button("ahead", "Ahead 10 seconds", "forward")}${button("mute", t.muted ? "Unmute" : "Mute", t.muted ? "muted" : "volume")}${info.video ? button("pip", "Open in a floating window", "pip") : ""}</div>`;
+  // Rebuilt only on a change, so polling can't swallow a click in progress.
+  if (markup !== mediaMarkup) player.innerHTML = mediaMarkup = markup;
+  const progress = player.querySelector(".media-progress");
+  const known = Number.isFinite(info.duration) && info.duration > 0;
+  progress.hidden = !known;
+  if (known) {
+    progress.title = `${mediaClock(info.time)} / ${mediaClock(info.duration)}`;
+    progress.firstChild.style.width = `${Math.min(100, (info.time / info.duration) * 100)}%`;
+  }
 }
 $("#media-player").addEventListener("click", async (e) => {
   const button = e.target.closest("[data-media]");
@@ -643,10 +696,17 @@ $("#media-player").addEventListener("click", async (e) => {
       act("select-tab", { id });
       break;
     case "toggle": {
-      const r = await act("media-toggle", { id });
+      const r = await controlMedia("toggle");
       if (r?.none) toast("This page’s player can’t be controlled from Wing.");
-      else mediaPaused = !r?.playing;
-      renderMediaPlayer();
+      break;
+    }
+    case "back":
+    case "ahead":
+      controlMedia(button.dataset.media);
+      break;
+    case "pip": {
+      const r = await act("picture-in-picture", { id });
+      if (r?.ok === false) toast("This video can’t open in a floating window.");
       break;
     }
     case "mute":

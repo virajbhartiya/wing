@@ -467,3 +467,22 @@ test("closing the last open tab shows the home page instead of opening a Favorit
   workspace.closed(favorite.id);
   assert.equal(s.activeTabId, null);
 });
+
+test("a tab keeps its site icon through closing, reopening and an empty report while loading", () => {
+  const workspace = new ChromiumWorkspace();
+  const s = workspace.state;
+  workspace.action("new-tab", { url: "https://today.example/" });
+  const id = s.activeTabId;
+  const icon = "https://cdn.example/icon.svg";
+  assert.equal(workspace.pageChanged({ id, url: "https://today.example/", favicon: icon }), true);
+  workspace.closed(id, true);
+  assert.equal(s.archive[0].favicon, icon);
+  workspace.action("restore", {});
+  const page = { id, url: "https://today.example/", favicon: "", loading: true };
+  assert.equal(workspace.pageChanged(page), false);
+  const restored = workspace.snapshot().tabs.find((t) => t.id === id);
+  assert.equal(restored.favicon, icon);
+  assert.equal(restored.faviconOrigin, "https://today.example");
+  workspace.pageChanged({ id, url: "https://today.example/", favicon: "javascript:alert(1)" });
+  assert.equal(s.tabs.find((t) => t.id === id).favicon, icon);
+});

@@ -3772,13 +3772,23 @@ static NSString *const kHasUnsavedInputScript =
         }];
     return;
   }
-  if ([action isEqual:@"media-toggle"]) {
-    // Pauses whatever is playing, or resumes the media that was paused last.
-    // evaluate: completes when the script posts its result.
-    [page evaluate:@"post('result',JSON.stringify((()=>{const m=[...document.querySelectorAll('video,audio')];"
-                   @"const p=m.find(e=>!e.paused&&!e.ended);if(p){p.pause();return{playing:false}}"
-                   @"const r=m.find(e=>e.currentTime>0&&!e.ended)||m[0];"
-                   @"if(r){r.play().catch(()=>{});return{playing:true}}return{playing:false,none:true}})()))"
+  if ([action isEqual:@"media-control"]) {
+    // Reports the page's media; "toggle" also pauses whatever is playing or resumes
+    // the media that was paused last. evaluate: completes when the script posts.
+    NSString *op = data[@"op"];
+    if (![@[ @"state", @"toggle", @"back", @"ahead" ] containsObject:op ?: @""]) op = @"state";
+    [page evaluate:[NSString stringWithFormat:
+                       @"post('result',JSON.stringify((()=>{const op='%@',m=[...document.querySelectorAll('video,audio')];"
+                       @"const c=m.find(e=>!e.paused&&!e.ended)||m.find(e=>e.currentTime>0&&!e.ended)||m[0];"
+                       @"if(!c)return{playing:false,none:true};"
+                       @"if(op==='toggle'){if(c.paused)c.play().catch(()=>{});else c.pause()}"
+                       @"if(op==='back')c.currentTime=Math.max(0,c.currentTime-10);"
+                       @"if(op==='ahead')c.currentTime+=10;"
+                       @"const d=navigator.mediaSession?.metadata;"
+                       @"return{playing:!c.paused&&!c.ended,video:c.tagName==='VIDEO'&&c.videoWidth>0,"
+                       @"time:c.currentTime,duration:c.duration,title:d?.title||'',artist:d?.artist||'',"
+                       @"artwork:d?.artwork?.at(-1)?.src||''}})()))",
+                       op]
         completion:^(NSString *json) {
           id value = json ? Parse(json) : nil;
           if ([value isKindOfClass:NSString.class])

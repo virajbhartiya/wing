@@ -832,7 +832,7 @@ async function invoke(action, data = {}) {
         "picture-in-picture",
         "stop-sharing",
         "fill-login",
-        "media-toggle",
+        "media-control",
         "reader",
       ].includes(action)
     )
@@ -862,7 +862,6 @@ async function invoke(action, data = {}) {
               ? {
                   type: "recent-tabs",
                   selectedId: recent.selectedId,
-                  // Site icons live in runtime state, not the saved tab.
                   tabs: recent.ids.map((id) => ({
                     ...workspace.state.tabs.find((t) => t.id === id),
                     ...workspace.runtime.get(id),

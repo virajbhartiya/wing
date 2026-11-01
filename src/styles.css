@@ -2191,15 +2191,46 @@ input.switch:focus-visible {
 
 /* Mini player for a background tab that is playing sound. */
 #media-player {
-  display: flex;
-  align-items: center;
-  gap: 2px;
   margin: 10px 0 0;
-  padding: 6px 6px 6px 8px;
+  padding: 8px;
   border-radius: var(--wing-radius-lg);
   background: var(--surface);
   box-shadow: var(--wing-shadow);
   animation: tab-enter 160ms var(--wing-ease);
+}
+#media-player[hidden] {
+  display: none;
+}
+#media-player .media-top,
+#media-player .media-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+#media-player .media-controls {
+  justify-content: center;
+  margin-top: 4px;
+}
+#media-player .media-art img {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  object-fit: cover;
+}
+#media-player .media-progress {
+  height: 3px;
+  margin: 8px 2px 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
+#media-player .media-progress[hidden] {
+  display: none;
+}
+#media-player .media-progress span {
+  display: block;
+  height: 100%;
+  background: var(--ink);
 }
 #media-player .media-info {
   display: flex;

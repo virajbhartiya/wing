@@ -97,6 +97,12 @@ class ChromiumWorkspace {
       tab.url = M.normalizeURL(event.url);
     if (event.title && !tab.customTitle)
       tab.title = String(event.title).slice(0, 300);
+    // Saved with the tab, since a page reports no icon until it has loaded again.
+    const previousFavicon = tab.favicon;
+    if (/^https?:/.test(event.favicon || "") && event.favicon.length <= 4096) {
+      tab.favicon = event.favicon;
+      tab.faviconOrigin = new URL(tab.url).origin;
+    }
     this.runtime.set(tab.id, {
       loading: !!event.loading,
       canGoBack: !!event.canGoBack,
@@ -106,12 +112,15 @@ class ChromiumWorkspace {
       capturing: !!event.capturing,
       screenSharing: !!event.screenSharing,
       pictureInPicture: !!event.pictureInPicture,
-      favicon: event.favicon || "",
       progress: Number(event.progress) || 0,
       zoom: Number(event.zoom) || 1,
       crashed: typeof event.crashed === "string" ? event.crashed : "",
     });
-    return tab.url !== previousURL || tab.title !== previousTitle;
+    return (
+      tab.url !== previousURL ||
+      tab.title !== previousTitle ||
+      tab.favicon !== previousFavicon
+    );
   }
   closed(id, archive = false) {
     this.runtime.delete(id);
