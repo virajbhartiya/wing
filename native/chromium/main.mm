@@ -3059,6 +3059,15 @@ static NSString *const kHasUnsavedInputScript =
       _automaticPictureInPicture = automaticPiP;
       [ArdiaCoreEngine setAutoPictureInPicture:automaticPiP];
     }
+    // Wing's mode reaches window controls and each page's prefers-color-scheme.
+    NSString *appearance = state[@"settings"][@"appearance"];
+    if (![appearance isKindOfClass:NSString.class])
+      appearance = [state[@"settings"][@"dark"] boolValue] ? @"dark" : @"light";
+    NSAppearanceName appearanceName = [appearance isEqual:@"dark"]    ? NSAppearanceNameDarkAqua
+                                      : [appearance isEqual:@"light"] ? NSAppearanceNameAqua
+                                                                      : nil;
+    if (![NSApp.appearance.name isEqual:appearanceName] && (NSApp.appearance || appearanceName))
+      NSApp.appearance = appearanceName ? [NSAppearance appearanceNamed:appearanceName] : nil;
     [self applyLayout];
     [self reply:rid result:@{@"ok" : @YES} error:nil];
     for (NSString *url in [_externalURLs copy])

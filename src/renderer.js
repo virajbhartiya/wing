@@ -511,6 +511,10 @@ function render() {
     address.style.setProperty("--progress", 0);
   renderDownloadsButton();
   renderMediaPlayer();
+  if (!systemAppearanceChecked) {
+    systemAppearanceChecked = true;
+    syncSystemAppearance();
+  }
   const zoom = Math.round((t?.zoom || 1) * 100);
   $("#zoom-badge").hidden = !t || zoom === 100;
   $("#zoom-badge").textContent = zoom + "%";
@@ -605,6 +609,17 @@ async function toggleReader() {
   const r = await act("reader");
   if (r?.unavailable) toast("Reader isn’t available for this page.");
 }
+// "Follow system" tracks macOS; a forced mode never reaches this until it's cleared.
+const systemDarkMedia = matchMedia("(prefers-color-scheme: dark)");
+function syncSystemAppearance() {
+  if (
+    state?.settings.appearance === "system" &&
+    state.settings.dark !== systemDarkMedia.matches
+  )
+    act("features-settings", { appearance: "system" });
+}
+systemDarkMedia.addEventListener("change", syncSystemAppearance);
+let systemAppearanceChecked = false;
 // Arc-style mini player: controls the last background tab that played sound.
 let mediaTabId = null,
   mediaPaused = false,
@@ -613,6 +628,20 @@ let mediaTabId = null,
   mediaInfo = null,
   mediaMarkup = "",
   mediaPoll = null;
+function appearanceChooser() {
+  const current =
+    state.settings.appearance || (state.settings.dark ? "dark" : "light");
+  return `<div class="appearance-modes" role="radiogroup" aria-label="Appearance">${[
+    ["light", "Light"],
+    ["dark", "Dark"],
+    ["system", "Auto"],
+  ]
+    .map(
+      ([mode, label]) =>
+        `<button type="button" role="radio" class="${mode === current ? "selected" : ""}" aria-checked="${mode === current}" data-mode="${mode}" title="${mode === "system" ? "Follow your Mac" : label}">${label}</button>`,
+    )
+    .join("")}</div>`;
+}
 function mediaClock(seconds) {
   const total = Math.max(0, Math.floor(seconds || 0));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
@@ -1417,7 +1446,7 @@ function openSpace(space = null) {
       )
       .join(
         "",
-      )}<label class="swatch custom-swatch" title="Custom color"><input type="color" id="custom-color" value="${esc(s.colors.light?.accent?.slice(0, 7) || "#5b4bd6")}" aria-label="Custom color"></label></div><input type="hidden" name="theme" value="${s.theme}"></div><details class="theme-editor"><summary>Customize every interface color</summary><div class="theme-editor-head"><select id="color-mode" aria-label="Color appearance"><option value="light">Light appearance</option><option value="dark">Dark appearance</option></select><button type="button" class="secondary" id="reset-colors">Reset colors</button></div><div id="color-fields" class="color-fields"></div><p>Colors apply to Wing’s interface in this Space. Website colors stay under the site’s control.</p></details><label class="field"><span>Browser profile</span><select name="profileId">${state.profiles.map((p) => `<option value="${p.id}" ${p.id === s.profileId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}<option value="new">Create a separate profile</option></select></label><p style="font-size:11px;color:var(--muted)">Spaces using the same profile share logins and favorites. A separate profile starts with a clean session.</p><div class="dialog-actions">${space && state.spaces.length > 1 ? '<button type="button" class="danger" id="delete-space">Archive & remove Space</button>' : ""}<button type="button" class="secondary" data-dismiss>Cancel</button><button class="primary">${space ? "Save changes" : "Create Space"}</button></div></form>`,
+      )}<label class="swatch custom-swatch" title="Custom color"><input type="color" id="custom-color" value="${esc(s.colors.light?.accent?.slice(0, 7) || "#5b4bd6")}" aria-label="Custom color"></label></div><input type="hidden" name="theme" value="${s.theme}"></div>${appearanceChooser()}<details class="theme-editor"><summary>Customize every interface color</summary><div class="theme-editor-head"><select id="color-mode" aria-label="Color appearance"><option value="light">Light appearance</option><option value="dark">Dark appearance</option></select><button type="button" class="secondary" id="reset-colors">Reset colors</button></div><div id="color-fields" class="color-fields"></div><p>Colors apply to Wing’s interface in this Space. Website colors stay under the site’s control.</p></details><label class="field"><span>Browser profile</span><select name="profileId">${state.profiles.map((p) => `<option value="${p.id}" ${p.id === s.profileId ? "selected" : ""}>${esc(p.name)}</option>`).join("")}<option value="new">Create a separate profile</option></select></label><p style="font-size:11px;color:var(--muted)">Spaces using the same profile share logins and favorites. A separate profile starts with a clean session.</p><div class="dialog-actions">${space && state.spaces.length > 1 ? '<button type="button" class="danger" id="delete-space">Archive & remove Space</button>' : ""}<button type="button" class="secondary" data-dismiss>Cancel</button><button class="primary">${space ? "Save changes" : "Create Space"}</button></div></form>`,
   );
   $("#space-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1493,6 +1522,27 @@ function openSpace(space = null) {
       $("#space-icon").focus();
       act("emoji-panel");
     };
+  $("#modal")
+    .querySelectorAll("[data-mode]")
+    .forEach((b) => {
+      b.onclick = async () => {
+        const previewing = !!themePreview;
+        await act("features-settings", { appearance: b.dataset.mode });
+        document
+          .querySelectorAll("[data-mode]")
+          .forEach((other) => {
+            other.classList.toggle("selected", other === b);
+            other.setAttribute("aria-checked", String(other === b));
+          });
+        // Following the system settles once macOS has reported its mode.
+        setTimeout(() => {
+          if (!$("#color-mode")) return;
+          $("#color-mode").value = state.settings.dark ? "dark" : "light";
+          drawColorFields();
+          if (previewing) previewColors();
+        }, 150);
+      };
+    });
   const colorMode = () => $("#color-mode").value;
   function previewColors() {
     themePreview = { space: s, dark: colorMode() === "dark" };

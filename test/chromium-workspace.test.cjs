@@ -512,3 +512,17 @@ test("a dragged tab moves between Favorites, pinned tabs, folders and Today", ()
   assert.equal(tab(a).kind, "today");
   assert.equal(tab(a).folderId, null);
 });
+
+test("appearance modes persist and Follow system takes the Mac's current mode", () => {
+  const workspace = new ChromiumWorkspace();
+  const s = workspace.state;
+  workspace.action("features-settings", { appearance: "dark", systemDark: false });
+  assert.equal(s.settings.dark, true);
+  workspace.action("features-settings", { appearance: "light", systemDark: true });
+  assert.equal(s.settings.dark, false);
+  workspace.action("features-settings", { appearance: "system", systemDark: true });
+  assert.equal(s.settings.appearance, "system");
+  assert.equal(s.settings.dark, true);
+  const restored = new ChromiumWorkspace(JSON.parse(JSON.stringify(s)));
+  assert.equal(restored.state.settings.appearance, "system");
+});

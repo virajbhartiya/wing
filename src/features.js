@@ -503,6 +503,15 @@
       command("Developer tools", () => perform("devtools")),
       command("Restore closed tab", () => perform("restore")),
       command("Clear today", () => perform("clear-today")),
+      command("Use light appearance", () =>
+        perform("features-settings", { appearance: "light" }),
+      ),
+      command("Use dark appearance", () =>
+        perform("features-settings", { appearance: "dark" }),
+      ),
+      command("Follow system appearance", () =>
+        perform("features-settings", { appearance: "system" }),
+      ),
     ],
     downloads(records) {
       return (
