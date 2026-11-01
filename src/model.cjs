@@ -163,6 +163,7 @@ function selectSpace(state, spaceId) {
     visible.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
   state.activeTabId = next?.id || null;
 }
+// Closing a tab never opens a Favorite: with nothing else open, the home page shows.
 function archiveTab(state, tabId) {
   const tab = state.tabs.find((t) => t.id === tabId);
   if (!tab) return;
@@ -185,7 +186,7 @@ function archiveTab(state, tabId) {
   if (state.activeTabId === tabId)
     state.activeTabId =
       visibleTabs(state)
-        .filter((t) => !t.closed)
+        .filter((t) => !t.closed && t.kind !== "favorite")
         .at(-1)?.id || null;
 }
 /** Saved destinations survive closing their current document. Removal is explicit. */
@@ -209,7 +210,12 @@ function closePage(state, tabId, { archive = false } = {}) {
   }
   if (state.activeTabId === tabId) {
     const next = visibleTabs(state)
-      .filter((candidate) => candidate.id !== tabId && !candidate.closed)
+      .filter(
+        (candidate) =>
+          candidate.id !== tabId &&
+          !candidate.closed &&
+          candidate.kind !== "favorite",
+      )
       .sort((a, b) => b.lastActive - a.lastActive)[0];
     state.activeTabId = next?.id || null;
   }

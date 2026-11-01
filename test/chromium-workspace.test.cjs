@@ -453,3 +453,17 @@ test("with no remembered tab, a Space opens its most recent tab even if that is 
   workspace.action("space", { id: first });
   assert.equal(s.activeTabId, favorite);
 });
+
+test("closing the last open tab shows the home page instead of opening a Favorite", () => {
+  const workspace = new ChromiumWorkspace();
+  const s = workspace.state;
+  s.tabs = s.tabs.filter((t) => t.kind === "favorite");
+  workspace.action("new-tab", { url: "https://today.example/" });
+  const today = s.activeTabId;
+  workspace.closed(today);
+  assert.equal(s.activeTabId, null);
+  const favorite = s.tabs.find((t) => t.kind === "favorite");
+  workspace.action("select-tab", { id: favorite.id });
+  workspace.closed(favorite.id);
+  assert.equal(s.activeTabId, null);
+});
