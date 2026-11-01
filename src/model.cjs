@@ -160,9 +160,7 @@ function selectSpace(state, spaceId) {
   const visible = visibleTabs(state).filter((t) => !t.closed);
   const next =
     visible.find((t) => t.id === target.lastTabId) ||
-    visible
-      .filter((t) => t.kind !== "favorite")
-      .sort((a, b) => b.lastActive - a.lastActive)[0];
+    visible.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
   state.activeTabId = next?.id || null;
 }
 function archiveTab(state, tabId) {

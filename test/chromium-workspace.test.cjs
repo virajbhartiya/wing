@@ -436,3 +436,20 @@ test("the profile shortcut returns to that profile's last Space", () => {
   });
   assert.equal(workspace.state.activeSpaceId, second);
 });
+
+test("with no remembered tab, a Space opens its most recent tab even if that is a Favorite", () => {
+  const workspace = new ChromiumWorkspace();
+  const s = workspace.state;
+  const first = s.activeSpaceId;
+  workspace.action("new-tab", { url: "https://today.example/" });
+  const today = s.activeTabId;
+  workspace.action("new-tab", { url: "https://favorite.example/" });
+  const favorite = s.activeTabId;
+  workspace.action("favorite", { id: favorite });
+  s.tabs.find((t) => t.id === today).lastActive = 1;
+  s.tabs.find((t) => t.id === favorite).lastActive = Date.now() + 1000;
+  workspace.action("save-space", { name: "Other", profileId: "new" });
+  delete s.spaces.find((space) => space.id === first).lastTabId;
+  workspace.action("space", { id: first });
+  assert.equal(s.activeTabId, favorite);
+});
