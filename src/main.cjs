@@ -1541,6 +1541,12 @@ async function action(name, data = {}) {
       layout();
       break;
     }
+    case "split-dissolve": {
+      for (const member of M.splits.members(state, data.id || state.activeTabId))
+        M.splits.removeTab(state, member.id);
+      layout();
+      break;
+    }
     case "split-orientation": {
       if (!["horizontal", "vertical"].includes(data.orientation)) throw Error("Unknown split orientation");
       state.settings.splitOrientation = data.orientation;
@@ -1787,6 +1793,7 @@ async function action(name, data = {}) {
     "split-orientation",
     "split-ratio",
     "split-remove-pane",
+    "split-dissolve",
     "swipe-profile",
     "move-tab",
     "reorder-tab",

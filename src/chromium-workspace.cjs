@@ -535,6 +535,10 @@ class ChromiumWorkspace {
       case "split-remove-pane":
         M.splits.removeTab(s, data.id || s.activeTabId);
         break;
+      case "split-dissolve":
+        for (const member of M.splits.members(s, data.id || s.activeTabId))
+          M.splits.removeTab(s, member.id);
+        break;
       case "split-ratio":
         M.splits.resize(
           s,

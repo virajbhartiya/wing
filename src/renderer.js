@@ -195,8 +195,9 @@ function tabHTML(t) {
     ? group.tabIds.includes(state.activeTabId)
     : t.id === state.activeTabId;
   const title = sidebarTabTitle(t);
-  return `<div class="tab ${active ? "active" : ""} ${group ? "is-split" : ""}" role="button" tabindex="0" draggable="true" data-tab="${esc(t.id)}" title="${esc(title)}\n${esc(t.url)}"><span class="tab-icon">${group ? icon("split") : tabIcon(t)}</span><span class="tab-title">${esc(title)}</span>${group ? `<span class="split-count">${group.tabIds.length}</span>` : ""}${t.screenSharing ? `<button class="tab-capture" data-stop-sharing="${esc(t.id)}" aria-label="Stop sharing ${esc(t.title)}" title="Stop sharing this screen or tab">●</button>` : t.capturing ? `<span class="tab-capture" aria-label="Camera or microphone in use" title="Camera or microphone in use">●</span>` : ""}${t.pictureInPicture ? `<span class="tab-pip" aria-label="Picture-in-picture active" title="Playing in picture-in-picture">▣</span>` : ""}${t.audible || t.muted ? `<button class="tab-audio" data-mute="${esc(t.id)}" title="${t.muted ? "Unmute tab" : "Mute tab"}" aria-label="${t.muted ? "Unmute" : "Mute"} ${esc(t.title)}">${icon(t.muted ? "muted" : "volume")}</button>` : ""}<button class="tab-close" data-close="${t.id}" title="Close ${group ? "split" : "tab"}" aria-label="Close ${esc(title)}">${icon("close")}</button></div>`;
+  return `<div class="tab ${active ? "active" : ""} ${group ? "is-split" : ""}" role="button" tabindex="0" draggable="true" data-tab="${esc(t.id)}" title="${esc(title)}\n${esc(t.url)}"><span class="tab-icon">${group ? icon("split") : tabIcon(t)}</span><span class="tab-title">${esc(title)}</span>${group ? `<span class="split-count">${group.tabIds.length}</span><button class="split-separate" data-separate-split="${esc(t.id)}" aria-label="Separate split view" title="Separate split view">${icon("close")}</button>` : ""}${t.screenSharing ? `<button class="tab-capture" data-stop-sharing="${esc(t.id)}" aria-label="Stop sharing ${esc(t.title)}" title="Stop sharing this screen or tab">●</button>` : t.capturing ? `<span class="tab-capture" aria-label="Camera or microphone in use" title="Camera or microphone in use">●</span>` : ""}${t.pictureInPicture ? `<span class="tab-pip" aria-label="Picture-in-picture active" title="Playing in picture-in-picture">▣</span>` : ""}${t.audible || t.muted ? `<button class="tab-audio" data-mute="${esc(t.id)}" title="${t.muted ? "Unmute tab" : "Mute tab"}" aria-label="${t.muted ? "Unmute" : "Mute"} ${esc(t.title)}">${icon(t.muted ? "muted" : "volume")}</button>` : ""}<button class="tab-close" data-close="${t.id}" title="Close ${group ? "split" : "tab"}" aria-label="Close ${esc(title)}">${icon("close")}</button></div>`;
 }
+let addressFinish = 0;
 let sidebarFrameSequence = -1,
   sidebarFrameNumber = -1,
   sidebarFrameProgress = 1;
@@ -482,11 +483,31 @@ function render() {
   $("#forward").disabled = !t?.canGoForward;
   // Safari-style: real load progress fills the address field.
   const address = $("#address");
+  const finished =
+    address.classList.contains("loading") &&
+    !t?.loading &&
+    address.dataset.loadingTab === t?.id;
   address.classList.toggle("loading", !!t?.loading);
-  address.style.setProperty(
-    "--progress",
-    t?.loading ? Math.max(0.08, Math.min(1, t.progress || 0)) : 0,
-  );
+  address.dataset.loadingTab = t?.loading ? t.id : "";
+  if (t?.loading) {
+    clearTimeout(addressFinish);
+    address.classList.remove("load-done");
+  } else if (finished) {
+    address.classList.add("load-done");
+    clearTimeout(addressFinish);
+    addressFinish = setTimeout(() => {
+      address.classList.remove("load-done");
+      address.style.setProperty("--progress", 0);
+    }, 700);
+  }
+  if (t?.loading)
+    address.style.setProperty(
+      "--progress",
+      Math.max(0.08, Math.min(1, t.progress || 0)),
+    );
+  else if (finished) address.style.setProperty("--progress", 1);
+  else if (!address.classList.contains("load-done"))
+    address.style.setProperty("--progress", 0);
   renderDownloadsButton();
   renderMediaPlayer();
   const zoom = Math.round((t?.zoom || 1) * 100);
@@ -914,6 +935,19 @@ function renderPalette(rebuild = true) {
         glyph: "split",
         run: () => openSplit(),
       },
+      ...(state.splitId
+        ? [
+            {
+              label: "Separate Split View",
+              detail: "Put these pages back in their own tabs",
+              glyph: "split",
+              run: () => {
+                closeModal();
+                act("split-dissolve");
+              },
+            },
+          ]
+        : []),
       ...localServers.map(({ port, command }) => ({
         label: `localhost:${port}`,
         detail: `Local server · ${command}`,
@@ -2426,6 +2460,12 @@ document.addEventListener("click", (e) => {
   if (capture) {
     e.stopPropagation();
     act("stop-sharing", { id: capture.dataset.stopSharing });
+    return;
+  }
+  const separate = e.target.closest("[data-separate-split]");
+  if (separate) {
+    e.stopPropagation();
+    act("split-dissolve", { id: separate.dataset.separateSplit });
     return;
   }
   const close = e.target.closest("[data-close]");

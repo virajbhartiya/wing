@@ -13,6 +13,7 @@ const runTool = async (tool, args) => {
   return result.stdout;
 };
 const navigation = require("./navigation.cjs");
+const { nativeMessages } = require("./native-messages.cjs");
 const pending = new Map(),
   states = new Set(),
   commands = new Set(),
@@ -53,10 +54,8 @@ function native(action, data = {}) {
         : 15000,
     );
     pending.set(id, { resolve, reject, timer });
-    window.__wingNativePost(
-      "wing-request",
-      JSON.stringify({ id, action, data }),
-    );
+    for (const { kind, json } of nativeMessages(id, action, data))
+      window.__wingNativePost(kind, json);
   });
 }
 // The native host draws the macOS sidebar material behind this page.
@@ -485,6 +484,16 @@ async function invoke(action, data = {}) {
             symbol: "rectangle.split.2x1",
             disabled: tab.id === state.activeTabId,
           },
+          ...((state.splits || []).some((split) => split.tabIds.includes(tab.id))
+            ? [
+                {
+                  ...operation("Separate Split View", "split-dissolve", {
+                    id: tab.id,
+                  }),
+                  symbol: "rectangle",
+                },
+              ]
+            : []),
           {
             ...operation(live.muted ? "Unmute Tab" : "Mute Tab", "mute-tab", {
               id: tab.id,

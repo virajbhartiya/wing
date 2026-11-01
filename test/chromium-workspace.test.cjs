@@ -203,3 +203,38 @@ test("a crashed page leaves the layout so Wing can show its own crash page", () 
   workspace.pageChanged({ id, url: "https://a.example/", crashed: "" });
   assert.equal(workspace.layout(1200, 800).length, 1);
 });
+
+test("separating a split view frees every page", () => {
+  const workspace = new ChromiumWorkspace();
+  workspace.action("new-tab", { url: "https://a.example" });
+  const a = workspace.state.activeTabId;
+  workspace.action("new-tab", { url: "https://b.example" });
+  workspace.action("split", { id: a });
+  assert.equal(workspace.state.splits.length, 1);
+  workspace.action("split-dissolve", { id: a });
+  assert.equal(workspace.state.splits.length, 0);
+  assert.ok(workspace.state.tabs.some((tab) => tab.id === a && !tab.closed));
+});
+
+test("large native requests stay under the engine's message limit", () => {
+  const { nativeMessages } = require("../src/native-messages.cjs");
+  const data = {
+    title: 'caf\u00e9 \ud83d\ude00 "quoted" \\'.repeat(20000),
+  };
+  const messages = nativeMessages(7, "sync", data);
+  assert.ok(messages.length > 1);
+  let text = "";
+  messages.forEach((message, index) => {
+    assert.equal(message.kind, "wing-request-part");
+    assert.ok(Buffer.byteLength(message.json) < 64 * 1024);
+    const part = JSON.parse(message.json);
+    assert.equal(part.id, 7);
+    assert.equal(part.index, index);
+    assert.equal(part.count, messages.length);
+    text += part.text;
+  });
+  assert.deepEqual(JSON.parse(text), { id: 7, action: "sync", data });
+  const [small] = nativeMessages(8, "state", { title: "caf\u00e9" });
+  assert.equal(small.kind, "wing-request");
+  assert.deepEqual(JSON.parse(small.json).data, { title: "caf\u00e9" });
+});

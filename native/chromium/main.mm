@@ -257,6 +257,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 @implementation WingChromiumHost {
   ArdiaCoreWindow *_window, *_uiWindow;
   ArdiaCoreTab *_shell;
+  NSMutableString *_requestParts;
+  NSNumber *_requestPartsId;
   NSString *_shellURL, *_workspacePath;
   NSMutableDictionary<NSString *, ArdiaCoreTab *> *_tabs;
   NSMutableDictionary<NSString *, ArdiaCoreProfile *> *_profiles;
@@ -2458,8 +2460,35 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   // shell document, in its main frame, may invoke host capabilities.
   if (tab != _shell || !main || ![_shell.url isEqual:_shellURL] ||
       ![origin isEqual:_shell.committedOrigin] ||
-      ![kind isEqual:@"wing-request"] || json.length > 8000000)
+      (![kind isEqual:@"wing-request"] && ![kind isEqual:@"wing-request-part"]) ||
+      json.length > 8000000)
     return;
+  if ([kind isEqual:@"wing-request-part"]) {
+    // Large requests arrive in order as parts, see src/native-messages.cjs.
+    NSDictionary *part = Parse(json);
+    if (![part isKindOfClass:NSDictionary.class] ||
+        ![part[@"id"] isKindOfClass:NSNumber.class] ||
+        ![part[@"index"] isKindOfClass:NSNumber.class] ||
+        ![part[@"count"] isKindOfClass:NSNumber.class] ||
+        ![part[@"text"] isKindOfClass:NSString.class])
+      return;
+    NSInteger index = [part[@"index"] integerValue];
+    if (index == 0) {
+      _requestParts = [NSMutableString new];
+      _requestPartsId = part[@"id"];
+    } else if (!_requestParts || ![_requestPartsId isEqual:part[@"id"]]) {
+      return;
+    }
+    [_requestParts appendString:part[@"text"]];
+    if (_requestParts.length > 8000000) {
+      _requestParts = nil;
+      return;
+    }
+    if (index + 1 < [part[@"count"] integerValue])
+      return;
+    json = _requestParts;
+    _requestParts = nil;
+  }
   NSDictionary *request = Parse(json);
   if (![request isKindOfClass:NSDictionary.class] ||
       ![request[@"id"] isKindOfClass:NSNumber.class] ||

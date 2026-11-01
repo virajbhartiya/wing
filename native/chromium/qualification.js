@@ -72,6 +72,48 @@
     "native boundary rejects malformed workspace",
   );
   checks.push("native bridge rejects malformed workspace data before mutation");
+  // The engine drops page messages over 64 KB, so large requests are sent in
+  // parts. This one is still malformed, so answering proves it was reassembled.
+  const oversized = await new Promise((resolve, reject) => {
+    const id = 90000002;
+    const receive = (event) => {
+      if (event.detail.kind !== "response" || event.detail.data.id !== id)
+        return;
+      clearTimeout(timer);
+      window.removeEventListener("wing-native", receive);
+      resolve(event.detail.data);
+    };
+    const timer = setTimeout(() => {
+      window.removeEventListener("wing-native", receive);
+      reject(Error("Oversized request was not answered"));
+    }, 2000);
+    window.addEventListener("wing-native", receive);
+    const text = JSON.stringify({
+      id,
+      action: "sync",
+      data: {
+        workspace: { tabs: [null], spaces: [] },
+        panes: [],
+        padding: "x".repeat(70000),
+      },
+    });
+    const count = Math.ceil(text.length / 30000);
+    for (let index = 0; index < count; index++)
+      window.__wingNativePost(
+        "wing-request-part",
+        JSON.stringify({
+          id,
+          index,
+          count,
+          text: text.slice(index * 30000, (index + 1) * 30000),
+        }),
+      );
+  });
+  assert(
+    oversized.error === "Invalid workspace layout",
+    "native boundary reassembles oversized requests",
+  );
+  checks.push("native bridge accepts requests over the engine message limit");
   if (WING_TEST.phase === "restart") {
     assert(
       initial.settings.automaticPictureInPicture === true,
