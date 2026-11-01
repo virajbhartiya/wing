@@ -142,6 +142,25 @@ test("Chromium sessions yield the current page and omit closed tabs", () => {
     { url: "https://pinned.test/", pinned: true },
   ]);
 });
+test("Chromium sessions omit tabs of closed windows", () => {
+  const file = Buffer.concat([
+    Buffer.from("SNSS"),
+    ints(3),
+    sessionCommand(0, ints(10, 1)),
+    navigation(1, 0, "https://open.test/"),
+    sessionCommand(0, ints(20, 2)),
+    navigation(2, 0, "https://closed-window.test/"),
+    // Moved out of the window before it closed, so this tab is still open.
+    sessionCommand(0, ints(20, 3)),
+    navigation(3, 0, "https://moved.test/"),
+    sessionCommand(0, ints(10, 3)),
+    sessionCommand(17, ints(20, 0)),
+  ]);
+  assert.deepEqual(F.parseSessionTabs(file), [
+    { url: "https://open.test/", pinned: false },
+    { url: "https://moved.test/", pinned: false },
+  ]);
+});
 test("credential CSV handles quoting and rejects unexpected columns", () => {
   const rows = F.parseCredentialCsv(
     'Title,URL,Username,Password,Notes\r\nA,https://a.test/,me,"p,""q",\nB,https://b.test/,me,,\n',

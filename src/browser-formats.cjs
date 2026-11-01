@@ -119,7 +119,9 @@ function parseSessionTabs(buffer) {
   const tabs = new Map(),
     selected = new Map(),
     closed = new Set(),
-    pinned = new Set();
+    pinned = new Set(),
+    windows = new Map(),
+    closedWindows = new Set();
   let position = 8;
   while (position + 3 <= buffer.length) {
     const size = buffer.readUInt16LE(position),
@@ -128,7 +130,9 @@ function parseSessionTabs(buffer) {
     position += 2 + size;
     if (size < 1) break;
     try {
-      if (command === 6) {
+      if (command === 0)
+        windows.set(payload.readInt32LE(4), payload.readInt32LE(0));
+      else if (command === 6) {
         // Pickle: uint32 length, int32 tab, int32 navigation index, string URL.
         const tab = payload.readInt32LE(4),
           index = payload.readInt32LE(8),
@@ -141,11 +145,12 @@ function parseSessionTabs(buffer) {
         if (payload[4]) pinned.add(payload.readInt32LE(0));
         else pinned.delete(payload.readInt32LE(0));
       } else if (command === 16) closed.add(payload.readInt32LE(0));
+      else if (command === 17) closedWindows.add(payload.readInt32LE(0));
     } catch {}
   }
   const result = [];
   for (const [tab, navigations] of tabs) {
-    if (closed.has(tab)) continue;
+    if (closed.has(tab) || closedWindows.has(windows.get(tab))) continue;
     const url =
       navigations.get(selected.get(tab)) ||
       navigations.get(Math.max(...navigations.keys()));

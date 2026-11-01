@@ -290,6 +290,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSMutableSet<NSString *> *_importProfiles;
   NSSet<NSString *> *_importExistingProfiles;
   BOOL _importCommitted;
+  BOOL _automaticTrimRunning;
   NSMutableDictionary<NSNumber *, WingImportReply> *_hostReplies;
   NSInteger _hostSequence;
   NSDictionary *_lastSync;
@@ -1351,6 +1352,18 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                                      return event;
                                    }];
 }
+// Editors exist on most web apps, so an editable element only counts as unsaved
+// once the user has typed in it and it still holds text. Sending a message
+// empties the editor, which lets the page sleep again.
+static NSString *const kTrackEditsScript =
+    @"(()=>{const key=Symbol.for('wing.edited');if(window[key])return;"
+    @"const edited=window[key]=new Set();addEventListener('input',e=>{"
+    @"if(e.target&&e.target.isContentEditable)edited.add(e.target);},true);})()";
+static NSString *const kHasUnsavedInputScript =
+    @"post('result',JSON.stringify([...(window[Symbol.for('wing.edited')]||[])]."
+    @"some(e=>e.isConnected&&e.textContent.trim())||[...document."
+    @"querySelectorAll('input,textarea')].some(e=>e.value!==e.defaultValue||"
+    @"e.checked!==e.defaultChecked)))";
 - (BOOL)mayRetirePage:(ArdiaCoreTab *)page {
   NSString *identity = [self identityForTab:page];
   if (_quitting || !identity || page.closed || page.loading ||
@@ -1416,10 +1429,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       continue;
     }
     dispatch_group_enter(group);
-    [page evaluate:@"post('result',JSON.stringify([...document."
-                   @"querySelectorAll('input,textarea,[contenteditable]')]."
-                   @"some(e=>e.isContentEditable||e.value!==e.defaultValue||"
-                   @"e.checked!==e.defaultChecked)))"
+    [page evaluate:kHasUnsavedInputScript
         completion:^(NSString *raw) {
           id value = raw ? Parse(raw) : nil;
           if ([value isKindOfClass:NSString.class])
@@ -1433,7 +1443,11 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 }
 - (void)trimMemoryAutomatic:(BOOL)automatic
                  completion:(void (^)(void))completion {
-  dispatch_group_t group = dispatch_group_create();
+  if (automatic && _automaticTrimRunning) {
+    completion();
+    return;
+  }
+  _automaticTrimRunning = _automaticTrimRunning || automatic;
   NSArray *records = [_lastSync[@"workspace"][@"tabs"]
       sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
                                                      NSDictionary *b) {
@@ -1443,9 +1457,27 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   for (ArdiaCoreTab *page in _tabs.allValues)
     if (!page.discarded && !page.closed)
       remaining++;
-  NSInteger limit =
-      [_lastSync[@"workspace"][@"settings"][@"maxLiveTabs"] integerValue] ?: 8;
-  for (NSDictionary *record in records) {
+  [self discardFrom:records
+              index:0
+          remaining:remaining
+              limit:[_lastSync[@"workspace"][@"settings"][@"maxLiveTabs"]
+                        integerValue] ?: 8
+          automatic:automatic
+         completion:^{
+           if (automatic)
+             self->_automaticTrimRunning = NO;
+           completion();
+         }];
+}
+// One page at a time, so the budget only counts pages that really slept.
+- (void)discardFrom:(NSArray *)records
+              index:(NSUInteger)index
+          remaining:(NSInteger)remaining
+              limit:(NSInteger)limit
+          automatic:(BOOL)automatic
+         completion:(void (^)(void))completion {
+  for (; index < records.count; index++) {
+    NSDictionary *record = records[index];
     ArdiaCoreTab *page = _tabs[record[@"id"]];
     if (!page)
       continue;
@@ -1456,23 +1488,34 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       continue;
     if (![self mayDiscardPage:page])
       continue;
-    remaining--;
-    dispatch_group_enter(group);
-    [page evaluate:@"post('result',JSON.stringify([...document."
-                   @"querySelectorAll('input,textarea,[contenteditable]')]."
-                   @"some(e=>e.isContentEditable||e.value!==e.defaultValue||"
-                   @"e.checked!==e.defaultChecked)))"
+    __block BOOL settled = NO;
+    void (^settle)(BOOL) = ^(BOOL clean) {
+      if (settled)
+        return;
+      settled = YES;
+      BOOL slept = clean && [self mayDiscardPage:page] && [page discard];
+      [self discardFrom:records
+                  index:index + 1
+              remaining:remaining - (slept ? 1 : 0)
+                  limit:limit
+              automatic:automatic
+             completion:completion];
+    };
+    [page evaluate:kHasUnsavedInputScript
         completion:^(NSString *raw) {
           id value = raw ? Parse(raw) : nil;
           if ([value isKindOfClass:NSString.class])
             value = Parse(value);
-          if ([value isKindOfClass:NSNumber.class] && ![value boolValue] &&
-              [self mayDiscardPage:page])
-            [page discard];
-          dispatch_group_leave(group);
+          settle([value isKindOfClass:NSNumber.class] && ![value boolValue]);
         }];
+    // A hung renderer never answers; it must not stall the remaining pages.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), ^{
+                     settle(NO);
+                   });
+    return;
   }
-  dispatch_group_notify(group, dispatch_get_main_queue(), completion);
+  completion();
 }
 // Menu items route through the same shell actions as keyboard shortcuts.
 // Keys the engine reserves are consumed in preHandleKeyEvent before the menu
@@ -2029,6 +2072,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       return;
     NSString *identity = NSUUID.UUID.UUIDString;
     self->_tabs[identity] = tab;
+    [tab executeJavaScript:kTrackEditsScript frame:nil];
     [self->_pendingCreatedTabs addObject:identity];
     self->_modelURLs[identity] = tab.url.length ? tab.url : @"about:blank";
     tab.delegate = self;
@@ -2082,6 +2126,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
     [_wakingTabs removeObject:identity];
   if (identity)
     [_appliedStyles removeObjectForKey:identity];
+  if (identity)
+    [tab executeJavaScript:kTrackEditsScript frame:nil];
   [self applyStyle:tab];
   [self pageChanged:tab];
   if ([_protectionTabs.allValues containsObject:tab])

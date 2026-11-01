@@ -815,6 +815,23 @@
     async () => !(await snapshot()).tabs.find((t) => t.id === sleeper)?.loading,
     "sleep fixture finishes loading before discard",
   );
+  // An editor nobody typed in must not keep a page awake; a typed one must.
+  await evaluate(
+    sleeper,
+    "(document.body.append(Object.assign(document.createElement('div'),{contentEditable:'true'})),true)",
+  );
+  await invoke("new-tab", { url: WING_TEST.base + "/editor" });
+  const editor = (await snapshot()).activeTabId;
+  await waitFor(
+    async () =>
+      (await snapshot()).tabs.find((t) => t.id === editor)?.title ===
+      "Fixture /editor",
+    "editor fixture loads",
+  );
+  await evaluate(
+    editor,
+    "(()=>{const e=Object.assign(document.createElement('div'),{contentEditable:'true',textContent:'unsaved draft'});document.body.append(e);return e.dispatchEvent(new Event('input',{bubbles:true}))})()",
+  );
   await invoke("select-tab", { id: first });
   await invoke("trim-memory");
   await waitFor(
@@ -824,6 +841,10 @@
     "clean background page sleeps",
   );
   const lifecycle = (await invoke("native-diagnostics")).tabs;
+  assert(
+    !lifecycle.find((t) => t.id === editor)?.discarded,
+    "typed editor remains live",
+  );
   assert(
     !lifecycle.find((t) => t.id === draft)?.discarded,
     "unsaved input remains live",
