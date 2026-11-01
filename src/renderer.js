@@ -864,7 +864,9 @@ function stopMetrics() {
   metricsTimer = null;
 }
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
-function closeModal() {
+// Native page views stay detached until the backdrop is released, so a caller
+// returning focus to the page has to wait for that instead of using the opener.
+function closeModal({ returnToPage = false } = {}) {
   const generation = ++modalGeneration;
   stopMetrics();
   const wasOpen = !!modalType && !$("#overlay").hidden;
@@ -877,7 +879,11 @@ function closeModal() {
     $("#overlay").classList.remove("closing");
     $("#overlay").hidden = true;
     $("#modal").innerHTML = "";
-    releaseOverlayBackdrop();
+    const released = releaseOverlayBackdrop();
+    if (returnToPage)
+      released.then(() => {
+        if (!modalType) window.wing.invoke("recent-tabs-focus");
+      });
   };
   if (wasOpen && !reducedMotion.matches) {
     $("#overlay").classList.add("closing");
@@ -889,6 +895,11 @@ function closeModal() {
       ? document.getElementById(modalOpener.id)
       : null;
   modalOpener = null;
+  if (returnToPage) {
+    if (state?.sidebarHidden && !$("#sidebar").matches(":hover"))
+      act("sidebar-reveal", { visible: false });
+    return;
+  }
   if (state?.sidebarHidden && !$("#sidebar").matches(":hover"))
     act("sidebar-reveal", { visible: false });
   const visibleOpener =

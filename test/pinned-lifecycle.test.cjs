@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 for (const kind of ['pinned', 'favorite']) {
-  test(`closing ${kind} preserves its identity, placement and saved address`, () => {
+  test(`closing ${kind} preserves its identity and placement, and resets only a pinned address`, () => {
     const state = M.initialState();
     const tab = state.tabs.find(t => t.kind === kind);
     tab.customTitle = tab.title = 'My saved destination';
@@ -13,7 +13,7 @@ for (const kind of ['pinned', 'favorite']) {
     state.activeTabId = tab.id;
     M.closePage(state, tab.id);
     assert.equal(state.tabs.find(t => t.id === tab.id), tab);
-    assert.equal(tab.url, tab.homeURL);
+    assert.equal(tab.url, kind === 'favorite' ? 'https://elsewhere.example/article' : tab.homeURL);
     assert.equal(tab.closed, true);
     assert.equal(tab.title, 'My saved destination');
     assert.equal(state.archive.length, 0);

@@ -392,3 +392,47 @@ test("a link can name the Space it opens in", () => {
   workspace.action("external-url", { url: "https://x.example/", spaceId: first });
   assert.equal(workspace.state.activeSpaceId, first);
 });
+
+test("a closed Favorite reopens on its current page and a pinned tab on its saved page", () => {
+  const workspace = new ChromiumWorkspace();
+  const open = (kind) => {
+    workspace.action("new-tab", { url: "https://a.example/home" });
+    const id = workspace.state.activeTabId;
+    workspace.action(kind, { id });
+    workspace.pageChanged({ id, url: "https://a.example/sub" });
+    workspace.closed(id);
+    workspace.action("select-tab", { id });
+    return workspace.state.tabs.find((t) => t.id === id);
+  };
+  assert.equal(open("favorite").url, "https://a.example/sub");
+  assert.equal(open("pin").url, "https://a.example/home");
+});
+
+test("a Space returns to the Favorite it was showing", () => {
+  const workspace = new ChromiumWorkspace();
+  const first = workspace.state.activeSpaceId;
+  workspace.action("new-tab", { url: "https://today.example/" });
+  workspace.action("new-tab", { url: "https://favorite.example/" });
+  const favorite = workspace.state.activeTabId;
+  workspace.action("favorite", { id: favorite });
+  workspace.action("save-space", { name: "Other", profileId: "new" });
+  workspace.action("new-tab", { url: "https://other.example/" });
+  workspace.action("space", { id: first });
+  assert.equal(workspace.state.activeTabId, favorite);
+});
+
+test("the profile shortcut returns to that profile's last Space", () => {
+  const workspace = new ChromiumWorkspace();
+  const first = workspace.state.activeSpaceId;
+  const profile = workspace.state.spaces[0].profileId;
+  workspace.action("save-space", { name: "Second", profileId: profile });
+  const second = workspace.state.activeSpaceId;
+  assert.notEqual(second, first);
+  const other = workspace.state.profiles.findIndex((p) => p.id !== profile);
+  workspace.action("space-index", { index: other });
+  assert.notEqual(workspace.state.activeSpaceId, second);
+  workspace.action("space-index", {
+    index: workspace.state.profiles.findIndex((p) => p.id === profile),
+  });
+  assert.equal(workspace.state.activeSpaceId, second);
+});

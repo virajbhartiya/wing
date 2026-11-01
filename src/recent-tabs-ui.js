@@ -6,10 +6,7 @@
   window.wing.onCommand((message) => {
     if (message.type === "recent-tabs-close") {
       if (modalType === "recent-tabs") {
-        closeModal();
-        requestAnimationFrame(() => {
-          if (!modalType) window.wing.invoke("recent-tabs-focus");
-        });
+        closeModal({ returnToPage: true });
       }
       selectedId = null;
       rowsKey = "";

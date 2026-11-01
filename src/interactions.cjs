@@ -232,7 +232,8 @@ function spaceForProfile(state, index) {
   if (!profile) return null;
   const active = state.spaces.find((s) => s.id === state.activeSpaceId);
   if (active?.profileId === profile.id) return active;
-  return state.spaces.find((s) => s.profileId === profile.id) || null;
+  const owned = state.spaces.filter((s) => s.profileId === profile.id);
+  return owned.find((s) => s.id === profile.lastSpaceId) || owned[0] || null;
 }
 
 // ⌘1–8 follow the on-screen order; ⌘9 is always the last tab.

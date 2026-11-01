@@ -149,11 +149,20 @@ function activate(state, tabId) {
   tab.lastActive = Date.now();
 }
 function selectSpace(state, spaceId) {
-  if (!state.spaces.some((s) => s.id === spaceId)) return;
+  const target = state.spaces.find((s) => s.id === spaceId);
+  if (!target) return;
+  // Each Space returns to the tab it was showing, which may be a Favorite.
+  const leaving = state.spaces.find((s) => s.id === state.activeSpaceId);
+  if (leaving && state.activeTabId) leaving.lastTabId = state.activeTabId;
+  const profile = state.profiles.find((p) => p.id === leaving?.profileId);
+  if (profile) profile.lastSpaceId = leaving.id;
   state.activeSpaceId = spaceId;
-  const next = visibleTabs(state)
-    .filter((t) => t.kind !== "favorite" && !t.closed)
-    .sort((a, b) => b.lastActive - a.lastActive)[0];
+  const visible = visibleTabs(state).filter((t) => !t.closed);
+  const next =
+    visible.find((t) => t.id === target.lastTabId) ||
+    visible
+      .filter((t) => t.kind !== "favorite")
+      .sort((a, b) => b.lastActive - a.lastActive)[0];
   state.activeTabId = next?.id || null;
 }
 function archiveTab(state, tabId) {
@@ -191,11 +200,14 @@ function closePage(state, tabId, { archive = false } = {}) {
   }
   tab.closedURL = tab.url;
   tab.closedAt = Date.now();
-  tab.url = tab.homeURL;
   tab.closed = true;
-  if (tab.faviconOrigin && tab.faviconOrigin !== new URL(tab.homeURL).origin) {
-    delete tab.favicon;
-    delete tab.faviconOrigin;
+  // A Favorite reopens where it was left; a pinned tab goes back to its saved page.
+  if (tab.kind !== "favorite") {
+    tab.url = tab.homeURL;
+    if (tab.faviconOrigin && tab.faviconOrigin !== new URL(tab.homeURL).origin) {
+      delete tab.favicon;
+      delete tab.faviconOrigin;
+    }
   }
   if (state.activeTabId === tabId) {
     const next = visibleTabs(state)
