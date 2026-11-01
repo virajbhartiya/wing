@@ -79,7 +79,7 @@ The real production-engine fixture verifies MV3 service workers, storage, messag
 
 From the command palette or Site Controls: view, delete and copy a site's cookies, view a page as a JSON tree, and reload unpacked extensions on demand or whenever their files change.
 
-The **Develop** menu and the command palette hold the page tools: DevTools (⌥⌘I / ⌥⌘J), Reload Ignoring Cache (⇧⌘R), View Page Source (⌥⌘U), Clear Data for This Site, and Open Page in Safari, Chrome or Firefox. Per-tab overrides cover cache, JavaScript, device size, color scheme, network speed and user agent. The palette also lists web servers listening on this machine as `localhost:PORT`. Self-signed certificates are accepted on localhost.
+The **Develop** menu and the command palette hold the page tools: DevTools (⌥⌘I / ⌥⌘J), Hard Refresh (⇧⌘R or Shift-click Reload), View Page Source (⌥⌘U), Clear Data for This Site, and Open Page in Safari, Chrome or Firefox. Per-tab overrides cover cache, JavaScript, device size, color scheme, network speed and user agent. The palette also lists web servers listening on this machine as `localhost:PORT`. Self-signed certificates are accepted on localhost.
 
 The command palette also has Block Requests, Copy as curl, Decode JWT from Clipboard, Format JSON from Clipboard, and Open This Page on localhost for each running dev server. Local and staging hosts get a badge in the address bar.
 

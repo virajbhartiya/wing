@@ -499,6 +499,7 @@
         $("#find-input").focus();
       }),
       command("Reload page", () => perform("reload")),
+      command("Hard refresh", () => perform("dev-reload")),
       command("Developer tools", () => perform("devtools")),
       command("Restore closed tab", () => perform("restore")),
       command("Clear today", () => perform("clear-today")),

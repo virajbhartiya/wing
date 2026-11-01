@@ -367,6 +367,11 @@ static NSString *gSearch = @"https://www.google.com/search?q=";
 - (BOOL)window:(ArdiaCoreWindow *)window preHandleKeyEvent:(NSEvent *)event {
   if (event.type != NSEventTypeKeyDown) return NO;
   NSEventModifierFlags flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) &&
+      [event.charactersIgnoringModifiers.lowercaseString isEqual:@"r"]) {
+    [_tab reloadIgnoringCache];
+    return YES;
+  }
   if (flags != NSEventModifierFlagCommand) return NO;
   NSString *key = event.charactersIgnoringModifiers.lowercaseString;
   NSDictionary *actions = @{

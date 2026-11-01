@@ -1814,13 +1814,14 @@ static NSString *const kHasUnsavedInputScript =
   [view addItem:NSMenuItem.separatorItem];
   [view addItem:[self action:@"Stop" key:@"." modifiers:cmd name:@"stop" args:nil]];
   [view addItem:[self action:@"Reload Page" key:@"r" modifiers:cmd name:@"reload" args:nil]];
+  [view addItem:[self action:@"Hard Refresh" key:@"r" modifiers:cmd | shift name:@"dev-reload" args:nil]];
   [view addItem:NSMenuItem.separatorItem];
   [view addItem:[self action:@"Actual Size" key:@"0" modifiers:cmd name:@"zoom" args:@{@"reset" : @YES}]];
   [view addItem:[self action:@"Zoom In" key:@"+" modifiers:cmd name:@"zoom" args:@{@"delta" : @1}]];
   [view addItem:[self action:@"Zoom Out" key:@"-" modifiers:cmd name:@"zoom" args:@{@"delta" : @(-1)}]];
   [view addItem:NSMenuItem.separatorItem];
   [view addItem:[self command:@"Split View…" key:@"2" modifiers:cmd | shift data:@{@"type" : @"split-picker"}]];
-  [view addItem:[self command:@"Show Reader" key:@"r" modifiers:cmd | shift data:@{@"type" : @"reader"}]];
+  [view addItem:[self command:@"Show Reader" key:@"r" modifiers:cmd | option data:@{@"type" : @"reader"}]];
   [view addItem:[self system:@"Enter Full Screen" selector:@selector(toggleFullScreen:) key:@"f" modifiers:cmd | control]];
   [view addItem:NSMenuItem.separatorItem];
   NSMenuItem *developerHolder = [[NSMenuItem alloc] initWithTitle:@"Developer" action:nil keyEquivalent:@""];
@@ -1831,8 +1832,8 @@ static NSString *const kHasUnsavedInputScript =
   [view addItem:developerHolder];
 
   NSMenu *develop = [self addMenu:@"Develop" to:bar];
+  [develop addItem:[self action:@"Hard Refresh" key:nil modifiers:0 name:@"dev-reload" args:nil]];
   [develop addItem:[self action:@"Developer Tools" key:@"j" modifiers:cmd | option name:@"devtools" args:nil]];
-  [develop addItem:[self action:@"Reload Ignoring Cache" key:nil modifiers:0 name:@"dev-reload" args:nil]];
   [develop addItem:[self action:@"View Page Source" key:@"u" modifiers:cmd | option name:@"dev-source" args:nil]];
   [develop addItem:[self action:@"Clear Data for This Site…" key:nil modifiers:0 name:@"dev-clear-site" args:nil]];
   [develop addItem:[self action:@"Pull Requests" key:nil modifiers:0 name:@"pulls-open" args:nil]];
@@ -3860,13 +3861,16 @@ static NSString *const kHasUnsavedInputScript =
     [page goBack];
   else if ([action isEqual:@"forward"])
     [page goForward];
-  else if ([action isEqual:@"reload"]) {
+  else if ([action isEqual:@"reload"] || [action isEqual:@"dev-reload"]) {
     NSString *identity = [self identityForTab:page];
     if (identity && _crashedTabs[identity]) {
       [_crashedTabs removeObjectForKey:identity];
       [self pageChanged:page];
     }
-    [page reload];
+    if ([action isEqual:@"dev-reload"])
+      [page reloadIgnoringCache];
+    else
+      [page reload];
   }
   else if ([action isEqual:@"stop"])
     [page stop];
@@ -3882,8 +3886,6 @@ static NSString *const kHasUnsavedInputScript =
     return;
   } else if ([action isEqual:@"focus"])
     [page focus];
-  else if ([action isEqual:@"dev-reload"])
-    [page reloadIgnoringCache];
   else if ([action isEqual:@"dev-source"]) {
     if (![page executeChromeCommand:35002]) {
       [self reply:rid result:nil error:@"The page source could not open."];
@@ -3930,7 +3932,7 @@ static NSString *const kHasUnsavedInputScript =
     return NO;
   NSString *plain = unshiftedKey.lowercaseString;
   if (modifiers & NSEventModifierFlagOption)
-    return [@[ @"i", @"\uF702", @"\uF703" ] containsObject:plain];
+    return [@[ @"i", @"r", @"\uF702", @"\uF703" ] containsObject:plain];
   if (modifiers & NSEventModifierFlagShift)
     return [@[ @"t", @"r", @"2", @"=", @"+", @"j" ] containsObject:plain];
   return [@[
@@ -3977,6 +3979,8 @@ static NSString *const kHasUnsavedInputScript =
   if (event.modifierFlags & NSEventModifierFlagOption) {
     if ([key isEqual:@"i"])
       [self send:@"action" data:@{@"name" : @"devtools"}];
+    else if ([key isEqual:@"r"])
+      [self send:@"command" data:@{@"type" : @"reader"}];
     else
       [self send:@"action"
             data:@{
@@ -4004,7 +4008,7 @@ static NSString *const kHasUnsavedInputScript =
             }
           }];
   } else if ([key isEqual:@"r"] && shift) {
-    [self send:@"command" data:@{@"type" : @"reader"}];
+    [self send:@"action" data:@{@"name" : @"dev-reload"}];
   } else if ([key isEqual:@"t"] && shift) {
     [self send:@"action" data:@{@"name" : @"restore"}];
   } else if ([key isEqual:@"t"] || [key isEqual:@"l"]) {

@@ -319,6 +319,11 @@ static NSMutableArray *gMinis;
 - (BOOL)window:(ArdiaCoreWindow *)window preHandleKeyEvent:(NSEvent *)event {
   if (event.type != NSEventTypeKeyDown) return NO;
   NSEventModifierFlags flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+  if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) &&
+      [event.charactersIgnoringModifiers.lowercaseString isEqual:@"r"]) {
+    [_tab reloadIgnoringCache];
+    return YES;
+  }
   if (flags != NSEventModifierFlagCommand) return NO;
   NSDictionary *actions = @{
     @"l" : @"palette-navigate",

@@ -923,7 +923,7 @@ function dialogHead(title) {
 }
 let localServers = [];
 const DEV_COMMANDS = [
-  ["Reload Ignoring Cache", "Develop", "dev-reload"],
+  ["Hard Refresh", "Develop · ⇧⌘R", "dev-reload"],
   ["View Page Source", "Develop", "dev-source"],
   ["Toggle Cache", "Develop · this tab", "dev", { tool: "cache" }],
   ["Copy as curl", "Develop · this tab", "dev-curl"],
@@ -1092,7 +1092,7 @@ function renderPalette(rebuild = true) {
       },
       {
         label: "Show Reader",
-        detail: "Read the article without clutter  ⇧⌘R",
+        detail: "Read the article without clutter  ⌥⌘R",
         glyph: "library",
         run: () => {
           closeModal();
@@ -1598,7 +1598,7 @@ const SHORTCUTS = [
   ["Print", "⌘P"],
   ["Settings", "⌘,"],
   ["Developer tools", "⌥⌘I / ⌥⌘J"],
-  ["Reload ignoring cache", "⇧⌘R"],
+  ["Hard refresh", "⇧⌘R"],
   ["View page source", "⌥⌘U"],
   ["Full screen", "⌃⌘F"],
 ];
@@ -2533,7 +2533,12 @@ document.addEventListener("click", (e) => {
   }
   const action = e.target.closest("[data-action]");
   if (action) {
-    act(action.dataset.action);
+    // As in other browsers, Shift-clicking Reload skips the cache.
+    act(
+      action.dataset.action === "reload" && e.shiftKey
+        ? "dev-reload"
+        : action.dataset.action,
+    );
     return;
   }
   const mute = e.target.closest("[data-mute]");
