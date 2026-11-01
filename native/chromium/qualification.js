@@ -665,16 +665,12 @@
     "real extension side panel renders, resizes pages, and closes on dismissal, owning-tab change or closure",
   );
   const preview = await invoke("overlay", { open: true });
-  assert(preview.frames.length === 2, "both split panes have overlay frames");
-  assert(
-    (await invoke("native-diagnostics")).tabs.filter((t) => t.visible)
-      .length === 2,
-    "capture retains native views until handoff",
-  );
+  assert(!preview.frames.length, "overlays no longer screenshot the page");
   await invoke("overlay", { open: true, ready: preview.token });
   assert(
-    (await invoke("native-diagnostics")).tabs.every((t) => !t.visible),
-    "committed overlay detaches native pages",
+    (await invoke("native-diagnostics")).tabs.filter((tab) => tab.visible)
+      .length === 2,
+    "an overlay keeps both split panes live beneath it",
   );
   await invoke("overlay", { open: false });
   assert(
@@ -700,7 +696,7 @@
     "native process metrics are measured",
   );
   checks.push(
-    "overlay capture/commit/cancel retains split geometry, site CSS applies, and native process metrics are real",
+    "overlay open/commit/cancel retains split geometry, site CSS applies, and native process metrics are real",
   );
 
   const personal = (await snapshot()).activeSpaceId;

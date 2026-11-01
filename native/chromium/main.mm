@@ -64,6 +64,10 @@ static void ListExtensions(ArdiaCoreProfile *profile, void (^done)(NSArray<NSDic
 @end
 
 // Capture without resizing the live page or changing its scroll position.
+static NSComparisonResult CompareSubviewRank(NSView *a, NSView *b, void *context) {
+  NSMapTable *ranks = (__bridge NSMapTable *)context;
+  return [[ranks objectForKey:a] compare:[ranks objectForKey:b]];
+}
 static void CapturePage(ArdiaCoreTab *page, BOOL fullPage,
                         void (^completion)(NSData *, NSString *)) {
   NSString *documentURL = [page.url copy];
@@ -334,6 +338,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSMutableSet<NSString *> *_screenSharingTabs;
   BOOL _quitting;
   BOOL _qualificationStarted;
+  BOOL _shellRaised;
   NSMutableArray<NSString *> *_externalURLs;
 }
 - (void)send:(NSString *)kind data:(id)data {
@@ -2571,6 +2576,25 @@ static NSString *const kHasUnsavedInputScript =
   if (identity && _closing[identity])
     [self tabWillClose:tab];
 }
+- (void)orderShell {
+  NSView *host = _window.hostView, *shell = _shell.view;
+  NSArray *order = host.subviews;
+  NSMutableArray *pages = [order mutableCopy];
+  [pages removeObject:shell];
+  NSInteger position = 0;
+  for (NSView *view in pages) {
+    if ([view isKindOfClass:NSVisualEffectView.class]) position++;
+    else break;
+  }
+  [pages insertObject:shell atIndex:_shellRaised ? pages.count : position];
+  if ([pages isEqualToArray:order]) return;
+  // Sorting keeps every view attached, so pages don't reload or lose their state.
+  NSMapTable *ranks = [NSMapTable strongToStrongObjectsMapTable];
+  [pages enumerateObjectsUsingBlock:^(NSView *view, NSUInteger index, BOOL *stop) {
+    [ranks setObject:@(index) forKey:view];
+  }];
+  [host sortSubviewsUsingFunction:CompareSubviewRank context:(__bridge void *)ranks];
+}
 - (void)applyLayout {
   if (_quitting || !_lastSync)
     return;
@@ -3069,6 +3093,7 @@ static NSString *const kHasUnsavedInputScript =
     if (![NSApp.appearance.name isEqual:appearanceName] && (NSApp.appearance || appearanceName))
       NSApp.appearance = appearanceName ? [NSAppearance appearanceNamed:appearanceName] : nil;
     [self applyLayout];
+    [self orderShell];
     [self reply:rid result:@{@"ok" : @YES} error:nil];
     for (NSString *url in [_externalURLs copy])
       [self send:@"action"
@@ -3080,44 +3105,11 @@ static NSString *const kHasUnsavedInputScript =
     [_externalSpaces removeAllObjects];
     return;
   }
-  if ([action isEqual:@"overlay-capture"]) {
-    NSMutableArray *frames = [NSMutableArray new];
-    dispatch_group_t group = dispatch_group_create();
-    for (NSDictionary *pane in _lastSync[@"panes"]) {
-      ArdiaCoreTab *page = _tabs[pane[@"id"]];
-      if (!page || page.closed || !page.view.superview)
-        continue;
-      dispatch_group_enter(group);
-      [page copyPicture:0.3
-             completion:^(CGImageRef picture) {
-               NSMutableDictionary *frame = [@{
-                 @"bounds" : @{
-                   @"x" : pane[@"x"],
-                   @"y" : pane[@"y"],
-                   @"width" : pane[@"width"],
-                   @"height" : pane[@"height"]
-                 }
-               } mutableCopy];
-               if (picture) {
-                 NSBitmapImageRep *image =
-                     [[NSBitmapImageRep alloc] initWithCGImage:picture];
-                 NSData *png =
-                     [image representationUsingType:NSBitmapImageFileTypePNG
-                                         properties:@{}];
-                 if (png)
-                   frame[@"image"] = [@"data:image/png;base64,"
-                       stringByAppendingString:
-                           [png base64EncodedStringWithOptions:0]];
-               }
-               if (!frame[@"image"])
-                 frame[@"fallback"] = @YES;
-               [frames addObject:frame];
-               dispatch_group_leave(group);
-             }];
-    }
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-      [self reply:rid result:@{@"frames" : frames} error:nil];
-    });
+  if ([action isEqual:@"raise-shell"]) {
+    // The transparent shell sits behind pages; overlays lift it over the live page.
+    _shellRaised = [data[@"raised"] boolValue];
+    [self orderShell];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
     return;
   }
   if ([action isEqual:@"metrics"]) {
@@ -3244,6 +3236,11 @@ static NSString *const kHasUnsavedInputScript =
       [queued addObject:identity];
     BOOL saved = [self saveDeletedProfiles:queued];
     [self reply:rid result:saved ? @{@"ok" : @YES} : nil error:saved ? nil : @"Profile could not be queued."];
+    return;
+  }
+  if ([action isEqual:@"focus-shell"]) {
+    [_shell focus];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
     return;
   }
   if ([action isEqual:@"password-apps"] || [action isEqual:@"password-app-open"]) {

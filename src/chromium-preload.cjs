@@ -27,7 +27,9 @@ let sequence = 0,
   version,
   queue = Promise.resolve(),
   overlay = false,
-  overlayToken = 0;
+  overlayToken = 0,
+  shellRaised = false,
+  shellLowerTimer = 0;
 function native(action, data = {}) {
   return new Promise((resolve, reject) => {
     const id = ++sequence;
@@ -152,12 +154,40 @@ function enqueue(operation) {
   );
   return result;
 }
+// Lifts the shell over live pages while an overlay or the floating sidebar shows.
+// Lowering waits for the sidebar's slide out; a closed overlay lowers straight away.
+function updateShellRaise(lowerDelay = 0) {
+  clearTimeout(shellLowerTimer);
+  const wanted = overlay || !!workspace?.revealed;
+  if (wanted === shellRaised) return;
+  const apply = () => {
+    shellRaised = wanted;
+    const panes = workspace.layout(innerWidth, innerHeight);
+    overlays.forEach((callback) =>
+      callback({
+        type: "raised",
+        raised: wanted,
+        live: panes.length > 0,
+        hole: {
+          left: Math.min(...panes.map((p) => p.x)),
+          top: Math.min(...panes.map((p) => p.y)),
+          right: Math.max(...panes.map((p) => p.x + p.width)),
+          bottom: Math.max(...panes.map((p) => p.y + p.height)),
+        },
+      }),
+    );
+    return native("raise-shell", { raised: wanted }).catch(() => {});
+  };
+  if (wanted || !lowerDelay) return apply();
+  shellLowerTimer = setTimeout(apply, lowerDelay);
+}
 async function publish(persist = true) {
+  updateShellRaise(260);
   const snapshot = workspace.snapshot(version);
   const address = document.querySelector("#address")?.getBoundingClientRect();
   await native("sync", {
     workspace: workspace.state,
-    panes: overlay ? [] : workspace.layout(innerWidth, innerHeight),
+    panes: workspace.layout(innerWidth, innerHeight),
     persist,
     // Native site prompts attach below the address field.
     anchor: address?.width
@@ -669,19 +699,18 @@ async function invoke(action, data = {}) {
         data,
       );
     if (action === "overlay") {
-      if (data.ready !== undefined) {
-        if (data.ready !== overlayToken) return { ok: false, cancelled: true };
-        overlay = true;
-        await publish(false);
-        return { ok: true };
-      }
+      if (data.ready !== undefined)
+        return data.ready === overlayToken
+          ? { ok: true }
+          : { ok: false, cancelled: true };
       overlayToken = ++sequence;
       if (data.open) {
-        const result = await native("overlay-capture");
-        return { ...result, ok: true, token: overlayToken };
+        overlay = true;
+        await updateShellRaise();
+        return { frames: [], ok: true, token: overlayToken };
       }
       overlay = false;
-      await publish(false);
+      await updateShellRaise();
       overlays.forEach((callback) =>
         callback({ type: "clear", token: overlayToken, handoff: true }),
       );
@@ -712,6 +741,7 @@ async function invoke(action, data = {}) {
         ...data,
         systemDark: matchMedia("(prefers-color-scheme: dark)").matches,
       };
+    if (action === "focus-shell") return native("focus-shell");
     if (action === "copy-text")
       return native("clipboard", {
         text: String(data.text || "").slice(0, 100000),

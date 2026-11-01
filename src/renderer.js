@@ -94,6 +94,8 @@ function toast(message) {
 const renderedTabIds = new Map();
 function patchHTML(selector, html) {
   const el = $(selector);
+  // A rename in progress holds its row; the next render catches up afterwards.
+  if (el.querySelector(".tab-rename")) return;
   if (el.dataset.rendered !== html) {
     el.innerHTML = html;
     el.dataset.rendered = html;
@@ -208,9 +210,9 @@ function pageFrame() {
   if (state.settings.tabLayout === "top")
     return { left: 8, top: hidden ? 52 : 88, margin: 8 };
   return {
-    left: Math.round(
-      8 + (state.settings.sidebarWidth - 8) * sidebarFrameProgress,
-    ),
+    left: state.sidebarHidden && !state.sidebarRevealAnimating
+      ? 8
+      : Math.round(8 + (state.settings.sidebarWidth - 8) * sidebarFrameProgress),
     top: hidden ? 8 : 52,
     margin: 8,
   };
@@ -276,9 +278,11 @@ function applySidebarReveal(frame) {
     state.sidebarRevealFrame = number;
     state.sidebarRevealAnimating = frame.animating;
   }
-  const left = Math.round(
-    8 + ((state?.settings.sidebarWidth || 256) - 8) * sidebarFrameProgress,
-  );
+  const left = frame.hidden && !frame.animating
+    ? 8
+    : Math.round(
+        8 + ((state?.settings.sidebarWidth || 256) - 8) * sidebarFrameProgress,
+      );
   document.documentElement.style.setProperty(
     "--sidebar-progress",
     String(sidebarFrameProgress),
@@ -450,16 +454,21 @@ function render() {
     patchHTML(
       "#strip-tabs",
       [
-        ...favorites,
-        ...tabs.filter((t) => t.kind === "pinned"),
-        ...tabs.filter((t) => t.kind === "today"),
+        favorites,
+        tabs.filter((t) => t.kind === "pinned"),
+        tabs.filter((t) => t.kind === "today"),
       ]
-        .map((t) =>
-          t.kind === "today"
-            ? tabHTML(t)
-            : tabHTML(t).replace('class="tab ', 'class="tab tab-compact '),
+        .filter((group) => group.length)
+        .map((group) =>
+          group
+            .map((t) =>
+              t.kind === "today"
+                ? tabHTML(t)
+                : tabHTML(t).replace('class="tab ', 'class="tab tab-compact '),
+            )
+            .join(""),
         )
-        .join(""),
+        .join('<span class="strip-separator" aria-hidden="true"></span>'),
     );
     $("#strip-tabs .tab.active")?.scrollIntoView({
       block: "nearest",
@@ -904,6 +913,19 @@ async function releaseOverlayBackdrop() {
 }
 let backdropRetirement = 0;
 window.wing.onOverlay((event) => {
+  if (event.type === "raised") {
+    const raised = event.raised && event.live;
+    document.documentElement.classList.toggle("shell-raised", raised);
+    // Only the shell's background stops short of the pages it now covers.
+    if (raised) {
+      const { left, top, right, bottom } = event.hole;
+      $("#app").style.setProperty(
+        "--page-hole",
+        `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ${left}px ${top}px, ${right}px ${top}px, ${right}px ${bottom}px, ${left}px ${bottom}px, ${left}px ${top}px)`,
+      );
+    }
+    return;
+  }
   if (event.type !== "clear" || event.token < displayedBackdropToken) return;
   const retirement = ++backdropRetirement;
   const epoch = backdropEpoch;
@@ -1603,6 +1625,49 @@ function openFolder() {
     closeModal();
   };
   $("[name=name]").focus();
+}
+// Double-clicking a title edits it right there. Return saves, Escape cancels.
+function renameInPlace(title, t) {
+  const row = title.closest("[data-tab]");
+  const group = sidebarSplit(t);
+  const input = document.createElement("input");
+  input.className = "tab-rename";
+  input.value = group ? sidebarTabTitle(t) : t.title;
+  input.maxLength = 200;
+  input.setAttribute("aria-label", "Tab name");
+  const started = Date.now();
+  let finished = false;
+  const finish = (save, returnToPage) => {
+    if (finished) return;
+    finished = true;
+    const value = input.value.trim();
+    row.draggable = true;
+    input.replaceWith(title);
+    if (save && value && value !== title.textContent)
+      act("rename-tab", { id: t.id, value });
+    render();
+    if (returnToPage) act("focus");
+  };
+  const focus = () => {
+    act("focus-shell");
+    input.focus();
+    input.select();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true, true);
+    else if (e.key === "Escape") finish(false, true);
+  });
+  // Selecting the tab can pull focus to its page just after the double-click.
+  input.addEventListener("blur", () => {
+    if (Date.now() - started < 500) setTimeout(() => finished || focus());
+    else finish(true);
+  });
+  for (const type of ["click", "dblclick", "mousedown"])
+    input.addEventListener(type, (e) => e.stopPropagation());
+  row.draggable = false;
+  title.replaceWith(input);
+  focus();
 }
 function openRename(id, value) {
   showModal(
@@ -2985,7 +3050,10 @@ document.addEventListener("drop", (e) => {
     const mode = dropMode(e, tab);
     if (mode === "reorder") act("reorder-tab", { id, before: tab.dataset.tab });
     else if (mode === "after") {
-      const next = tab.nextElementSibling?.dataset.tab;
+      let sibling = tab.nextElementSibling;
+      if (sibling?.classList.contains("strip-separator"))
+        sibling = sibling.nextElementSibling;
+      const next = sibling?.dataset.tab;
       if (next === id) return;
       act("reorder-tab", next ? { id, before: next } : { id, end: true });
     } else
@@ -3302,9 +3370,15 @@ window.wing.onCommand((c) => {
     case "space-editor":
       openSpace();
       break;
-    case "rename":
-      openRename(c.id, c.value);
+    case "rename": {
+      const title = document.querySelector(
+        `#sidebar:not([hidden]) [data-tab="${CSS.escape(c.id)}"] .tab-title`,
+      );
+      const t = state.tabs.find((tab) => tab.id === c.id);
+      if (title?.offsetWidth && t) renameInPlace(title, t);
+      else openRename(c.id, c.value);
       break;
+    }
     case "settings":
       openSettings();
       break;

@@ -408,7 +408,7 @@
       state.tabs.find((t) => t.id === el.closest("[data-tab]").dataset.tab);
     if (t) {
       e.preventDefault();
-      openRename(t.id, t.title);
+      renameInPlace(el, t);
     }
   });
   document.addEventListener("keydown", (e) => {

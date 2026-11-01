@@ -58,9 +58,8 @@ class ChromiumWorkspace {
     );
     const frame = M.splits.frame(
       this.state.settings,
-      this.state.sidebarHidden && !this.revealed
-        ? 8
-        : this.state.settings.sidebarWidth,
+      // The revealed sidebar floats over the page without resizing it.
+      this.state.sidebarHidden ? 8 : this.state.settings.sidebarWidth,
     );
     const left = frame.left;
     if (this.peekId)
