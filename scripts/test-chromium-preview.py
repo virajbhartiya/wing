@@ -106,7 +106,8 @@ process.stdout.write(Buffer.concat([Buffer.from('v10'),c.update(plain),c.final()
                 script.write_text('const WING_TEST='+json.dumps({'phase':phase, 'base':base, 'downloads':str(downloads), 'sourceEngine':latest.get('engineKind') == 'wing-source'})+';\n'+(ROOT / 'native/chromium/qualification.js').read_text())
                 env = {**os.environ, 'WING_CHROMIUM_TEST_PROFILE':str(temporary / 'profile'),
                        'WING_IMPORT_TEST_BASE':str(import_base), 'WING_CHROMIUM_TEST_EXTENSION':str(extension), 'WING_IMPORT_TEST_KEY':base64.b64encode(bytes([7])*16).decode(), 'WING_CHROMIUM_TEST_SCRIPT':str(script), 'WING_CHROMIUM_TEST_REPORT':str(report)}
-                child = subprocess.Popen([str(executable), '--disable-background-networking', '--enable-logging=stderr', '--host-resolver-rules=MAP * 127.0.0.1', '--no-proxy-server'], env=env,
+                # Other windows covering this one would otherwise make Chromium hide its pages.
+                child = subprocess.Popen([str(executable), '--disable-backgrounding-occluded-windows', '--disable-background-networking', '--enable-logging=stderr', '--host-resolver-rules=MAP * 127.0.0.1', '--no-proxy-server'], env=env,
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
                 timed_out = False
                 started = time.monotonic()
