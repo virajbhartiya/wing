@@ -2295,7 +2295,7 @@ function openPerformance() {
     $("#performance-stats").innerHTML =
       `<div><strong>${memory.toFixed(0)}<small> MB</small></strong><span>Working set</span></div><div><strong>${cpu.toFixed(1)}<small>%</small></strong><span>CPU usage</span></div><div><strong>${m.liveViews}<small> / ${m.totalTabs}</small></strong><span>Live / total tabs</span></div>`;
     $("#process-list").innerHTML =
-      `<div class="section-label">${m.sleepingTabs} SLEEPING TABS · ${m.processes.length} PROCESSES</div>` +
+      `<div class="section-label">${m.sleepingTabs} SLEEPING TABS · ${m.processes.length} PROCESSES${savedMemoryLabel(m)}</div>` +
       m.processes
         .map(
           (p) =>
@@ -2305,6 +2305,15 @@ function openPerformance() {
   };
   refresh();
   metricsTimer = setInterval(refresh, 1500);
+}
+// A sleeping tab has no process to measure, so this assumes it would use what
+// an average open page uses now.
+function savedMemoryLabel(metrics) {
+  const pages = metrics.processes.filter((p) => /render|tab/i.test(p.type));
+  if (!metrics.sleepingTabs || !pages.length) return "";
+  const average =
+    pages.reduce((n, p) => n + p.workingSetKB, 0) / pages.length / 1024;
+  return ` · ABOUT ${Math.round(average * metrics.sleepingTabs)} MB SAVED`;
 }
 function openLibrary(tab = "archive") {
   libraryTab = tab;

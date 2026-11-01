@@ -30,6 +30,53 @@ window.wingCapture = {
       ]),
     );
     preview.src = image.src;
+    const ink = document.createElement("canvas");
+    ink.className = "capture-ink";
+    ink.width = image.naturalWidth;
+    ink.height = image.naturalHeight;
+    stage.append(ink);
+    root.querySelector(".capture-stage").insertAdjacentHTML(
+      "beforebegin",
+      `<div class="capture-tools"><select id="capture-tool" aria-label="Tool"><option value="crop">Select region</option><option value="pen">Pen</option><option value="box">Box</option><option value="arrow">Arrow</option><option value="text">Text</option></select><input id="capture-color" type="color" value="#e5484d" aria-label="Color"><input id="capture-label" placeholder="Text, then click the image"><button class="secondary" id="capture-undo">Undo</button></div>`,
+    );
+    const tool = root.querySelector("#capture-tool"),
+      strokes = [],
+      weight = Math.max(3, image.naturalWidth / 400);
+    const paint = (context, mark) => {
+      context.strokeStyle = context.fillStyle = mark.color;
+      context.lineWidth = weight;
+      context.lineCap = context.lineJoin = "round";
+      const [a, b] = [mark.points[0], mark.points[mark.points.length - 1]];
+      if (mark.tool === "text") {
+        context.font = `600 ${weight * 6}px -apple-system, sans-serif`;
+        context.fillText(mark.text, a.x, a.y);
+      } else if (mark.tool === "box") {
+        context.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+      } else {
+        context.beginPath();
+        mark.points.forEach((p) => context.lineTo(p.x, p.y));
+        if (mark.tool === "arrow") {
+          const angle = Math.atan2(b.y - a.y, b.x - a.x);
+          for (const side of [-0.5, 0.5])
+            context.lineTo(
+              b.x - weight * 5 * Math.cos(angle + side),
+              b.y - weight * 5 * Math.sin(angle + side),
+            ),
+              context.moveTo(b.x, b.y);
+        }
+        context.stroke();
+      }
+    };
+    const repaint = () => {
+      const context = ink.getContext("2d");
+      context.clearRect(0, 0, ink.width, ink.height);
+      strokes.forEach((mark) => paint(context, mark));
+    };
+    root.querySelector("#capture-undo").onclick = () => {
+      strokes.pop();
+      repaint();
+    };
+    let marking = null;
     let rect = {
         x: 0,
         y: 0,
@@ -96,6 +143,19 @@ window.wingCapture = {
     stage.onpointerdown = (event) => {
       if (event.button !== 0 || drag) return;
       event.preventDefault();
+      if (tool.value !== "crop") {
+        const color = root.querySelector("#capture-color").value;
+        if (tool.value === "text") {
+          const text = root.querySelector("#capture-label").value.trim();
+          if (text) strokes.push({ tool: "text", color, text, points: [point(event)] });
+          repaint();
+          return;
+        }
+        marking = { tool: tool.value, color, points: [point(event)] };
+        strokes.push(marking);
+        stage.setPointerCapture(event.pointerId);
+        return;
+      }
       drag = {
         start: point(event),
         previous: { ...rect },
@@ -104,6 +164,13 @@ window.wingCapture = {
       stage.setPointerCapture(event.pointerId);
     };
     stage.onpointermove = (event) => {
+      if (marking) {
+        const next = point(event);
+        if (marking.tool === "pen") marking.points.push(next);
+        else marking.points[1] = next;
+        repaint();
+        return;
+      }
       if (!drag || drag.id !== event.pointerId) return;
       const end = point(event);
       rect = {
@@ -115,6 +182,11 @@ window.wingCapture = {
       draw();
     };
     stage.onpointerup = (event) => {
+      if (marking) {
+        marking = null;
+        stage.releasePointerCapture(event.pointerId);
+        return;
+      }
       if (!drag || drag.id !== event.pointerId) return;
       if (!valid()) rect = drag.previous;
       drag = null;
@@ -161,6 +233,21 @@ window.wingCapture = {
             rect.width,
             rect.height,
           );
+          context.save();
+          context.beginPath();
+          context.rect(
+            (canvas.width - rect.width) / 2,
+            (canvas.height - rect.height) / 2,
+            rect.width,
+            rect.height,
+          );
+          context.clip();
+          context.translate(
+            (canvas.width - rect.width) / 2 - rect.x,
+            (canvas.height - rect.height) / 2 - rect.y,
+          );
+          strokes.forEach((mark) => paint(context, mark));
+          context.restore();
           root
             .querySelectorAll("[data-export]")
             .forEach((b) => (b.disabled = true));

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <CoreServices/CoreServices.h>
 #include <libproc.h>
 #include <string>
 #include <unistd.h>
@@ -26,6 +27,25 @@ static void ExtensionsReplied(void *context, const char *json) {
   NSDictionary *reply = body ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil;
   NSArray *list = [reply isKindOfClass:NSDictionary.class] ? reply[@"extensions"] : nil;
   done([list isKindOfClass:NSArray.class] ? list : @[]);
+}
+static void EngineReplied(void *context, const char *json) {
+  void (^done)(NSDictionary *) = (__bridge_transfer void (^)(NSDictionary *))context;
+  NSData *body = json ? [@(json) dataUsingEncoding:NSUTF8StringEncoding] : nil;
+  id reply = body ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    done([reply isKindOfClass:NSDictionary.class] ? reply : @{});
+  });
+}
+static void CallEngine(const char *name, ArdiaCoreProfile *profile, NSDictionary *args,
+                       void (^done)(NSDictionary *)) {
+  auto call = (WingEngineCall)dlsym(RTLD_DEFAULT, name);
+  NSData *body = [NSJSONSerialization dataWithJSONObject:args options:0 error:nil];
+  if (!profile || !call || !body) {
+    done(@{});
+    return;
+  }
+  NSString *json = [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding];
+  call(profile.path.UTF8String, json.UTF8String, EngineReplied, (__bridge_retained void *)[done copy]);
 }
 // The engine moved the installed-extension list from ArdiaCoreProfile to its C call table.
 static void ListExtensions(ArdiaCoreProfile *profile, void (^done)(NSArray<NSDictionary *> *)) {
@@ -281,6 +301,10 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSMutableDictionary<NSString *, ArdiaCoreTab *> *_serviceTabs;
   NSMutableDictionary<NSString *, NSString *> *_serviceURLs;
   NSMutableDictionary<NSString *, ArdiaCoreTab *> *_extensionManagers;
+  // Pages whose back/forward list and scroll position may still be restorable.
+  NSMutableSet<NSString *> *_restorableTabs;
+  NSMutableSet<NSString *> *_restoringTabs;
+  NSMutableDictionary<NSString *, NSValue *> *_extensionWatches;
   NSMutableDictionary<NSNumber *, NSDictionary *> *_processSamples;
   WingImportProcess *_importProcess;
   WingExtensionPanel *_extensionPanel;
@@ -748,6 +772,131 @@ static NSString *PermissionSymbol(NSArray *kinds) {
     if (![seen containsObject:pid])
       [_processSamples removeObjectForKey:pid];
   return rows;
+}
+- (void)adoptPage:(ArdiaCoreTab *)tab identity:(NSString *)identity url:(NSString *)url {
+  _tabs[identity] = tab;
+  _modelURLs[identity] = url;
+  tab.delegate = self;
+  CallEngine("ac_tab_restore_tag", tab.profile, @{@"tab" : @(tab.tabId), @"key" : identity},
+             ^(NSDictionary *reply){
+             });
+}
+// Chromium keeps closed tabs' navigation entries, scroll positions included, by key.
+- (void)restorePage:(NSString *)identity url:(NSString *)url profile:(ArdiaCoreProfile *)profile {
+  [_restorableTabs removeObject:identity];
+  [_restoringTabs addObject:identity];
+  CallEngine("ac_tab_restore_take", profile, @{@"key" : identity}, ^(NSDictionary *reply) {
+    [self->_restoringTabs removeObject:identity];
+    if (self->_quitting || self->_tabs[identity])
+      return;
+    NSString *current = url;
+    BOOL exists = NO;
+    for (NSDictionary *record in self->_lastSync[@"workspace"][@"tabs"])
+      if ([record[@"id"] isEqual:identity]) {
+        current = record[@"url"];
+        exists = YES;
+      }
+    if (!exists)
+      return;
+    NSString *state = [reply[@"state"] isKindOfClass:NSString.class] ? reply[@"state"] : nil;
+    ArdiaCoreTab *tab = state.length ? [self->_window restoreTab:state profile:profile foreground:NO] : nil;
+    if (tab && tab.url.length && ![tab.url isEqual:current])
+      [tab loadURL:current userInitiated:NO];
+    if (!tab)
+      tab = [self->_window openTab:current profile:profile foreground:NO];
+    [self adoptPage:tab identity:identity url:current];
+    [self applyLayout];
+  });
+}
+// uBlock Origin's own dashboard messaging holds its trusted-site list.
+- (void)allowlist:(ArdiaCoreTab *)helper
+             host:(NSString *)host
+            allow:(id)allow
+            reply:(NSNumber *)rid
+         attempts:(int)attempts {
+  void (^finish)(id, NSString *) = ^(id result, NSString *error) {
+    [helper closeNow];
+    [self reply:rid result:result error:error];
+  };
+  if (attempts <= 0 || _quitting || helper.closed) {
+    finish(nil, @"Content blocking didn't respond.");
+    return;
+  }
+  void (^again)(void) = ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      [self allowlist:helper host:host allow:allow reply:rid attempts:attempts - 1];
+    });
+  };
+  if (helper.loading || !helper.committedOrigin.length) {
+    again();
+    return;
+  }
+  NSData *args = [NSJSONSerialization dataWithJSONObject:@[ host, allow ] options:0 error:nil];
+  NSString *script = [NSString stringWithFormat:
+      @"(async([host,allow])=>{if(typeof vAPI==='undefined'||!vAPI.messaging){post('result',JSON.stringify({waiting:true}));return}"
+      @"const m=vAPI.messaging;const r=await m.send('dashboard',{what:'getWhitelist'});let list=r.whitelist;"
+      @"const has=list.includes(host);if(allow!==null&&allow!==has){list=allow?[...list,host]:list.filter(x=>x!==host);"
+      @"await m.send('dashboard',{what:'setWhitelist',whitelist:list.join('\\n')})}"
+      @"post('result',JSON.stringify({host,allowed:allow===null?has:allow}))})(%@).catch(e=>post('result',JSON.stringify({error:String(e)})))",
+      [[NSString alloc] initWithData:args encoding:NSUTF8StringEncoding]];
+  [helper evaluate:script
+        completion:^(NSString *raw) {
+          id result = raw ? Parse(raw) : nil;
+          if ([result isKindOfClass:NSString.class])
+            result = Parse(result);
+          if (!result || [result[@"waiting"] boolValue])
+            again();
+          else
+            finish(result, result[@"error"]);
+        }];
+}
+static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, size_t count, void *paths,
+                                   const FSEventStreamEventFlags *flags, const FSEventStreamEventId *ids) {
+  NSDictionary *watch = (__bridge NSDictionary *)context;
+  void (^changed)(void) = watch[@"changed"];
+  changed();
+}
+- (BOOL)watchExtensions:(NSArray<NSDictionary *> *)unpacked
+                profile:(NSString *)profileId
+                enabled:(BOOL)enabled {
+  if (!_extensionWatches)
+    _extensionWatches = [NSMutableDictionary new];
+  FSEventStreamRef old = (FSEventStreamRef)_extensionWatches[profileId].pointerValue;
+  if (old) {
+    FSEventStreamStop(old);
+    FSEventStreamInvalidate(old);
+    FSEventStreamRelease(old);
+    [_extensionWatches removeObjectForKey:profileId];
+  }
+  if (!enabled || !unpacked.count)
+    return NO;
+  __block BOOL pending = NO;
+  NSDictionary *watch = @{
+    @"changed" : [^{
+      if (pending)
+        return;
+      pending = YES;
+      // Editors write in bursts; reload once they settle.
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        pending = NO;
+        ArdiaCoreProfile *profile = self->_profiles[profileId];
+        for (NSDictionary *extension in unpacked)
+          CallEngine("ac_extensions_reload", profile, @{@"id" : extension[@"id"]}, ^(NSDictionary *reply){
+          });
+        [self send:@"command" data:@{@"type" : @"toast", @"message" : @"Reloaded your unpacked extensions"}];
+      });
+    } copy]
+  };
+  FSEventStreamContext context = {0, (__bridge void *)watch, CFRetain, CFRelease, NULL};
+  FSEventStreamRef stream = FSEventStreamCreate(
+      NULL, ExtensionFolderChanged, &context, (__bridge CFArrayRef)[unpacked valueForKey:@"path"],
+      kFSEventStreamEventIdSinceNow, 0.3, kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer);
+  if (!stream)
+    return NO;
+  FSEventStreamSetDispatchQueue(stream, dispatch_get_main_queue());
+  FSEventStreamStart(stream);
+  _extensionWatches[profileId] = [NSValue valueWithPointer:stream];
+  return YES;
 }
 - (void)extensionManager:(NSString *)profileId
                  inspect:(BOOL)inspect
@@ -2381,6 +2530,7 @@ static NSString *const kHasUnsavedInputScript =
   [self closeExtensionViewsForTabID:identity];
   NSNumber *archive = _closing[identity] ?: @NO;
   [_tabs removeObjectForKey:identity];
+  [_restorableTabs addObject:identity];
   [_crashedTabs removeObjectForKey:identity];
   [_hangPrompts[identity] dismiss];
   [_hangPrompts removeObjectForKey:identity];
@@ -2569,11 +2719,15 @@ static NSString *const kHasUnsavedInputScript =
       continue;
     }
     ArdiaCoreTab *tab = _tabs[identity];
+    if (!tab && [_restoringTabs containsObject:identity])
+      continue;
+    if (!tab && [_restorableTabs containsObject:identity]) {
+      [self restorePage:identity url:record[@"url"] profile:profile];
+      continue;
+    }
     if (!tab) {
       tab = [_window openTab:record[@"url"] profile:profile foreground:NO];
-      _tabs[identity] = tab;
-      _modelURLs[identity] = record[@"url"];
-      tab.delegate = self;
+      [self adoptPage:tab identity:identity url:record[@"url"]];
     } else if (tab.profile != profile) {
       // Never silently move a live document across a profile boundary.
       [self send:@"command"
@@ -2838,6 +2992,14 @@ static NSString *const kHasUnsavedInputScript =
       backup = [found[@"index"] integerValue];
       recovered = YES;
     }
+    if (!_restorableTabs) {
+      _restorableTabs = [NSMutableSet new];
+      _restoringTabs = [NSMutableSet new];
+      id tabs = [state isKindOfClass:NSDictionary.class] ? state[@"tabs"] : nil;
+      for (NSDictionary *record in [tabs isKindOfClass:NSArray.class] ? tabs : @[])
+        if ([record isKindOfClass:NSDictionary.class] && [record[@"id"] isKindOfClass:NSString.class])
+          [_restorableTabs addObject:record[@"id"]];
+    }
     [self reply:rid
          result:@{
            @"workspace" : state ?: NSNull.null,
@@ -2963,6 +3125,12 @@ static NSString *const kHasUnsavedInputScript =
           error:nil];
     return;
   }
+  if ([action isEqual:@"test-install-unpacked"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    CallEngine("ac_extensions_install", _profiles[data[@"profile"]], @{@"path" : data[@"path"]}, ^(NSDictionary *reply) {
+      [self reply:rid result:reply error:nil];
+    });
+    return;
+  }
   if ([action isEqual:@"test-archive-idle"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
     [self archiveIdlePagesAt:[data[@"now"] doubleValue] completion:^{
       [self reply:rid result:@{@"ok" : @YES} error:nil];
@@ -3052,6 +3220,80 @@ static NSString *const kHasUnsavedInputScript =
                          }
                           error:nil];
                   }];
+    return;
+  }
+  if ([action isEqual:@"throwaway-profile"]) {
+    NSString *identity = data[@"id"];
+    if (!Identifier(identity) || [identity isEqual:@"default"] || [identity isEqual:@"work"]) {
+      [self reply:rid result:nil error:@"This profile can't be thrown away."];
+      return;
+    }
+    // Queued up front, so a crash can't leave a throwaway profile's data behind.
+    NSMutableArray *queued = [self.deletedProfiles mutableCopy];
+    if (![queued containsObject:identity])
+      [queued addObject:identity];
+    BOOL saved = [self saveDeletedProfiles:queued];
+    [self reply:rid result:saved ? @{@"ok" : @YES} : nil error:saved ? nil : @"Profile could not be queued."];
+    return;
+  }
+  if ([action isEqual:@"password-apps"] || [action isEqual:@"password-app-open"]) {
+    NSDictionary *bundles = @{
+      @"1Password" : @"com.1password.1password",
+      @"1Password 7" : @"com.agilebits.onepassword7",
+      @"Bitwarden" : @"com.bitwarden.desktop",
+      @"Dashlane" : @"com.dashlane.dashlanephonefinal",
+      @"Enpass" : @"in.sinew.Enpass-Desktop",
+      @"Passwords" : @"com.apple.Passwords",
+      @"Proton Pass" : @"me.proton.pass.electron"
+    };
+    NSWorkspace *apps = NSWorkspace.sharedWorkspace;
+    if ([action isEqual:@"password-apps"]) {
+      NSMutableArray *found = [NSMutableArray new];
+      for (NSString *name in [bundles.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        if ([apps URLForApplicationWithBundleIdentifier:bundles[name]])
+          [found addObject:name];
+      [self reply:rid result:@{@"apps" : found} error:nil];
+      return;
+    }
+    NSString *identifier = [data[@"name"] isKindOfClass:NSString.class] ? bundles[data[@"name"]] : nil;
+    NSURL *application = identifier ? [apps URLForApplicationWithBundleIdentifier:identifier] : nil;
+    if (!application) {
+      [self reply:rid result:nil error:@"That password manager isn't installed."];
+      return;
+    }
+    [apps openApplicationAtURL:application
+                 configuration:[NSWorkspaceOpenConfiguration configuration]
+             completionHandler:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"extensions-unpacked"] || [action isEqual:@"extensions-reload"] ||
+      [action isEqual:@"extensions-watch"]) {
+    NSString *profileId = data[@"profile"];
+    ArdiaCoreProfile *profile = Identifier(profileId) ? _profiles[profileId] : nil;
+    if (!profile) {
+      [self reply:rid result:nil error:@"Open a page in this profile first."];
+      return;
+    }
+    ListExtensions(profile, ^(NSArray<NSDictionary *> *list) {
+      NSMutableArray *unpacked = [NSMutableArray new];
+      for (NSDictionary *extension in list)
+        if ([extension[@"location"] isEqual:@"UNPACKED"] && [extension[@"path"] length])
+          [unpacked addObject:extension];
+      if ([action isEqual:@"extensions-unpacked"]) {
+        [self reply:rid
+             result:@{@"extensions" : unpacked, @"watching" : @(self->_extensionWatches[profileId] != nil)}
+              error:nil];
+      } else if ([action isEqual:@"extensions-reload"]) {
+        for (NSDictionary *extension in unpacked)
+          CallEngine("ac_extensions_reload", profile, @{@"id" : extension[@"id"]}, ^(NSDictionary *reply){
+          });
+        [self reply:rid result:@{@"count" : @(unpacked.count)} error:nil];
+      } else {
+        BOOL on = [self watchExtensions:unpacked profile:profileId enabled:[data[@"on"] boolValue]];
+        [self reply:rid result:@{@"watching" : @(on), @"count" : @(unpacked.count)} error:nil];
+      }
+    });
     return;
   }
   if ([action isEqual:@"open-in-browser"]) {
@@ -3357,6 +3599,54 @@ static NSString *const kHasUnsavedInputScript =
     } else {
       [self reply:rid result:nil error:@"Unknown fixture operation."];
     }
+    return;
+  }
+  if ([action isEqual:@"site-cookies"]) {
+    if (!WebURL(page.url)) {
+      [self reply:rid result:nil error:@"Open a website first."];
+      return;
+    }
+    BOOL remove = [data[@"operation"] isEqual:@"delete"];
+    if (remove && !([data[@"name"] isKindOfClass:NSString.class] && [data[@"domain"] isKindOfClass:NSString.class] &&
+                    [data[@"path"] isKindOfClass:NSString.class])) {
+      [self reply:rid result:nil error:@"Invalid cookie."];
+      return;
+    }
+    [page devToolsCall:remove ? @"Network.deleteCookies" : @"Network.getCookies"
+                params:remove ? @{@"name" : data[@"name"], @"domain" : data[@"domain"], @"path" : data[@"path"]}
+                              : @{@"urls" : @[ page.url ]}
+               timeout:0
+            completion:^(NSDictionary *result, NSString *error) {
+              [self reply:rid result:error ? nil : (result[@"cookies"] ? @{@"cookies" : result[@"cookies"]} : @{@"ok" : @YES}) error:error];
+            }];
+    return;
+  }
+  if ([action isEqual:@"page-json"]) {
+    NSString *script = @"(()=>{const text=(document.querySelector('body>pre')||document.body||{}).textContent||'';"
+                       @"return{type:document.contentType,text:text.slice(0,5000000),"
+                       @"truncated:text.length>5000000}})()";
+    [page devToolsCall:@"Runtime.evaluate"
+                params:@{@"expression" : script, @"returnByValue" : @YES}
+               timeout:0
+            completion:^(NSDictionary *result, NSString *error) {
+              [self reply:rid result:error ? nil : (result[@"result"][@"value"] ?: @{}) error:error];
+            }];
+    return;
+  }
+  if ([action isEqual:@"adblock-site"]) {
+    NSString *origin = page.committedOrigin;
+    NSString *host = WebURL(page.url) ? [NSURL URLWithString:page.url].host : nil;
+    NSString *profileId = nil;
+    for (NSString *key in _profiles)
+      if (_profiles[key] == page.profile)
+        profileId = key;
+    if (!host.length || !origin || !_protectionURLs[profileId] || _protectionTabs[profileId]) {
+      [self reply:rid result:nil error:@"Content blocking isn't ready for this page."];
+      return;
+    }
+    id allow = [data[@"allow"] isKindOfClass:NSNumber.class] ? data[@"allow"] : NSNull.null;
+    ArdiaCoreTab *helper = [_window openTab:_protectionURLs[profileId] profile:page.profile foreground:NO];
+    [self allowlist:helper host:host allow:allow reply:rid attempts:100];
     return;
   }
   if ([action isEqual:@"evaluate-page"] &&
@@ -3778,6 +4068,10 @@ static void PurgeDeletedProfiles(NSString *root) {
   NSMutableSet *live =
       [NSMutableSet setWithArray:[workspace[@"profiles"] valueForKey:@"id"]];
   [live addObjectsFromArray:[workspace[@"spaces"] valueForKey:@"profileId"]];
+  // A throwaway Space is still listed until the shell drops it after this launch.
+  for (NSDictionary *space in workspace[@"spaces"])
+    if ([space[@"throwaway"] boolValue])
+      [live removeObject:space[@"profileId"]];
   NSString *statePath = [root stringByAppendingPathComponent:@"Local State"];
   NSData *stateBody = [NSData dataWithContentsOfFile:statePath];
   NSMutableDictionary *state =

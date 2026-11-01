@@ -341,3 +341,54 @@ test("developer helpers decode, format and swap origins", () => {
   );
   assert.deepEqual(D.devPlan({}, "block", "").calls[1][1].urlPatterns, []);
 });
+
+test("duplicate cleanup keeps the active copy and leaves pinned tabs and splits", () => {
+  const M = require("../src/model.cjs");
+  const workspace = new ChromiumWorkspace();
+  const open = (url) => {
+    workspace.action("new-tab", { url });
+    return workspace.state.activeTabId;
+  };
+  const older = open("https://a.example/page#one");
+  const other = open("https://b.example/");
+  const pinned = open("https://a.example/page");
+  workspace.action("pin", { id: pinned });
+  const active = open("https://a.example/page");
+  assert.deepEqual(
+    M.duplicateTabIds(workspace.state, workspace.state.activeSpaceId),
+    [older],
+  );
+  assert.ok(other && active);
+});
+test("grouping by site files only sites with several tabs and can be undone", () => {
+  const workspace = new ChromiumWorkspace();
+  for (const url of ["https://www.a.example/1", "https://a.example/2", "https://b.example/"])
+    workspace.action("new-tab", { url });
+  workspace.action("group-by-site");
+  const folder = workspace.state.folders.find((f) => f.name === "a.example");
+  assert.equal(workspace.state.tabs.filter((t) => t.folderId === folder.id).length, 2);
+  assert.equal(workspace.state.folders.some((f) => f.name === "b.example"), false);
+  workspace.action("organization-undo");
+  assert.equal(workspace.state.tabs.filter((t) => t.folderId === folder.id).length, 0);
+});
+test("throwaway Spaces disappear with their tabs, archive and history", () => {
+  const M = require("../src/model.cjs");
+  const workspace = new ChromiumWorkspace();
+  workspace.action("save-space", { name: "Throwaway", profileId: "new", throwaway: true });
+  const space = workspace.state.spaces.find((s) => s.throwaway);
+  workspace.action("new-tab", { url: "https://secret.example" });
+  workspace.state.history.push({ url: "https://secret.example", profileId: space.profileId });
+  workspace.state.archive.push({ id: "x", url: "https://secret.example", spaceId: space.id });
+  const removed = M.removeThrowawaySpaces(workspace.state);
+  assert.deepEqual(removed, [space.profileId]);
+  assert.equal(JSON.stringify(workspace.state).includes("secret.example"), false);
+  assert.equal(workspace.state.spaces.some((s) => s.id === space.id), false);
+  assert.ok(workspace.state.tabs.some((t) => t.id === workspace.state.activeTabId));
+});
+test("a link can name the Space it opens in", () => {
+  const workspace = new ChromiumWorkspace();
+  const first = workspace.state.activeSpaceId;
+  workspace.action("save-space", { name: "Other", profileId: "new" });
+  workspace.action("external-url", { url: "https://x.example/", spaceId: first });
+  assert.equal(workspace.state.activeSpaceId, first);
+});
