@@ -149,6 +149,8 @@ def main():
         if args.production:
             plist['CFBundleURLTypes'] = [{'CFBundleURLName':'Web links', 'CFBundleTypeRole':'Viewer', 'CFBundleURLSchemes':['http','https']}]
             plist['LSApplicationCategoryType'] = 'public.app-category.productivity'
+        shutil.copy2(ROOT / 'assets/wing.icns', resources / 'wing.icns')
+        plist['CFBundleIconFile'] = 'wing'
         (contents / 'Info.plist').write_bytes(plistlib.dumps(plist))
         run('codesign', '--force', '--sign', '-', str(helper / 'node'))
         entitlements = stage / 'entitlements.plist'
