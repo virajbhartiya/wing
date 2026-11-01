@@ -3,7 +3,89 @@ const M = require("./model.cjs");
 const P = require("./profile-import.cjs");
 const { appendWingProfile } = require("./wing-profile-migration.cjs");
 const SPACE_THEMES = ["lavender", "ocean", "sage", "peach", "rose"];
-// All imported accounts get a fresh partition. No merge into an existing signed-in session.
+// Importing a source again updates its earlier copy: Spaces and folders are
+// matched by name, and only pages that copy doesn't already have are added.
+function foldIntoExisting(next, state, profile, report) {
+  const old = (key) => new Set(state[key].map((row) => row.id));
+  const oldSpaces = state.spaces.filter((s) => s.profileId === profile.id);
+  const oldSpaceIds = new Set(oldSpaces.map((s) => s.id));
+  const spaceMap = new Map();
+  const oldSpaceRows = old("spaces");
+  next.spaces = next.spaces.filter((space) => {
+    if (oldSpaceRows.has(space.id) || space.profileId !== profile.id)
+      return true;
+    const match = oldSpaces.find((s) => s.name === space.name);
+    if (match) spaceMap.set(space.id, match.id);
+    return !match;
+  });
+  const moved = (id) => spaceMap.get(id) || id;
+  const inProfile = new Set(
+    next.spaces.filter((s) => s.profileId === profile.id).map((s) => s.id),
+  );
+  const oldFolders = old("folders");
+  const newFolders = next.folders.filter((f) => !oldFolders.has(f.id));
+  const folderMap = new Map();
+  const movedFolder = (id) => folderMap.get(id) || id || null;
+  const place = (folder) => {
+    const parent = newFolders.find((f) => f.id === folder.parentId);
+    if (parent) place(parent);
+    folder.spaceId = moved(folder.spaceId);
+    if (folder.parentId) folder.parentId = movedFolder(folder.parentId);
+    const match = next.folders.find(
+      (f) =>
+        oldFolders.has(f.id) &&
+        f.spaceId === folder.spaceId &&
+        f.name === folder.name &&
+        (f.parentId || null) === (folder.parentId || null),
+    );
+    if (match) folderMap.set(folder.id, match.id);
+  };
+  newFolders.forEach(place);
+  next.folders = next.folders.filter((f) => !folderMap.has(f.id));
+  const known = new Set(
+    [...state.tabs, ...state.archive]
+      .filter((t) => oldSpaceIds.has(t.spaceId))
+      .map((t) => t.url),
+  );
+  const keep = (key) => {
+    const existing = old(key);
+    next[key] = next[key].filter((tab) => {
+      if (existing.has(tab.id) || !inProfile.has(moved(tab.spaceId)))
+        return true;
+      tab.spaceId = moved(tab.spaceId);
+      if (tab.folderId) tab.folderId = movedFolder(tab.folderId);
+      if (known.has(tab.url)) {
+        if (key === "archive") report.archivedTabs = Math.max(0, (report.archivedTabs || 0) - 1);
+        else if (tab.kind === "today") report.tabs = Math.max(0, report.tabs - 1);
+        else report.bookmarks = Math.max(0, report.bookmarks - 1);
+        return false;
+      }
+      known.add(tab.url);
+      return true;
+    });
+  };
+  keep("tabs");
+  keep("archive");
+  const live = new Set([...next.tabs, ...next.archive].map((t) => t.id));
+  next.splits = next.splits.filter((g) => g.tabIds.every((id) => live.has(id)));
+  for (const tab of [...next.tabs, ...next.archive])
+    if (tab.splitBackup?.tabIds.some((id) => !live.has(id)))
+      delete tab.splitBackup;
+  const oldHistory = old("history");
+  const visits = new Set(
+    state.history
+      .filter((h) => h.profileId === profile.id)
+      .map((h) => `${h.at} ${h.url}`),
+  );
+  next.history = next.history.filter((h) => {
+    if (oldHistory.has(h.id) || h.profileId !== profile.id) return true;
+    if (!visits.has(`${h.at} ${h.url}`)) return true;
+    report.history--;
+    return false;
+  });
+  return moved;
+}
+// A source's first import gets a fresh partition. No merge into any other signed-in session.
 async function importProfile({
   source,
   options,
@@ -26,12 +108,13 @@ async function importProfile({
     skippedPasswords: 0,
     warnings: [...input.warnings],
   };
-  const profile = {
-    id: M.id(),
-    name: `${source.name} (${source.browserName})`.slice(0, 100),
-  };
+  const name = `${source.name} (${source.browserName})`.slice(0, 100);
+  const existing = state.profiles.find(
+    (p) => p.name === name && !M.BUILT_IN_PROFILES.has(p.id),
+  );
+  const profile = existing || { id: M.id(), name };
   const next = structuredClone(state);
-  next.profiles.push(profile);
+  if (!existing) next.profiles.push(profile);
   const importedSpaces = [];
   function addSpace(name, rows) {
     const space = {
@@ -89,7 +172,6 @@ async function importProfile({
   if (options.tabs) for (const s of input.spaces) addSpace(s.name, s.rows);
   if (input.bookmarks.length || !importedSpaces.length)
     addSpace(`${source.name} · ${source.browserName}`, input.bookmarks);
-  const first = importedSpaces[0];
   for (const row of input.history) {
     const url = P.webURL(row.url);
     if (!url) continue;
@@ -103,9 +185,16 @@ async function importProfile({
     report.history++;
   }
   next.history = next.history.slice(-10000);
-  next.activeSpaceId = first.id;
-  const home = M.newTab(first.id);
-  next.tabs.push(home);
+  const moved = existing
+    ? foldIntoExisting(next, state, profile, report)
+    : (id) => id;
+  const firstId = moved(importedSpaces[0].id);
+  next.activeSpaceId = firstId;
+  let home = existing && next.tabs.find((t) => t.spaceId === firstId);
+  if (!home) {
+    home = M.newTab(firstId);
+    next.tabs.push(home);
+  }
   next.activeTabId = home.id;
   // Validate capacity/schema before touching a destination session or Keychain.
   M.validateState(next);
@@ -195,35 +284,60 @@ async function importProfile({
     // Rebase onto the latest workspace after Keychain/cookie work so browsing while
     // importing cannot erase newly created tabs or edits in another profile.
     const merged = structuredClone(getState ? getState() : state);
-    merged.profiles.push(profile);
-    merged.spaces.push(
-      ...next.spaces.filter((s) => s.profileId === profile.id),
+    if (!existing) merged.profiles.push(profile);
+    const ids = new Set(
+      next.spaces.filter((s) => s.profileId === profile.id).map((s) => s.id),
     );
-    const ids = new Set(importedSpaces.map((s) => s.id));
-    merged.tabs.push(...next.tabs.filter((t) => ids.has(t.spaceId)));
-    merged.folders.push(...next.folders.filter((f) => ids.has(f.spaceId)));
-    merged.archive.push(...next.archive.filter((t) => ids.has(t.spaceId)));
+    const addNew = (key, rows) => {
+      const present = new Set(merged[key].map((row) => row.id));
+      merged[key].push(...rows.filter((row) => !present.has(row.id)));
+    };
+    addNew(
+      "spaces",
+      next.spaces.filter((s) => s.profileId === profile.id),
+    );
     const importedTabIds = new Set(
-      next.tabs.filter((t) => ids.has(t.spaceId)).map((t) => t.id),
+      next.tabs
+        .filter(
+          (t) =>
+            ids.has(t.spaceId) && !state.tabs.some((old) => old.id === t.id),
+        )
+        .map((t) => t.id),
     );
-    merged.splits.push(
-      ...next.splits.filter((s) =>
+    addNew(
+      "tabs",
+      next.tabs.filter((t) => ids.has(t.spaceId)),
+    );
+    addNew(
+      "folders",
+      next.folders.filter((f) => ids.has(f.spaceId)),
+    );
+    addNew(
+      "archive",
+      next.archive.filter((t) => ids.has(t.spaceId)),
+    );
+    addNew(
+      "splits",
+      next.splits.filter((s) =>
         s.tabIds.every((id) => importedTabIds.has(id)),
       ),
     );
-    merged.history.push(
-      ...next.history.filter((h) => h.profileId === profile.id),
+    addNew(
+      "history",
+      next.history.filter((h) => h.profileId === profile.id),
     );
     merged.history = merged.history.slice(-10000);
-    merged.activeSpaceId = first.id;
+    merged.activeSpaceId = firstId;
     merged.activeTabId = home.id;
     M.validateState(merged);
-    await persist(merged);
+    await persist(merged, profile.id);
     return { state: merged, report, profileId: profile.id };
   } catch (error) {
     // Roll back only this import's brand-new partition/vault. Source remains read-only.
-    if (ses) await ses.clearStorageData().catch(() => {});
-    await vault.removeProfile(profile.id).catch(() => {});
+    if (!existing) {
+      if (ses) await ses.clearStorageData().catch(() => {});
+      await vault.removeProfile(profile.id).catch(() => {});
+    }
     throw error;
   } finally {
     key?.fill(0);

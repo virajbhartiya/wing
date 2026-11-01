@@ -238,3 +238,34 @@ test("large native requests stay under the engine's message limit", () => {
   assert.equal(small.kind, "wing-request");
   assert.deepEqual(JSON.parse(small.json).data, { title: "caf\u00e9" });
 });
+
+test("a profile with no Spaces left is removed without losing its data", () => {
+  const M = require("../src/model.cjs");
+  const saved = M.initialState();
+  saved.profiles.push({ id: "imported", name: "Old (Chrome)" });
+  saved.history.push({
+    id: "h1",
+    url: "https://a.test/",
+    title: "A",
+    at: 1,
+    profileId: "imported",
+  });
+  const archived = M.newTab("gone-space", "https://a.test/");
+  saved.archive.push(archived);
+  const { state } = new ChromiumWorkspace(saved);
+  const ids = state.profiles.map((p) => p.id);
+  assert.ok(!ids.includes("imported"));
+  assert.ok(ids.includes("work"));
+  assert.equal(state.history[0].profileId, state.spaces[0].profileId);
+  assert.equal(state.archive[0].spaceId, state.activeSpaceId);
+
+  const workspace = new ChromiumWorkspace();
+  workspace.state.profiles.push({ id: "imported", name: "Old (Chrome)" });
+  workspace.state.spaces.push({
+    ...workspace.state.spaces[0],
+    id: "imported-space",
+    profileId: "imported",
+  });
+  workspace.action("delete-space", { id: "imported-space" });
+  assert.ok(!workspace.state.profiles.some((p) => p.id === "imported"));
+});

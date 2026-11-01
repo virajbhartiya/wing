@@ -1442,6 +1442,7 @@ async function action(name, data = {}) {
       state.spaces = state.spaces.filter((s) => s.id !== data.id);
       state.folders = state.folders.filter((f) => f.spaceId !== data.id);
       M.selectSpace(state, state.spaces[0].id);
+      M.removeEmptyProfiles(state);
       splitId = null;
       closeOverlay(false);
       layout();

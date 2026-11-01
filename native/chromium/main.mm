@@ -846,12 +846,14 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 - (void)importProfile:(NSString *)profileId
                 ready:(void (^)(ArdiaCoreProfile *profile,
                                 NSString *error))ready {
-  if (!Identifier(profileId) ||
-      [_importExistingProfiles containsObject:profileId]) {
-    ready(nil, @"Import destination must be a fresh profile.");
+  if (!Identifier(profileId) || [profileId isEqual:@"default"] ||
+      [profileId isEqual:@"work"]) {
+    ready(nil, @"Import destination must be an imported profile.");
     return;
   }
-  [_importProfiles addObject:profileId];
+  // Only a fresh profile may be rolled back. Re-imports update an existing one.
+  if (![_importExistingProfiles containsObject:profileId])
+    [_importProfiles addObject:profileId];
   if (_profiles[profileId]) {
     ready(_profiles[profileId], nil);
     return;
@@ -916,33 +918,43 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       reply(nil, @"Invalid imported workspace.");
       return;
     }
-    NSMutableSet *newProfiles = [NSMutableSet new],
-                 *newSpaces = [NSMutableSet new];
-    for (NSDictionary *profile in proposed[@"profiles"])
-      if (![_importExistingProfiles containsObject:profile[@"id"]])
-        [newProfiles addObject:profile[@"id"]];
-    if (newProfiles.count != 1) {
+    NSString *target = data[@"target"];
+    if (!Identifier(target) || [target isEqual:@"default"] ||
+        [target isEqual:@"work"]) {
       reply(nil, @"Unexpected import profile set.");
       return;
     }
+    for (NSDictionary *profile in proposed[@"profiles"])
+      if (![_importExistingProfiles containsObject:profile[@"id"]] &&
+          ![profile[@"id"] isEqual:target]) {
+        reply(nil, @"Unexpected import profile set.");
+        return;
+      }
+    NSMutableSet *targetSpaces = [NSMutableSet new];
     for (NSDictionary *space in proposed[@"spaces"])
-      if ([newProfiles containsObject:space[@"profileId"]])
-        [newSpaces addObject:space[@"id"]];
-    NSMutableSet *newTabs = [NSMutableSet new];
-    for (NSDictionary *tab in proposed[@"tabs"])
-      if ([newSpaces containsObject:tab[@"spaceId"]]) [newTabs addObject:tab[@"id"]];
+      if ([space[@"profileId"] isEqual:target])
+        [targetSpaces addObject:space[@"id"]];
     NSMutableDictionary *merged = [_lastSync[@"workspace"] mutableCopy];
+    NSMutableSet *newTabs = [NSMutableSet new];
+    NSSet *currentTabs = [NSSet setWithArray:[merged[@"tabs"] valueForKey:@"id"]];
+    for (NSDictionary *tab in proposed[@"tabs"])
+      if ([targetSpaces containsObject:tab[@"spaceId"]] &&
+          ![currentTabs containsObject:tab[@"id"]])
+        [newTabs addObject:tab[@"id"]];
     for (NSString *key in
          @[ @"profiles", @"spaces", @"tabs", @"folders", @"history", @"archive", @"splits" ]) {
       NSMutableArray *rows = [merged[key] mutableCopy];
+      NSSet *current = [NSSet setWithArray:[rows valueForKey:@"id"]];
       for (NSDictionary *row in proposed[key]) {
+        if ([current containsObject:row[@"id"]])
+          continue;
         BOOL include = [key isEqual:@"splits"]
                            ? [[NSSet setWithArray:row[@"tabIds"] ?: @[]] isSubsetOfSet:newTabs]
                        : [key isEqual:@"profiles"]
-                           ? [newProfiles containsObject:row[@"id"]]
+                           ? [row[@"id"] isEqual:target]
                        : [key isEqual:@"spaces"] || [key isEqual:@"history"]
-                           ? [newProfiles containsObject:row[@"profileId"]]
-                           : [newSpaces containsObject:row[@"spaceId"]];
+                           ? [row[@"profileId"] isEqual:target]
+                           : [targetSpaces containsObject:row[@"spaceId"]];
         if (include)
           [rows addObject:row];
       }

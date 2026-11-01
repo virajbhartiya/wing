@@ -516,3 +516,59 @@ test("legacy Wing import respects independent saved-tab and open-tab choices", (
   );
   assert.equal(destination.folders.filter((f) => ids.has(f.spaceId)).length, 0);
 });
+
+test("importing a source again updates its copy instead of duplicating it", async () => {
+  const source = { browser: "chrome", browserName: "Chrome", name: "Me" };
+  const options = { bookmarks: true, tabs: true, history: true };
+  const read = async () => ({
+    warnings: [],
+    spaces: [
+      { name: "Work", rows: [{ url: "https://a.test/", title: "A", kind: "today" }] },
+    ],
+    bookmarks: [
+      { url: "https://b.test/", title: "B", folder: "Docs" },
+      { url: pages.pop(), title: "New", folder: "Docs" },
+    ],
+    history: [{ url: "https://a.test/", title: "A", last_visit_time: 13300000000000000 }],
+    cookies: [],
+    passwords: [],
+  });
+  const pages = ["https://new.test/", "https://c.test/"];
+  let removed = 0;
+  const vault = { removeProfile: async () => removed++ };
+  const args = { source, options, read, vault, persist: async () => {} };
+  const first = await importProfile({ ...args, state: M.initialState() });
+  const targets = [];
+  const second = await importProfile({
+    ...args,
+    state: first.state,
+    persist: async (_state, target) => targets.push(target),
+  });
+  const s = second.state;
+  assert.deepEqual(targets, [first.profileId]);
+  assert.equal(second.profileId, first.profileId);
+  assert.equal(s.profiles.filter((p) => p.name === "Me (Chrome)").length, 1);
+  assert.equal(s.spaces.length, first.state.spaces.length);
+  assert.equal(s.folders.filter((f) => f.name === "Docs").length, 1);
+  assert.equal(s.tabs.filter((t) => t.url === "https://a.test/").length, 1);
+  assert.equal(s.tabs.filter((t) => t.url === "https://b.test/").length, 1);
+  const added = s.tabs.find((t) => t.url === "https://new.test/");
+  assert.equal(
+    added.folderId,
+    s.folders.find((f) => f.name === "Docs").id,
+  );
+  assert.equal(s.history.length, 1);
+  assert.equal(second.report.bookmarks, 1);
+  assert.equal(second.report.tabs, 0);
+  assert.equal(second.report.history, 0);
+  await assert.rejects(
+    importProfile({
+      ...args,
+      state: s,
+      persist: async () => {
+        throw Error("disk full");
+      },
+    }),
+  );
+  assert.equal(removed, 0);
+});

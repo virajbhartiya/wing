@@ -432,7 +432,32 @@ function reorderSpace(state, id, beforeId) {
     .sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1])
     .map(([profile]) => profile);
 }
+const BUILT_IN_PROFILES = new Set(["default", "work"]);
+// Deleting a profile's last Space leaves nothing to reach it by. Drop the empty
+// profile, and keep its history and archived tabs in a surviving Space's profile.
+function removeEmptyProfiles(state) {
+  const spaceIds = new Set(state.spaces.map((s) => s.id));
+  const owners = new Set(state.spaces.map((s) => s.profileId));
+  const home =
+    state.spaces.find((s) => s.id === state.activeSpaceId) || state.spaces[0];
+  const removed = new Set(
+    state.profiles
+      .filter((p) => !BUILT_IN_PROFILES.has(p.id) && !owners.has(p.id))
+      .map((p) => p.id),
+  );
+  state.profiles = state.profiles.filter((p) => !removed.has(p.id));
+  for (const row of state.history)
+    if (removed.has(row.profileId)) row.profileId = home.profileId;
+  for (const tab of state.archive)
+    if (!spaceIds.has(tab.spaceId)) {
+      tab.spaceId = home.id;
+      tab.folderId = null;
+    }
+  return state;
+}
 module.exports = {
+  BUILT_IN_PROFILES,
+  removeEmptyProfiles,
   PULLS_URL,
   isShellPage,
   splits,

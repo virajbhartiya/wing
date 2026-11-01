@@ -86,7 +86,7 @@ lines.on("line", (line) => {
           request("passwords", { profile, credentials }),
         removeProfile: (profile) => request("rollback", { profile }),
       },
-      persist: (state) => request("persist", { state }),
+      persist: (state, target) => request("persist", { state, target }),
     });
     return { ok: true, report: result.report, profileId: result.profileId };
   })().then(
