@@ -862,9 +862,11 @@ async function invoke(action, data = {}) {
               ? {
                   type: "recent-tabs",
                   selectedId: recent.selectedId,
-                  tabs: recent.ids.map((id) =>
-                    workspace.state.tabs.find((t) => t.id === id),
-                  ),
+                  // Site icons live in runtime state, not the saved tab.
+                  tabs: recent.ids.map((id) => ({
+                    ...workspace.state.tabs.find((t) => t.id === id),
+                    ...workspace.runtime.get(id),
+                  })),
                 }
               : { type: "recent-tabs-close" },
           ),
