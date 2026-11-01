@@ -10,6 +10,7 @@
 #import "PrivateWindow.h"
 #import <AppKit/AppKit.h>
 #include <cmath>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <libproc.h>
 #include <string>
@@ -17,6 +18,24 @@
 #include <vector>
 
 // Wing's source-built framework adds this narrow, policy-aware preference API.
+typedef void (*WingEngineReply)(void *context, const char *json);
+typedef void (*WingEngineCall)(const char *profile, const char *args, WingEngineReply reply, void *context);
+static void ExtensionsReplied(void *context, const char *json) {
+  void (^done)(NSArray<NSDictionary *> *) = (__bridge_transfer void (^)(NSArray<NSDictionary *> *))context;
+  NSData *body = json ? [@(json) dataUsingEncoding:NSUTF8StringEncoding] : nil;
+  NSDictionary *reply = body ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil] : nil;
+  NSArray *list = [reply isKindOfClass:NSDictionary.class] ? reply[@"extensions"] : nil;
+  done([list isKindOfClass:NSArray.class] ? list : @[]);
+}
+// The engine moved the installed-extension list from ArdiaCoreProfile to its C call table.
+static void ListExtensions(ArdiaCoreProfile *profile, void (^done)(NSArray<NSDictionary *> *)) {
+  auto call = (WingEngineCall)dlsym(RTLD_DEFAULT, "ac_extensions_list");
+  if (!profile || !call) {
+    done(@[]);
+    return;
+  }
+  call(profile.path.UTF8String, "{}", ExtensionsReplied, (__bridge_retained void *)[done copy]);
+}
 @interface ArdiaCoreProfile (WingDownloadDirectory)
 - (BOOL)setDownloadDirectory:(NSString *)directory;
 - (void)flushCookiesWithCompletion:(void (^)(void))completion;
@@ -34,7 +53,7 @@ static void CapturePage(ArdiaCoreTab *page, BOOL fullPage,
     }
     NSMutableDictionary *params = [@{@"format":@"png", @"captureBeyondViewport":@(fullPage)} mutableCopy];
     if (clip) params[@"clip"] = clip;
-    [page devToolsCall:@"Page.captureScreenshot" params:params completion:^(NSDictionary *result, NSString *error) {
+    [page devToolsCall:@"Page.captureScreenshot" params:params timeout:0 completion:^(NSDictionary *result, NSString *error) {
       NSData *body = [result[@"data"] isKindOfClass:NSString.class]
         ? [[NSData alloc] initWithBase64EncodedString:result[@"data"] options:0] : nil;
       if (page.closed || ![documentURL isEqual:page.url]) {
@@ -44,7 +63,7 @@ static void CapturePage(ArdiaCoreTab *page, BOOL fullPage,
     }];
   };
   if (!fullPage) { capture(nil); return; }
-  [page devToolsCall:@"Page.getLayoutMetrics" params:@{} completion:^(NSDictionary *result, NSString *error) {
+  [page devToolsCall:@"Page.getLayoutMetrics" params:@{} timeout:0 completion:^(NSDictionary *result, NSString *error) {
     NSDictionary *size = result[@"cssContentSize"];
     double width = [size[@"width"] doubleValue], height = [size[@"height"] doubleValue];
     // Bound the raster allocation; never silently crop or shrink the document.
@@ -368,7 +387,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   if (![control.url isEqual:_serviceURLs[profileId]] ||
       ![control.committedOrigin isEqual:expectedOrigin]) {
     if (!control.loading)
-      [control loadURL:_serviceURLs[profileId]];
+      [control loadURL:_serviceURLs[profileId] userInitiated:NO];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
                    dispatch_get_main_queue(), ^{
                      [self service:request
@@ -420,7 +439,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   if (![requestId isKindOfClass:NSString.class])
     return;
   if (![self identityForTab:tab] || tab.closed) {
-    [engine resolvePermission:requestId result:@"deny" remember:NO];
+    [ArdiaCoreEngine resolvePermission:requestId result:@"deny" remember:NO];
     return;
   }
   NSString *origin = tab.committedOrigin;
@@ -439,7 +458,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
         [self->_permissionAlerts removeObjectForKey:requestId];
         BOOL accepted = choice == 1 && !tab.closed && [origin isEqual:tab.committedOrigin];
         // Dismissing without a choice asks again next time.
-        [engine resolvePermission:requestId
+        [ArdiaCoreEngine resolvePermission:requestId
                            result:accepted ? @"accept" : @"deny"
                          remember:choice >= 0 && remember];
       }];
@@ -536,6 +555,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 }
 - (void)engine:(ArdiaCoreEngine *)engine
     extensionInstallPrompt:(NSDictionary *)prompt
+                   profile:(ArdiaCoreProfile *)profile
                        tab:(ArdiaCoreTab *)tab {
   if (getenv("WING_CHROMIUM_TEST_SCRIPT") && getenv("WING_TEST_ACCEPT_EXTENSIONS")) {
     [ArdiaCoreEngine resolveExtensionInstallPrompt:prompt[@"requestId"] accepted:YES];
@@ -555,6 +575,28 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       completion:^(NSInteger choice, BOOL remember) {
         [ArdiaCoreEngine resolveExtensionInstallPrompt:prompt[@"requestId"] accepted:choice == 1];
       }];
+}
+// The engine calls these unconditionally. Wing has no Cast interface yet.
+- (void)engine:(ArdiaCoreEngine *)engine
+    castDialog:(NSDictionary *)dialog
+           tab:(ArdiaCoreTab *)tab {
+}
+- (void)engine:(ArdiaCoreEngine *)engine
+    castRoutes:(NSArray *)routes
+       profile:(ArdiaCoreProfile *)profile {
+}
+- (void)engine:(ArdiaCoreEngine *)engine
+    extensionInstallFailed:(NSString *)message
+                       tab:(ArdiaCoreTab *)tab {
+  [WingPromptPopover
+      showInView:_window.hostView
+          anchor:[self promptAnchor]
+          symbol:@"puzzlepiece.extension"
+           title:@"Couldn’t add the extension"
+         message:message
+         buttons:@[ @"OK" ]
+        remember:nil
+      completion:^(NSInteger choice, BOOL remember) {}];
 }
 - (void)window:(ArdiaCoreWindow *)window
     autofillPrompt:(NSDictionary<NSString *, id> *)prompt
@@ -1661,6 +1703,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   }
   [page devToolsCall:call[@"method"]
               params:call[@"params"]
+             timeout:0
           completion:^(NSDictionary *result, NSString *error) {
             if (error) {
               [self reply:rid result:nil error:error];
@@ -1850,7 +1893,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                    @"else "
                    @"document.addEventListener('DOMContentLoaded',apply,{once:"
                    @"true});})()",
-                   JSON(css)]];
+                   JSON(css)]
+                  frame:nil];
 }
 - (void)tabDidCommitDocument:(ArdiaCoreTab *)tab {
   [self cancelExternalRequestsForTab:tab];
@@ -2938,19 +2982,23 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   if ([action isEqual:@"extension-actions"]) {
     NSString *active = _lastSync[@"workspace"][@"activeTabId"];
     ArdiaCoreTab *page = active ? _tabs[active] : nil;
-    NSMutableArray *items = [NSMutableArray new];
-    NSArray *extensions = page.profile.extensions ?: @[];
-    NSArray *identities = [extensions valueForKey:@"id"];
-    NSDictionary *states = [page actionStatesForExtensions:identities];
-    for (NSDictionary *extension in extensions) {
-      NSDictionary *state = states[extension[@"id"]];
-      if (!state)
-        continue;
-      NSMutableDictionary *item = [extension mutableCopy];
-      [item addEntriesFromDictionary:state];
-      [items addObject:item];
-    }
-    [self reply:rid result:@{@"extensions" : items} error:nil];
+    ListExtensions(page.profile, ^(NSArray<NSDictionary *> *extensions) {
+      NSMutableArray *enabled = [NSMutableArray new];
+      for (NSDictionary *extension in extensions)
+        if ([extension[@"enabled"] boolValue])
+          [enabled addObject:extension];
+      NSMutableArray *items = [NSMutableArray new];
+      NSDictionary *states = page.closed ? @{} : [page actionStatesForExtensions:[enabled valueForKey:@"id"]];
+      for (NSDictionary *extension in enabled) {
+        NSDictionary *state = states[extension[@"id"]];
+        if (!state)
+          continue;
+        NSMutableDictionary *item = [extension mutableCopy];
+        [item addEntriesFromDictionary:state];
+        [items addObject:item];
+      }
+      [self reply:rid result:@{@"extensions" : items} error:nil];
+    });
     return;
   }
   if ([action isEqual:@"image-export"]) {
@@ -3035,6 +3083,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       [page
           devToolsCall:@"Runtime.evaluate"
                 params:@{@"expression" : data[@"script"], @"userGesture" : @YES}
+               timeout:0
             completion:^(NSDictionary *result, NSString *error) {
               [self reply:rid result:result error:error];
             }];
@@ -3195,6 +3244,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
     [page
         devToolsCall:method
               params:params
+             timeout:0
           completion:^(NSDictionary *result, NSString *error) {
             if (error || ![result[@"data"] isKindOfClass:NSString.class]) {
               [self reply:rid result:nil error:error ?: @"Page export failed."];
@@ -3455,6 +3505,9 @@ int main(int argc, const char *argv[]) {
     if (qualification.boolValue)
       args.insert(args.end(), argv + 1, argv + argc);
     args.push_back(profile.c_str());
+    // Chromium 156 otherwise shows a tab's renderer only once the tab takes focus,
+    // and Wing activates page tabs without focusing them, leaving them blank.
+    args.push_back("--disable-features=RemoveEnsureRFHVisibilityConsistent");
     if (qualification.boolValue) args.push_back("--use-mock-keychain");
     static WingChromiumHost *host = [WingChromiumHost new];
     return [ArdiaCoreEngine runWithArgc:(int)args.size()

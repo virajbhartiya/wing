@@ -1021,6 +1021,19 @@
   await invoke("dev", { id: devTab, tool: "network" });
   await invoke("dev-reload", { id: devTab });
   checks.push("developer overrides apply and clear on the native engine");
+  for (const path of ["/visible-a", "/visible-b"]) {
+    await invoke("new-tab", { url: WING_TEST.base + path });
+    const id = (await snapshot()).activeTabId;
+    await waitFor(
+      async () => (await evaluate(id, "location.pathname")) === path,
+      `${path} loads`,
+    );
+    await waitFor(
+      async () => (await evaluate(id, "document.visibilityState")) === "visible",
+      `${path} becomes visible when activated`,
+    );
+  }
+  checks.push("each newly activated page tab becomes visible");
   const { servers } = await invoke("local-servers");
   const basePort = Number(new URL(WING_TEST.base).port);
   assert(

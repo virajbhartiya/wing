@@ -1,8 +1,8 @@
 {
   "chromium": {
     "url": "https://chromium.googlesource.com/chromium/src.git",
-    "version": "155.0.8059.84",
-    "commit": "5869fe313571d75152b77813cf0a4ee26a4e6df0"
+    "version": "156.0.8078.47",
+    "commit": "1d17a2e2ee147bb7d6ae2ab6abdb3a2510c17775"
   },
   "depot_tools": {
     "url": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
@@ -10,14 +10,14 @@
   },
   "helium": {
     "url": "https://github.com/imputnet/helium-chromium.git",
-    "commit": "832faa7822566270e10c0d3262f702f9d0fea81f"
+    "commit": "f29a25968e483f8bb85e47829ccd487bbe229199"
   },
   "helium-macos": {
     "url": "https://github.com/imputnet/helium-macos.git",
-    "commit": "d049c7d9c42f2c4d6d039e6bb05f3c67ddf15524"
+    "commit": "9aa975a56de8c2376d7c22f71da564b9426cda5f"
   },
   "ardia": {
     "url": "https://github.com/mantrakp04/ardia.git",
-    "commit": "50e118d51db4cb8ce8dc1eb4b883069598fda536"
+    "commit": "c31a546b9d4b8e7a0272d46a7111cd2a601f896c"
   }
 }

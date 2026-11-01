@@ -71,7 +71,7 @@ The intended replacement is a native host around a patched Chromium **browser-se
 The isolated native migration preview now runs the existing Wing interface directly on this framework, with shared workspace persistence, profiles, pinned splits and full uBlock Origin. Build and run its integration qualification with:
 
 ```sh
-npm run build:chromium-preview
+python3 scripts/build-chromium-preview.py --source-receipt ../wing-chromium-build/wing-build-receipt.json
 npm run test:chromium-preview
 npm run start:chromium-preview
 ```
@@ -96,7 +96,7 @@ python3 scripts/build-chromium-preview.py --source-receipt ../wing-chromium-buil
 npm run test:chromium-preview
 ```
 
-The receipt verifies the framework, API header and Wing patch inputs. The default preview build still uses the separately pinned upstream binary; its provenance is recorded in the bundle. Source compilation, the source-engine integration qualification, privacy-network audit, current security baseline and release qualification must all pass before distributing a replacement. Existing profiles and installed apps are preserved.
+The receipt verifies the framework, API header and Wing patch inputs. Preview builds require this receipt, because the host is written against the pinned source engine rather than the older vendored upstream binary. Set `WING_CHROMIUM_BUILD` to use a source tree other than `../wing-chromium-build`. Source compilation, the source-engine integration qualification, privacy-network audit, current security baseline and release qualification must all pass before distributing a replacement. Existing profiles and installed apps are preserved.
 
 ## Release status
 

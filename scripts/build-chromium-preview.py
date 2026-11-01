@@ -44,6 +44,9 @@ def main():
     parser.add_argument("--production", action="store_true", help="Stage a qualified persistent-profile app; does not install it")
     args = parser.parse_args()
     inputs = host_inputs()
+    if not args.source_receipt:
+        # The vendored prebuilt engine is Chromium 155; the host is written against the pinned source engine.
+        raise SystemExit('Pass --source-receipt from a compiled source engine (see README)')
     source_receipt = verify_receipt(args.source_receipt) if args.source_receipt else None
     if args.production:
         report = json.loads((ROOT / 'docs/chromium-preview-qualification.json').read_text())

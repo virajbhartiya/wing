@@ -3,6 +3,7 @@
 A successful run is an engine migration qualification, not release approval.
 The installed Electron browser and user profiles are never replaced.
 """
+import os
 import datetime
 import json
 from pathlib import Path
@@ -10,7 +11,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD = ROOT.parent / (ROOT.name + '-chromium-build')
+BUILD = Path(os.environ.get('WING_CHROMIUM_BUILD', ROOT.parent / (ROOT.name + '-chromium-build')))
 STATUS = ROOT / 'docs/chromium-migration-build-status.json'
 
 
