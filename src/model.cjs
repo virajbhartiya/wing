@@ -189,6 +189,8 @@ function closePage(state, tabId, { archive = false } = {}) {
     archiveTab(state, tabId);
     return { retained: false, tab };
   }
+  tab.closedURL = tab.url;
+  tab.closedAt = Date.now();
   tab.url = tab.homeURL;
   tab.closed = true;
   if (tab.faviconOrigin && tab.faviconOrigin !== new URL(tab.homeURL).origin) {

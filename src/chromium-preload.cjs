@@ -1,5 +1,9 @@
 "use strict";
-const { ChromiumWorkspace } = require("./chromium-workspace.cjs");
+const {
+  ChromiumWorkspace,
+  openWorkspace,
+  startupNotice,
+} = require("./chromium-workspace.cjs");
 const M = require("./model.cjs");
 const theme = require("./themes.cjs");
 const swipe = require("./interactions.cjs").createSwipeTracker();
@@ -115,9 +119,18 @@ window.addEventListener("wing-native", (event) => {
     });
   else if (workspace && kind === "resize") enqueue(() => publish(false));
 });
-const ready = native("bootstrap").then((result) => {
-  workspace = new ChromiumWorkspace(result.workspace);
+const ready = native("bootstrap").then(async (result) => {
+  const opened = await openWorkspace(result, (after) =>
+    native("workspace-recover", { after }),
+  );
+  workspace = opened.workspace;
   version = result.version;
+  const notice = startupNotice(opened.recovery, result.uncleanExit);
+  if (notice)
+    setTimeout(
+      () => commands.forEach((callback) => callback({ type: "toast", message: notice })),
+      2500,
+    );
   // Populate recent downloads for the toolbar once startup work settles.
   setTimeout(
     () =>
@@ -246,6 +259,33 @@ async function developerAction(action, data) {
       await invoke("clear-site-data", { id });
       return { ok: true, message: `Cleared data for ${origin}` };
     }
+    case "dev-jwt": {
+      const { text } = await native("clipboard-read");
+      const decoded = DevPlan.decodeJWT(text);
+      await invoke("copy-text", { text: JSON.stringify(decoded, null, 2) });
+      const expires = Number(decoded.payload.exp);
+      return {
+        ok: true,
+        message: `Decoded token copied${expires ? ` · expires ${new Date(expires * 1000).toLocaleString()}` : ""}`,
+      };
+    }
+    case "dev-json": {
+      const { text } = await native("clipboard-read");
+      await invoke("copy-text", { text: DevPlan.formatJSON(text) });
+      return { ok: true, message: "Formatted JSON copied" };
+    }
+    case "dev-curl": {
+      const url = workspace.state.tabs.find((t) => t.id === id)?.url || "";
+      if (!/^https?:/.test(url)) return { ok: false, message: "Open a website first." };
+      await invoke("copy-text", { text: DevPlan.curlCommand(url) });
+      return { ok: true, message: "curl command copied" };
+    }
+    case "dev-local": {
+      const url = workspace.state.tabs.find((t) => t.id === id)?.url || "";
+      if (!/^https?:/.test(url)) return { ok: false, message: "Open a website first." };
+      await invoke("new-tab", { url: DevPlan.localURL(url, Number(data.port)) });
+      return { ok: true };
+    }
     case "dev-open-in": {
       const url = workspace.state.tabs.find((t) => t.id === id)?.url || "";
       if (!/^https?:/.test(url)) return { ok: false };
@@ -277,6 +317,10 @@ const DEVELOPER_ACTIONS = new Set([
   "dev",
   "dev-clear-site",
   "dev-open-in",
+  "dev-jwt",
+  "dev-json",
+  "dev-curl",
+  "dev-local",
   "local-servers",
   "pulls-data",
   "mini-window",
@@ -292,7 +336,7 @@ async function invoke(action, data = {}) {
   }
   if (action === "external-url") {
     await ready;
-    if (workspace.state.settings.linksInMini !== false) {
+    if (!data.space && workspace.state.settings.linksInMini !== false) {
       const s = workspace.state;
       const url = new URL(data.url);
       if (["http:", "https:"].includes(url.protocol))

@@ -133,7 +133,7 @@
     }
     showModal(
       "site-controls",
-      `<div class="dialog-content">${dialogHead("Site controls")}<p>${esc(data.origin)}</p>${data.permissions
+      `<div class="dialog-content">${dialogHead("Site controls")}<p>${esc(data.origin)}</p><label class="setting-row"><span>Zoom</span><button id="site-zoom-reset" title="Reset zoom">${Math.round((current()?.zoom || 1) * 100)}%</button></label>${data.permissions
         .map(
           (p) =>
             `<label class="setting-row"><span>${esc(p.permission)}</span><select data-permission="${p.permission}">${options(
@@ -149,6 +149,10 @@
           "",
         )}<p>Permission changes apply to new requests. Reload the page to apply them to an existing session.</p><div class="dialog-actions"><button id="site-reload" class="secondary">Reload</button><button id="clear-site-data" class="danger">Clear this site’s data</button></div></div>`,
     );
+    document.getElementById("site-zoom-reset").onclick = (event) => {
+      act("zoom", { reset: true });
+      event.currentTarget.textContent = "100%";
+    };
     document.querySelectorAll("[data-permission]").forEach(
       (el) =>
         (el.onchange = () =>

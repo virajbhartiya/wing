@@ -93,6 +93,8 @@ static id Parse(NSString *text) {
                  options:NSJSONReadingFragmentsAllowed
                    error:nil];
 }
+static BOOL gUncleanExit = NO;
+static std::string gRunningMarker;
 static BOOL Identifier(id value) {
   return
       [value isKindOfClass:NSString.class] && [value length] > 0 &&
@@ -259,6 +261,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   ArdiaCoreTab *_shell;
   NSMutableString *_requestParts;
   NSNumber *_requestPartsId;
+  NSDate *_lastBackup;
+  NSMutableDictionary *_externalSpaces;
   NSString *_shellURL, *_workspacePath;
   NSMutableDictionary<NSString *, ArdiaCoreTab *> *_tabs;
   NSMutableDictionary<NSString *, ArdiaCoreProfile *> *_profiles;
@@ -877,6 +881,94 @@ static NSString *PermissionSymbol(NSArray *kinds) {
          ready(profile, profile ? nil : @"Import destination could not load.");
        }];
 }
+// Hourly copies of the workspace, so a bad write or import can be undone.
+- (NSString *)backupsPath {
+  return [_workspacePath.stringByDeletingLastPathComponent
+      stringByAppendingPathComponent:@"wing-workspace-backups"];
+}
+- (NSArray<NSString *> *)backupFiles {
+  NSArray *names = [NSFileManager.defaultManager
+      contentsOfDirectoryAtPath:self.backupsPath
+                          error:nil];
+  // Timestamped names sort oldest to newest; return newest first.
+  return [[names filteredArrayUsingPredicate:
+                     [NSPredicate predicateWithFormat:@"SELF ENDSWITH '.json'"]]
+              sortedArrayUsingSelector:@selector(compare:)]
+      .reverseObjectEnumerator.allObjects;
+}
+- (void)backupWorkspace:(NSData *)body force:(BOOL)force {
+  if (!body)
+    return;
+  NSFileManager *files = NSFileManager.defaultManager;
+  if (!_lastBackup && self.backupFiles.count) {
+    NSString *newest = [self.backupsPath
+        stringByAppendingPathComponent:self.backupFiles.firstObject];
+    _lastBackup = [files attributesOfItemAtPath:newest
+                                          error:nil][NSFileModificationDate];
+  }
+  if (!force && _lastBackup && -_lastBackup.timeIntervalSinceNow < 3600)
+    return;
+  [files createDirectoryAtPath:self.backupsPath
+      withIntermediateDirectories:YES
+                       attributes:@{NSFilePosixPermissions : @0700}
+                            error:nil];
+  NSDateFormatter *format = [NSDateFormatter new];
+  format.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+  format.dateFormat = @"yyyyMMdd-HHmmss";
+  NSString *name = [NSString
+      stringWithFormat:@"workspace-%@.json", [format stringFromDate:NSDate.date]];
+  if (SaveWorkspace(body, [self.backupsPath stringByAppendingPathComponent:name]))
+    _lastBackup = NSDate.date;
+  NSArray *all = self.backupFiles;
+  for (NSUInteger i = 48; i < all.count; i++)
+    [files removeItemAtPath:[self.backupsPath stringByAppendingPathComponent:all[i]]
+                      error:nil];
+}
+// The damaged file is kept beside the workspace for inspection, never deleted.
+- (NSDictionary *)recoverWorkspaceAfter:(NSInteger)after {
+  NSFileManager *files = NSFileManager.defaultManager;
+  if ([files fileExistsAtPath:_workspacePath]) {
+    NSString *aside = [NSString
+        stringWithFormat:@"%@.damaged-%.0f", _workspacePath,
+                         NSDate.date.timeIntervalSince1970];
+    [files moveItemAtPath:_workspacePath toPath:aside error:nil];
+  }
+  NSArray *all = self.backupFiles;
+  for (NSInteger i = MAX(after + 1, 0); i < (NSInteger)all.count; i++) {
+    NSData *body = [NSData
+        dataWithContentsOfFile:[self.backupsPath stringByAppendingPathComponent:all[i]]];
+    id state = body ? [NSJSONSerialization JSONObjectWithData:body
+                                                      options:0
+                                                        error:nil]
+                    : nil;
+    if ([state isKindOfClass:NSDictionary.class])
+      return @{@"workspace" : state, @"index" : @(i)};
+  }
+  return @{@"workspace" : NSNull.null, @"index" : @(all.count)};
+}
+- (void)reportProblem:(id)sender {
+  NSOperatingSystemVersion os = NSProcessInfo.processInfo.operatingSystemVersion;
+  NSString *body = [NSString
+      stringWithFormat:
+          @"**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to "
+          @"reproduce**\n\n\n---\nWing %@ · Chromium %@ · macOS %ld.%ld.%ld",
+          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
+          ArdiaCoreEngine.sharedEngine.chromiumVersion, (long)os.majorVersion,
+          (long)os.minorVersion, (long)os.patchVersion];
+  NSURLComponents *url = [NSURLComponents
+      componentsWithString:@"https://github.com/virajbhartiya/wing/issues/new"];
+  url.queryItems = @[ [NSURLQueryItem queryItemWithName:@"body" value:body] ];
+  [NSWorkspace.sharedWorkspace openURL:url.URL];
+}
+- (void)showCrashReports:(id)sender {
+  NSURL *logs = [NSFileManager.defaultManager URLForDirectory:NSLibraryDirectory
+                                                     inDomain:NSUserDomainMask
+                                            appropriateForURL:nil
+                                                       create:NO
+                                                        error:nil];
+  [NSWorkspace.sharedWorkspace
+      openURL:[logs URLByAppendingPathComponent:@"Logs/DiagnosticReports"]];
+}
 // The engine's profile deletion ends the app when it targets the last-used
 // profile, so removed profiles are queued and deleted before the next launch
 // loads anything.
@@ -1010,6 +1102,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       reply(nil, @"Imported workspace exceeds browser limits.");
       return;
     }
+    [self backupWorkspace:[NSData dataWithContentsOfFile:_workspacePath] force:YES];
     NSData *body = [NSJSONSerialization dataWithJSONObject:merged
                                                    options:0
                                                      error:nil];
@@ -1628,6 +1721,16 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSApp.windowsMenu = windowMenu;
 
   NSMenu *help = [self addMenu:@"Help" to:bar];
+  for (NSArray *entry in @[
+         @[ @"Report a Problem…", @"reportProblem:" ],
+         @[ @"Show Crash Reports", @"showCrashReports:" ]
+       ]) {
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:entry[0]
+                                                  action:NSSelectorFromString(entry[1])
+                                           keyEquivalent:@""];
+    item.target = self;
+    [help addItem:item];
+  }
   [help addItem:[self command:@"Wing Guide" key:@"/" modifiers:cmd | shift data:@{@"type" : @"help"}]];
   NSApp.helpMenu = help;
   NSApp.mainMenu = bar;
@@ -1636,14 +1739,31 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                 reply:(NSAppleEventDescriptor *)reply {
   NSString *url = [event paramDescriptorForKeyword:'----'].stringValue;
   NSURLComponents *parsed = [NSURLComponents componentsWithString:url ?: @""];
+  NSString *space;
+  // wingbrowser://open?url=…&space=… comes from the wing command-line tool.
+  if ([parsed.scheme.lowercaseString isEqual:@"wingbrowser"]) {
+    url = nil;
+    for (NSURLQueryItem *item in parsed.queryItems) {
+      if ([item.name isEqual:@"url"]) url = item.value;
+      if ([item.name isEqual:@"space"]) space = item.value;
+    }
+    parsed = [NSURLComponents componentsWithString:url ?: @""];
+  }
   if (![@[ @"http", @"https" ] containsObject:parsed.scheme.lowercaseString] ||
       !parsed.host.length)
     return;
+  if (space.length) {
+    if (!_externalSpaces) _externalSpaces = [NSMutableDictionary new];
+    _externalSpaces[url] = space;
+  }
   if (!_lastSync)
     [_externalURLs addObject:url];
   else
     [self send:@"action"
-          data:@{@"name" : @"external-url", @"args" : @{@"url" : url}}];
+          data:@{
+            @"name" : @"external-url",
+            @"args" : @{@"url" : url, @"space" : space ?: @""}
+          }];
   [_window.window makeKeyAndOrderFront:nil];
   [NSApp activateIgnoringOtherApps:YES];
 }
@@ -1745,7 +1865,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
       @"Network.enable", @"Network.setCacheDisabled", @"Network.emulateNetworkConditions",
       @"Emulation.setScriptExecutionDisabled", @"Emulation.setDeviceMetricsOverride",
       @"Emulation.clearDeviceMetricsOverride", @"Emulation.setEmulatedMedia",
-      @"Emulation.setUserAgentOverride"
+      @"Emulation.setUserAgentOverride", @"Network.setBlockedURLs"
     ]];
   if (![calls isKindOfClass:NSArray.class] || index >= calls.count) {
     if (reload) [page reload];
@@ -2664,18 +2784,28 @@ static NSString *PermissionSymbol(NSArray *kinds) {
                                                        options:0
                                                          error:nil]
                      : nil;
+    NSInteger backup = -1;
+    BOOL recovered = NO;
     if (saved && ![state isKindOfClass:NSDictionary.class]) {
-      [self
-           reply:rid
-          result:nil
-           error:@"Saved preview workspace is invalid; it has been preserved."];
-      return;
+      NSDictionary *found = [self recoverWorkspaceAfter:-1];
+      state = found[@"workspace"];
+      backup = [found[@"index"] integerValue];
+      recovered = YES;
     }
     [self reply:rid
          result:@{
            @"workspace" : state ?: NSNull.null,
-           @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion
+           @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion,
+           @"backup" : @(backup),
+           @"recovered" : @(recovered),
+           @"uncleanExit" : @(gUncleanExit)
          }
+          error:nil];
+    return;
+  }
+  if ([action isEqual:@"workspace-recover"]) {
+    [self reply:rid
+         result:[self recoverWorkspaceAfter:[data[@"after"] integerValue]]
           error:nil];
     return;
   }
@@ -2712,6 +2842,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
         [self reply:rid result:nil error:@"Workspace could not be saved."];
         return;
       }
+      [self backupWorkspace:body force:NO];
     }
     _lastSync = data;
     BOOL automaticPiP = [state[@"settings"][@"automaticPictureInPicture"] boolValue];
@@ -2723,8 +2854,12 @@ static NSString *PermissionSymbol(NSArray *kinds) {
     [self reply:rid result:@{@"ok" : @YES} error:nil];
     for (NSString *url in [_externalURLs copy])
       [self send:@"action"
-            data:@{@"name" : @"external-url", @"args" : @{@"url" : url}}];
+            data:@{
+              @"name" : @"external-url",
+              @"args" : @{@"url" : url, @"space" : _externalSpaces[url] ?: @""}
+            }];
     [_externalURLs removeAllObjects];
+    [_externalSpaces removeAllObjects];
     return;
   }
   if ([action isEqual:@"overlay-capture"]) {
@@ -2806,6 +2941,12 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   if ([action isEqual:@"emoji-panel"]) {
     [NSApp orderFrontCharacterPalette:nil];
     [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"clipboard-read"]) {
+    [self reply:rid
+         result:@{@"text" : [NSPasteboard.generalPasteboard stringForType:NSPasteboardTypeString] ?: @""}
+          error:nil];
     return;
   }
   if ([action isEqual:@"app-icon"]) {
@@ -3554,6 +3695,14 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   return YES;
 }
 @end
+static BOOL AnotherCopyIsRunning(NSString *root) {
+  NSString *lock = [NSFileManager.defaultManager
+      destinationOfSymbolicLinkAtPath:[root stringByAppendingPathComponent:
+                                                @"SingletonLock"]
+                                error:nil];
+  return lock &&
+         kill([lock componentsSeparatedByString:@"-"].lastObject.intValue, 0) == 0;
+}
 // Runs before the engine starts: the engine reloads every profile it still
 // knows about, which would recreate a deleted folder.
 static void PurgeDeletedProfiles(NSString *root) {
@@ -3568,12 +3717,7 @@ static void PurgeDeletedProfiles(NSString *root) {
   if (![queued isKindOfClass:NSArray.class] || !queued.count)
     return;
   // Another running copy still has these profiles open.
-  NSString *lock = [files
-      destinationOfSymbolicLinkAtPath:[root stringByAppendingPathComponent:
-                                                @"SingletonLock"]
-                                error:nil];
-  if (lock && kill([lock componentsSeparatedByString:@"-"].lastObject.intValue,
-                   0) == 0)
+  if (AnotherCopyIsRunning(root))
     return;
   NSData *body = [NSData
       dataWithContentsOfFile:[root stringByAppendingPathComponent:
@@ -3675,6 +3819,15 @@ int main(int argc, const char *argv[]) {
     }
     setenv("WING_PROFILE_ROOT", directory.UTF8String, 1);
     PurgeDeletedProfiles(directory);
+    // A marker left behind means the last run never reached a normal exit. A
+    // second launch only hands off to the running copy, so it leaves it alone.
+    if (!AnotherCopyIsRunning(directory)) {
+      gRunningMarker = [directory stringByAppendingPathComponent:@"wing-running"]
+                           .fileSystemRepresentation;
+      gUncleanExit = access(gRunningMarker.c_str(), F_OK) == 0;
+      close(open(gRunningMarker.c_str(), O_CREAT | O_WRONLY, 0600));
+      atexit([] { unlink(gRunningMarker.c_str()); });
+    }
     std::string profile = std::string("--user-data-dir=") + directory.UTF8String;
     std::vector<const char *> args;
     args.push_back(argv[0]);
@@ -3682,6 +3835,10 @@ int main(int argc, const char *argv[]) {
     // may provide Chromium test flags; normal launches accept web URLs via GURL.
     if (qualification.boolValue)
       args.insert(args.end(), argv + 1, argv + argc);
+    else
+      for (int i = 1; i < argc; i++)
+        if (!strncmp(argv[i], "--remote-debugging-port=", 24))
+          args.push_back(argv[i]);
     args.push_back(profile.c_str());
     // Chromium 156 otherwise shows a tab's renderer only once the tab takes focus,
     // and Wing activates page tabs without focusing them, leaving them blank.

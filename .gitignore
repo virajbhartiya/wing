@@ -13,3 +13,4 @@ __pycache__/
 *.p12
 *.p8
 *.pem
+dist/

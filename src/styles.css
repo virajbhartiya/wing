@@ -559,6 +559,21 @@ footer > .icon {
   background: var(--hover);
   color: var(--ink);
 }
+#env-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--env, var(--accent)) 18%, transparent);
+  color: color-mix(in srgb, var(--env, var(--accent)) 75%, var(--ink));
+}
+#env-badge[hidden] {
+  display: none;
+}
+#env-badge[data-kind="staging"] {
+  --env: #c77700;
+}
 #zoom-badge:hover {
   background: color-mix(in srgb, var(--ink) 12%, transparent);
 }

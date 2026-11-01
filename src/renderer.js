@@ -513,6 +513,12 @@ function render() {
   const zoom = Math.round((t?.zoom || 1) * 100);
   $("#zoom-badge").hidden = !t || zoom === 100;
   $("#zoom-badge").textContent = zoom + "%";
+  const environment = environmentOf(t?.url);
+  $("#env-badge").hidden = !environment;
+  if (environment) {
+    $("#env-badge").textContent = environment.label;
+    $("#env-badge").dataset.kind = environment.kind;
+  }
   const failed = t?.error || t?.crashed;
   $("#home").hidden = !!t && t.url !== "wing://home" && !failed;
   const showingPulls = t?.url === "wing://pulls" && !failed;
@@ -555,9 +561,45 @@ function renderDownloadsButton() {
     ? `Downloading ${active.length} file${active.length > 1 ? "s" : ""}${total ? ` · ${Math.round(progress * 100)}%` : ""}`
     : "Downloads · ⇧⌘J";
 }
-$("#downloads-button").addEventListener("click", () =>
-  openLibrary("downloads"),
-);
+$("#downloads-button").addEventListener("click", () => {
+  const records = (state.downloads || []).slice(0, 5);
+  showModal(
+    "downloads-summary",
+    `<div class="dialog-content">${dialogHead("Downloads")}<div class="library-list">${window.wingFeatures?.downloads(records) || ""}</div><button class="primary" id="all-downloads">Show All Downloads</button></div>`,
+  );
+  $("#all-downloads").addEventListener("click", () => openLibrary("downloads"));
+});
+// Labels local and pre-production hosts, so they aren't mistaken for the real site.
+function environmentOf(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(parsed.protocol)) return null;
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$|\.(localhost|test)$/.test(parsed.hostname))
+    return { kind: "local", label: parsed.port ? `local :${parsed.port}` : "local" };
+  if (/(^|[.-])(staging|stage|preview|qa|uat|dev)([.-])/.test(parsed.hostname))
+    return { kind: "staging", label: "staging" };
+  return null;
+}
+function askText(title, placeholder, done) {
+  showModal(
+    "ask-text",
+    `<div class="dialog-content">${dialogHead(title)}<input id="ask-text" placeholder="${esc(placeholder)}" /><button class="primary" id="ask-done">Apply</button></div>`,
+  );
+  const finish = () => {
+    const value = $("#ask-text").value;
+    closeModal();
+    done(value);
+  };
+  $("#ask-done").addEventListener("click", finish);
+  $("#ask-text").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") finish();
+  });
+  $("#ask-text").focus();
+}
 async function toggleReader() {
   const r = await act("reader");
   if (r?.unavailable) toast("Reader isn’t available for this page.");
@@ -873,6 +915,9 @@ const DEV_COMMANDS = [
   ["Reload Ignoring Cache", "Develop", "dev-reload"],
   ["View Page Source", "Develop", "dev-source"],
   ["Toggle Cache", "Develop · this tab", "dev", { tool: "cache" }],
+  ["Copy as curl", "Develop · this tab", "dev-curl"],
+  ["Decode JWT from Clipboard", "Develop", "dev-jwt"],
+  ["Format JSON from Clipboard", "Develop", "dev-json"],
   ["Toggle JavaScript", "Develop · this tab", "dev", { tool: "javascript" }],
   ["Emulate iPhone", "Develop · this tab", "dev", { tool: "device", value: "iphone" }],
   ["Emulate iPad", "Develop · this tab", "dev", { tool: "device", value: "ipad" }],
@@ -975,6 +1020,26 @@ function renderPalette(rebuild = true) {
           act("pulls-open");
         },
       },
+      {
+        label: "Block Requests…",
+        detail: "Develop · this tab",
+        glyph: "settings",
+        run: () =>
+          askText("Block requests", "*analytics*, *.example.com/ads/*  (empty turns it off)", (value) =>
+            act("dev", { tool: "block", value }),
+          ),
+      },
+      ...(/^https?:/.test(current()?.url || "")
+        ? localServers.map(({ port }) => ({
+            label: `Open This Page on localhost:${port}`,
+            detail: "Develop",
+            glyph: "globe",
+            run: () => {
+              closeModal();
+              act("dev-local", { port });
+            },
+          }))
+        : []),
       ...DEV_COMMANDS.map(([label, detail, name, data]) => ({
         label,
         detail,

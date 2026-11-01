@@ -140,16 +140,18 @@ def main():
         for name in ['LICENSE', 'LICENSE-MIT', 'THIRD_PARTY_NOTICES.md']:
             shutil.copy2(ROOT / name, resources / name)
         plist = {'CFBundleExecutable':product, 'CFBundleIdentifier':'org.wingbrowser.Wing' if args.production else 'org.wingbrowser.ChromiumPreview',
-                 'CFBundleName':product, 'WingQualificationOnly':not args.production, 'CFBundlePackageType':'APPL', 'CFBundleVersion':'1',
+                 'CFBundleName':product, 'WingQualificationOnly':not args.production, 'CFBundlePackageType':'APPL', 'CFBundleVersion':subprocess.check_output(['git','rev-list','--count','HEAD'],cwd=ROOT,text=True).strip(),
                  'CFBundleShortVersionString':json.loads((ROOT / 'package.json').read_text())['version'], 'LSMinimumSystemVersion':'14.0', 'NSHighResolutionCapable':True,
                  'NSSupportsAutomaticGraphicsSwitching':True,
                  'NSCameraUsageDescription':'Wing lets websites use your camera only after you allow access.',
                  'NSMicrophoneUsageDescription':'Wing lets websites use your microphone only after you allow access.',
                  'NSBluetoothAlwaysUsageDescription':'Wing lets you connect a Bluetooth device to a website you choose.'}
         if args.production:
-            plist['CFBundleURLTypes'] = [{'CFBundleURLName':'Web links', 'CFBundleTypeRole':'Viewer', 'CFBundleURLSchemes':['http','https']}]
+            plist['CFBundleURLTypes'] = [{'CFBundleURLName':'Web links', 'CFBundleTypeRole':'Viewer', 'CFBundleURLSchemes':['http','https','wingbrowser']}]
             plist['LSApplicationCategoryType'] = 'public.app-category.productivity'
         shutil.copy2(ROOT / 'assets/wing.icns', resources / 'wing.icns')
+        (resources / 'bin').mkdir(exist_ok=True)
+        shutil.copy2(ROOT / 'scripts/wing-cli.sh', resources / 'bin/wing')
         plist['CFBundleIconFile'] = 'wing'
         (contents / 'Info.plist').write_bytes(plistlib.dumps(plist))
         run('codesign', '--force', '--sign', '-', str(helper / 'node'))

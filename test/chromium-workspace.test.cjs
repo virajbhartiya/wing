@@ -272,3 +272,72 @@ test("a profile with no Spaces left is removed without losing its data", () => {
   assert.ok(!workspace.state.profiles.some((p) => p.id === "imported"));
   assert.deepEqual(workspace.removedProfiles, ["imported"]);
 });
+
+test("a damaged workspace falls back to a backup, then a fresh start", async () => {
+  const { openWorkspace, startupNotice } = require("../src/chromium-workspace.cjs");
+  const M = require("../src/model.cjs");
+  const good = M.initialState();
+  const tried = [];
+  const backups = [{ bad: true }, good];
+  const opened = await openWorkspace({ workspace: { bad: true } }, async (after) => {
+    tried.push(after);
+    return { workspace: backups[after + 1] ?? null, index: after + 1 };
+  });
+  assert.deepEqual(tried, [-1, 0]);
+  assert.equal(opened.recovery, "backup");
+  assert.equal(opened.workspace.state.activeSpaceId, good.activeSpaceId);
+  const fresh = await openWorkspace({ workspace: { bad: true } }, async () => ({
+    workspace: null,
+    index: 0,
+  }));
+  assert.equal(fresh.recovery, "fresh");
+  assert.ok(fresh.workspace.state.spaces.length);
+  const fine = await openWorkspace({ workspace: good }, async () => {
+    throw Error("should not recover");
+  });
+  assert.equal(fine.recovery, null);
+  assert.equal(startupNotice(null, false), null);
+  assert.match(startupNotice(null, true), /close properly/);
+  assert.match(startupNotice("backup", true), /backup/);
+});
+
+test("the command-line tool can open a link in a named Space", () => {
+  const workspace = new ChromiumWorkspace();
+  const target = workspace.state.spaces.find((s) => s.name === "Work");
+  workspace.action("external-url", { url: "https://a.test/", space: "work" });
+  const tab = workspace.state.tabs.find((t) => t.url === "https://a.test/");
+  assert.equal(tab.spaceId, target.id);
+});
+
+test("Undo Close brings back a closed pinned tab at its last page", () => {
+  const workspace = new ChromiumWorkspace();
+  workspace.action("new-tab", { url: "https://home.test/" });
+  const { activeTabId: id } = workspace.state;
+  workspace.action("pin", { id });
+  const tab = workspace.state.tabs.find((t) => t.id === id);
+  tab.url = "https://home.test/deep";
+  workspace.closed(id);
+  assert.equal(tab.closed, true);
+  workspace.action("restore", {});
+  assert.equal(tab.url, "https://home.test/deep");
+  assert.ok(!tab.closed);
+  assert.equal(workspace.state.activeTabId, id);
+});
+
+test("developer helpers decode, format and swap origins", () => {
+  const D = require("../src/dev-plan.cjs");
+  const part = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const token = `Bearer ${part({ alg: "HS256" })}.${part({ sub: "é", exp: 5 })}.sig`;
+  assert.deepEqual(D.decodeJWT(token).payload, { sub: "é", exp: 5 });
+  assert.throws(() => D.decodeJWT("nope"), /JWT/);
+  assert.equal(D.formatJSON('{"a":1}'), '{\n  "a": 1\n}');
+  assert.throws(() => D.formatJSON("{"), /JSON/);
+  assert.equal(D.curlCommand("https://a.test/it's"), "curl -L 'https://a.test/it'\\''s'");
+  assert.equal(D.localURL("https://a.test/x?y=1#z", 3000), "http://localhost:3000/x?y=1#z");
+  const plan = D.devPlan({}, "block", "*ads*, *track* ");
+  assert.deepEqual(
+    plan.calls[1][1].urlPatterns.map((p) => p.urlPattern),
+    ["*://*ads*:*/*", "*://*:*/*ads*", "*://*track*:*/*", "*://*:*/*track*"],
+  );
+  assert.deepEqual(D.devPlan({}, "block", "").calls[1][1].urlPatterns, []);
+});

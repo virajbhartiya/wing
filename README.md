@@ -1,17 +1,51 @@
 # Wing
 
-An independent, open-source desktop browser with a custom sidebar, Spaces, command palette, split view and Peek. The primary application uses **Electron 45 / Chromium 156** with sandboxed `WebContentsView` pages. It is a development build, not yet a daily-driver release.
+An independent, open-source desktop browser for Apple Silicon Macs, with Safari's layout and Arc's design: Spaces, a command palette, split view and Peek. It runs on a native Chromium engine, so Chrome extensions install directly from the Chrome Web Store.
 
-## Run
+Early build: releases are not yet signed with a Developer ID or notarized, and there are no automatic updates. Touch ID and iCloud passkeys need Apple signing.
+
+## Install
+
+Download the latest DMG from [Releases](https://github.com/virajbhartiya/wing/releases), drag Wing to Applications, then right-click it and choose Open.
+
+## Build
+
+Building the engine needs a Chromium checkout, a large disk and several hours. See `docs/ARCHITECTURE.md`.
 
 ```sh
 npm ci
-npm run start:dev
-npm run package
-npm start
+npm test
+export WING_CHROMIUM_BUILD=../wing-chromium-build-156
+python3 scripts/build-chromium-preview.py --source-receipt $WING_CHROMIUM_BUILD/wing-build-receipt.json
+npm run test:chromium-preview
+npm run build:chromium-production
 ```
 
-Packaged Apple Silicon app: `release/Wing.app`. Packaging stages a complete bundle before replacement and preserves the previous app in `release/previous-builds`. Browser profiles are not copied or deleted. Source builds require Node, npm and macOS; native engine research additionally requires Xcode command-line tools and CMake.
+## Release
+
+`scripts/release-native.py` runs the tests and qualification, then builds a zip, a DMG and checksums in `dist/`. It refuses a dirty tree.
+
+```sh
+python3 scripts/release-native.py
+python3 scripts/release-native.py --publish --notes notes.md
+```
+
+## Your data
+
+- Wing keeps hourly workspace backups in `wing-workspace-backups` in its profile folder, and one before each import. If the workspace is damaged, Wing keeps the damaged file and restores the newest usable backup.
+- Deleting an imported profile's last Space removes that profile. Its cookies and site data are deleted the next time Wing starts; its history and archived tabs are kept.
+- Help → Report a Problem opens a prefilled issue. Nothing is sent automatically.
+
+## Command line
+
+```sh
+ln -s /Applications/Wing.app/Contents/Resources/bin/wing ~/.local/bin/wing
+wing https://example.com
+wing --space Work :3000
+wing --debug 9222
+```
+
+`wing --debug` starts Wing with remote debugging, so Playwright, Puppeteer or a coding agent can drive it over the Chrome DevTools Protocol. It exposes every profile to local processes, so use it only when you need it.
 
 ## What works
 
@@ -43,11 +77,7 @@ The real production-engine fixture verifies MV3 service workers, storage, messag
 
 The **Develop** menu and the command palette hold the page tools: DevTools (⌥⌘I / ⌥⌘J), Reload Ignoring Cache (⇧⌘R), View Page Source (⌥⌘U), Clear Data for This Site, and Open Page in Safari, Chrome or Firefox. Per-tab overrides cover cache, JavaScript, device size, color scheme, network speed and user agent. The palette also lists web servers listening on this machine as `localhost:PORT`. Self-signed certificates are accepted on localhost.
 
-Remote debugging is a launch flag, not a setting, because it exposes every profile to local processes:
-
-```bash
-open /Applications/Wing.app --args --remote-debugging-port=9222
-```
+The command palette also has Block Requests, Copy as curl, Decode JWT from Clipboard, Format JSON from Clipboard, and Open This Page on localhost for each running dev server. Local and staging hosts get a badge in the address bar.
 
 ## Verify
 

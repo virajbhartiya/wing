@@ -49,6 +49,23 @@ function parseListeningPorts(output) {
 // state is per tab: { cache, script }. agent is the value to apply, "" for default.
 function devPlan(state, tool, value) {
   switch (tool) {
+    case "block": {
+      const urls = String(value || "")
+        .split(",")
+        .map((pattern) => pattern.trim())
+        .filter(Boolean)
+        .slice(0, 50);
+      return {
+        calls: [
+          ["Network.enable"],
+          ["Network.setBlockedURLs", { urlPatterns: urls.flatMap(blockPatterns) }],
+        ],
+        reload: true,
+        message: urls.length
+          ? `Blocking ${urls.length} URL pattern${urls.length > 1 ? "s" : ""} in this tab`
+          : "Request blocking is off for this tab",
+      };
+    }
     case "cache":
       state.cache = !state.cache;
       return {
@@ -128,4 +145,55 @@ function devPlan(state, tool, value) {
       throw Error("Unknown developer tool.");
   }
 }
-module.exports = { DEVICES, AGENTS, NETWORKS, parseListeningPorts, devPlan };
+// Chromium takes absolute URLPatterns; a plain fragment matches a host or a path.
+function blockPatterns(fragment) {
+  if (fragment.includes("://")) return [{ urlPattern: fragment, block: true }];
+  const core = fragment.replace(/^\*+|\*+$/g, "");
+  const paths = [`*://*:*/*${core.replace(/^\//, "")}*`];
+  if (!core.includes("/")) paths.unshift(`*://*${core}*:*/*`);
+  return paths.map((urlPattern) => ({ urlPattern, block: true }));
+}
+function decodeJWT(text) {
+  const parts = String(text).trim().replace(/^Bearer\s+/i, "").split(".");
+  if (parts.length !== 3) throw Error("The clipboard doesn't hold a JWT.");
+  const decode = (part) =>
+    JSON.parse(
+      new TextDecoder().decode(
+        Uint8Array.from(
+          atob(part.replace(/-/g, "+").replace(/_/g, "/")),
+          (c) => c.charCodeAt(0),
+        ),
+      ),
+    );
+  try {
+    return { header: decode(parts[0]), payload: decode(parts[1]) };
+  } catch {
+    throw Error("The clipboard doesn't hold a JWT.");
+  }
+}
+function formatJSON(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    throw Error("The clipboard doesn't hold valid JSON.");
+  }
+}
+function curlCommand(url) {
+  return `curl -L '${String(url).replace(/'/g, "'\\''")}'`;
+}
+// Swaps a page's origin for a local server, keeping its path and query.
+function localURL(url, port) {
+  const { pathname, search, hash } = new URL(url);
+  return `http://localhost:${port}${pathname}${search}${hash}`;
+}
+module.exports = {
+  DEVICES,
+  AGENTS,
+  NETWORKS,
+  parseListeningPorts,
+  devPlan,
+  decodeJWT,
+  formatJSON,
+  curlCommand,
+  localURL,
+};

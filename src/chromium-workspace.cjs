@@ -384,12 +384,20 @@ class ChromiumWorkspace {
         const url = new URL(data.url);
         if (!["http:", "https:"].includes(url.protocol))
           throw Error("Only web links can be opened externally.");
-        const destination = N.routeURL(
-          url.href,
-          s.settings.routes,
-          s.spaces,
-          s.settings.defaultSpaceId || s.activeSpaceId,
-        );
+        const named = data.space
+          ? s.spaces.find(
+              (space) =>
+                space.name.toLowerCase() === String(data.space).toLowerCase(),
+            )
+          : null;
+        const destination =
+          named?.id ||
+          N.routeURL(
+            url.href,
+            s.settings.routes,
+            s.spaces,
+            s.settings.defaultSpaceId || s.activeSpaceId,
+          );
         const created = M.newTab(destination, url.href);
         s.tabs.push(created);
         M.activate(s, created.id);
@@ -557,9 +565,21 @@ class ChromiumWorkspace {
         if (M.splits.groupFor(s))
           M.splits.groupFor(s).orientation = data.orientation;
         break;
-      case "restore":
-        M.restoreTab(s, data.id || s.archive[0]?.id);
+      case "restore": {
+        // Undo Close: the newest of an archived tab or a closed pinned tab.
+        const closed = data.id
+          ? null
+          : s.tabs
+              .filter((t) => t.closed && t.closedAt)
+              .sort((a, b) => b.closedAt - a.closedAt)[0];
+        if (closed && closed.closedAt >= (s.archive[0]?.archivedAt || 0)) {
+          if (closed.closedURL) closed.url = closed.closedURL;
+          delete closed.closedURL;
+          delete closed.closedAt;
+          M.activate(s, closed.id);
+        } else M.restoreTab(s, data.id || s.archive[0]?.id);
         break;
+      }
       case "reset-pin":
       case "reset-pin-id":
         if (tab && tab.kind !== "today") {
@@ -573,4 +593,28 @@ class ChromiumWorkspace {
     return true;
   }
 }
-module.exports = { ChromiumWorkspace };
+// A saved workspace that fails validation falls back to the newest usable backup,
+// then to a fresh start, so a damaged file can't leave the browser unusable.
+async function openWorkspace(result, recover) {
+  let saved = result.workspace,
+    index = result.backup ?? -1,
+    recovery = result.recovered ? (saved ? "backup" : "fresh") : null;
+  for (;;) {
+    try {
+      return { workspace: new ChromiumWorkspace(saved), recovery };
+    } catch {
+      const next = await recover(index);
+      saved = next.workspace;
+      index = next.index;
+      recovery = saved ? "backup" : "fresh";
+    }
+  }
+}
+function startupNotice(recovery, uncleanExit) {
+  if (recovery === "backup")
+    return "Your workspace was damaged, so Wing restored the latest backup.";
+  if (recovery === "fresh")
+    return "Your workspace was damaged and no backup could be read. The damaged file was kept.";
+  return uncleanExit ? "Wing didn't close properly last time. Your tabs are back." : null;
+}
+module.exports = { ChromiumWorkspace, openWorkspace, startupNotice };
