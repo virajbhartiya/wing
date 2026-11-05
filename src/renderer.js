@@ -92,26 +92,10 @@ function toast(message) {
   toastTimer = setTimeout(() => ($("#toast").hidden = true), 3500);
 }
 const renderedTabIds = new Map();
-// Rebuilding a row between mouse down and up drops the click (a close button
-// that "does nothing"), so lists under a pressed pointer wait for the release.
-let pressedTarget = null;
-document.addEventListener("pointerdown", (e) => (pressedTarget = e.target), true);
-for (const type of ["pointerup", "pointercancel"])
-  document.addEventListener(
-    type,
-    () =>
-      pressedTarget &&
-      setTimeout(() => {
-        pressedTarget = null;
-        render();
-      }),
-    true,
-  );
 function patchHTML(selector, html) {
   const el = $(selector);
   // A rename in progress holds its row; the next render catches up afterwards.
   if (el.querySelector(".tab-rename")) return;
-  if (pressedTarget && el.contains(pressedTarget)) return;
   if (el.dataset.rendered !== html) {
     el.innerHTML = html;
     el.dataset.rendered = html;

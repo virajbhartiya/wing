@@ -2543,6 +2543,12 @@ button:active:not(:disabled),
   transform: scale(0.97);
   transition: transform 80ms var(--wing-ease);
 }
+/* Shrinking the row would slide its close or mute button out from under the
+   pointer, and a wide top-bar tab moves too far to press at all. */
+.tab:active:has(button:active),
+#strip-tabs .tab:active {
+  transform: none;
+}
 .tab {
   border-radius: 10px;
   font-weight: 500;
