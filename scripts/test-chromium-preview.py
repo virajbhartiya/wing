@@ -1,4 +1,5 @@
 """Exercise Wing's migrated UI and native host using only disposable profiles."""
+import argparse
 import http.server
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from chromium_distribution import qualification_report
 
 ROOT = Path(__file__).resolve().parent.parent
 # The suite opens several independently protected profiles and browser services.
@@ -19,7 +21,11 @@ SCENARIO_TIMEOUT_SECONDS = 300
 
 
 def main():
-    latest = json.loads((ROOT / 'native/build/chromium-preview/latest.json').read_text())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--arch', choices=['arm64', 'x64'], default='arm64')
+    args = parser.parse_args()
+    previews = 'native/build/chromium-preview' + ('' if args.arch == 'arm64' else '-' + args.arch)
+    latest = json.loads((ROOT / previews / 'latest.json').read_text())
     executable = Path(latest['app']) / 'Contents/MacOS/Wing Chromium Preview'
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -154,7 +160,7 @@ process.stdout.write(Buffer.concat([Buffer.from('v10'),c.update(plain),c.final()
               'hostSHA256':hashlib.sha256(executable.read_bytes()).hexdigest(),
               'passed':len(scenarios)==2 and all(s['passed'] for s in scenarios), 'scenarios':scenarios,
               'scope':'Wing interface on the native Chromium host, isolated loopback profiles; not feature-complete or release qualification.'}
-    (ROOT / 'docs/chromium-preview-qualification.json').write_text(json.dumps(output, indent=2)+'\n')
+    (ROOT / qualification_report(args.arch)).write_text(json.dumps(output, indent=2)+'\n')
     return 0 if output['passed'] else 1
 
 

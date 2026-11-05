@@ -16,7 +16,7 @@ import tempfile
 import urllib.request
 import zipfile
 from chromium_artifact import verify_receipt
-from chromium_distribution import host_inputs, verify_qualification
+from chromium_distribution import host_inputs, qualification_report, verify_qualification
 
 ROOT = Path(__file__).resolve().parent.parent
 PINS = json.loads((ROOT / 'docs/ardiacore-provenance.json').read_text())
@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-receipt', type=Path, help='Use a completed Wing source framework build')
     parser.add_argument("--production", action="store_true", help="Stage a qualified persistent-profile app; does not install it")
+    parser.add_argument('--arch', choices=['arm64', 'x64'], default='arm64')
     args = parser.parse_args()
     inputs = host_inputs()
     if not args.source_receipt:
@@ -49,7 +50,7 @@ def main():
         raise SystemExit('Pass --source-receipt from a compiled source engine (see README)')
     source_receipt = verify_receipt(args.source_receipt) if args.source_receipt else None
     if args.production:
-        report = json.loads((ROOT / 'docs/chromium-preview-qualification.json').read_text())
+        report = json.loads((ROOT / qualification_report(args.arch)).read_text())
         verify_qualification(report, source_receipt, inputs)
     product = 'Wing' if args.production else 'Wing Chromium Preview'
     vendor = ROOT / 'native/vendor/ardiacore' 
@@ -60,7 +61,7 @@ def main():
     for file, digest in ([] if source_receipt else [(archive, PINS['engineSHA256']), (header, PINS['headerSHA256'])]):
         if not file.exists() or hashlib.sha256(file.read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Qualified engine input missing or checksum mismatch: {file}')
-    output = ROOT / ('native/build/chromium-production' if args.production else 'native/build/chromium-preview')
+    output = ROOT / (('native/build/chromium-production' if args.production else 'native/build/chromium-preview') + ('' if args.arch == 'arm64' else '-' + args.arch))
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='stage-', dir=output) as stage:
         stage = Path(stage)
@@ -72,10 +73,11 @@ def main():
         for directory in [macos, frameworks, resources]:
             directory.mkdir(parents=True)
         shutil.copytree(ROOT / 'native/chromium/services', resources / 'WingServices')
-        node_archive = verified_asset(NODE_IMPORT['url'], NODE_IMPORT['sha256'], vendor / 'node-import.tar.xz')
+        node = NODE_IMPORT if args.arch == 'arm64' else NODE_IMPORT['builds'][args.arch]
+        node_archive = verified_asset(node['url'], node['sha256'], vendor / ('node-import.tar.xz' if args.arch == 'arm64' else f'node-import-{args.arch}.tar.xz'))
         helper = resources / 'import-helper'
         helper.mkdir()
-        node_prefix = f"node-v{NODE_IMPORT['version']}-darwin-arm64"
+        node_prefix = f"node-v{NODE_IMPORT['version']}-darwin-{args.arch}"
         with tarfile.open(node_archive) as archive_file:
             for member_name, destination in [('bin/node', 'node'), ('LICENSE', 'NODE-LICENSE')]:
                 member = archive_file.extractfile(node_prefix + '/' + member_name)
@@ -120,7 +122,7 @@ def main():
         (resources / 'engine-provenance.json').write_text(json.dumps(engine_receipt, indent=2)+'\n')
         framework = frameworks / 'Chromium Framework.framework'
         binary = framework / 'Versions/Current/Chromium Framework'
-        run('xcrun', 'clang++', '-std=c++20', '-O2', '-arch', 'arm64', '-mmacosx-version-min=14.0', '-fobjc-arc',
+        run('xcrun', 'clang++', '-std=c++20', '-O2', '-arch', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch], '-mmacosx-version-min=14.0', '-fobjc-arc',
             '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(ROOT / 'native/chromium/PrivateWindow.mm'), str(binary), '-framework', 'AppKit',
             '-o', str(macos / product))
         shutil.copytree(ROOT / 'assets/icons', resources / 'assets/icons')

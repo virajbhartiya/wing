@@ -13,8 +13,8 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def write_receipt(source, destination):
-    framework = source / 'out/Release_GN_arm64/Chromium Framework.framework'
+def write_receipt(source, destination, arch='arm64'):
+    framework = source / f'out/Release_GN_{arch}/Chromium Framework.framework'
     header = source / 'ardia/core/public/ArdiaCore.h'
     receipt = {'kind': 'wing-source', 'framework': str(framework), 'header': str(header),
                'binarySHA256': digest(framework / 'Versions/Current/Chromium Framework'),

@@ -15,6 +15,10 @@ def host_inputs(root=ROOT):
     return {str(p.relative_to(root)): digest(p) for p in sorted(paths)}
 
 
+def qualification_report(arch):
+    return 'docs/chromium-preview-qualification.json' if arch == 'arm64' else f'docs/chromium-preview-qualification-{arch}.json'
+
+
 def verify_qualification(report, receipt, inputs):
     if not receipt or receipt.get('kind') != 'wing-source':
         raise RuntimeError('Persistent-profile builds require the Wing source engine.')

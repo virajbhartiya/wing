@@ -61,6 +61,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stage", choices=["patch", "configure", "compile"])
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--arch", choices=["arm64", "x64"], default="arm64")
     args = parser.parse_args()
     if not 1 <= args.jobs <= 4:
         parser.error("Use 1–4 compile jobs on this local recipe.")
@@ -79,6 +80,7 @@ def main():
            "JOBS": str(args.jobs), "KEEP_GOING": "1", "TARGETS": "chrome_framework"}
     scripts = upstream / "engine/patches/build"
     locked = [str(upstream / "scripts/agent/locked"), "chromium", "--as", "wing-candidate", "--"]
+    out_name = f"Release_GN_{args.arch}"
     with (BUILD / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         patched = BUILD / ".wing-patches-applied"
@@ -97,20 +99,33 @@ def main():
             source = BUILD / "chromium_git/chromium/src"
             apply_identity(source, os.environ.get("WING_DEVELOPER_TEAM_ID", ""))
             apply_host_api(source)
-            run(locked + ["bash", str(scripts / "02-gn-args.sh"), "--apply"], env)
             output = source / "out/Release_GN_arm64"
-            configure_args(output / "args.gn")
-            run(locked + ["gn", "gen", "out/Release_GN_arm64"], env, cwd=source)
+            if args.arch == "arm64":
+                run(locked + ["bash", str(scripts / "02-gn-args.sh"), "--apply"], env)
+                configure_args(output / "args.gn")
+            else:
+                # Upstream's scripts only know arm64: same arguments, another CPU and folder.
+                arm64_args = (output / "args.gn").read_text()
+                if 'target_cpu="arm64"' not in arm64_args:
+                    raise RuntimeError("Upstream arguments no longer name the arm64 target.")
+                output = source / "out" / out_name
+                output.mkdir(exist_ok=True)
+                (output / "args.gn").write_text(arm64_args.replace('target_cpu="arm64"', f'target_cpu="{args.arch}"'))
+            run(locked + ["gn", "gen", f"out/{out_name}"], env, cwd=source)
         else:
-            if not (BUILD / "chromium_git/chromium/src/out/Release_GN_arm64/build.ninja").is_file():
+            if not (BUILD / "chromium_git/chromium/src/out" / out_name / "build.ninja").is_file():
                 raise RuntimeError("Run the configure stage first.")
             metal = subprocess.run(["xcrun", "metal", "--version"], capture_output=True, text=True)
             if metal.returncode:
                 raise RuntimeError("Metal compiler unavailable; install it with xcodebuild -downloadComponent MetalToolchain before compiling.")
-            receipt = BUILD / "wing-build-receipt.json"
+            source = BUILD / "chromium_git/chromium/src"
+            receipt = BUILD / ("wing-build-receipt.json" if args.arch == "arm64" else f"wing-build-receipt-{args.arch}.json")
             receipt.unlink(missing_ok=True)
-            run(locked + ["bash", str(scripts / "05-build.sh"), "--apply"], env)
-            write_receipt(BUILD / "chromium_git/chromium/src", receipt)
+            if args.arch == "arm64":
+                run(locked + ["bash", str(scripts / "05-build.sh"), "--apply"], env)
+            else:
+                run(locked + ["autoninja", "-j", str(args.jobs), "-k", "1", "-C", f"out/{out_name}", "chrome_framework"], env, cwd=source)
+            write_receipt(source, receipt, args.arch)
 
 
 if __name__ == "__main__":
