@@ -2323,7 +2323,9 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
             @"id" : identity,
             @"profileId" : profileId,
             @"url" : tab.url ?: @"about:blank",
-            @"foreground" : @(![disposition isEqual:@"background_tab"])
+            @"foreground" : @(![disposition isEqual:@"background_tab"]),
+            // Shift-click asks for a new window; Wing shows it as a Peek.
+            @"peek" : @([disposition isEqual:@"window"])
           }];
     [self pageChanged:tab];
   });

@@ -98,8 +98,18 @@ window.addEventListener("wing-native", (event) => {
         id: data.id,
       });
       record.id = data.id;
-      state.tabs.push(record);
-      if (data.foreground) M.activate(state, record.id);
+      if (data.peek) {
+        if (workspace.peekId) {
+          const result = await native("close", { id: workspace.peekId });
+          if (!result.pending) workspace.closed(workspace.peekId);
+        }
+        record.transient = true;
+        workspace.peekId = record.id;
+        state.tabs.push(record);
+      } else {
+        state.tabs.push(record);
+        if (data.foreground) M.activate(state, record.id);
+      }
       await publish();
     });
   else if (workspace && kind === "page")
