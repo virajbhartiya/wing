@@ -2778,12 +2778,6 @@ body.tabs-top #peek-frame {
   top: 96px;
 }
 
-/* Dark favicons stay legible on dark frames. */
-.dark .site-favicon {
-  background: #fff;
-  border-radius: 3px;
-}
-
 /* Browser import: pick a browser, then its profiles. */
 .import-browsers {
   display: flex;
