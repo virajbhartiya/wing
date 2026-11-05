@@ -1448,6 +1448,14 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                 usingBlock:^(NSNotification *note) {
                   [weakSelf layoutTrafficLights];
                 }];
+  // Auto follows the Mac, whose Light/Dark switch rebuilds the title bar too.
+  [NSDistributedNotificationCenter.defaultCenter
+      addObserverForName:@"AppleInterfaceThemeChangedNotification"
+                  object:nil
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *note) {
+                [weakSelf relayoutTrafficLightsSoon];
+              }];
   [NSNotificationCenter.defaultCenter
       addObserverForName:NSWindowDidEnterFullScreenNotification
                   object:_window.window
@@ -2005,6 +2013,16 @@ static NSString *const kHasUnsavedInputScript =
   [NSApp activateIgnoringOtherApps:YES];
   [self layoutTrafficLights];
   [_shell focus];
+}
+// An appearance change rebuilds the title bar on a later pass, which puts the
+// buttons back in AppKit's corner; place them again once that pass has run.
+- (void)relayoutTrafficLightsSoon {
+  __weak WingChromiumHost *weakSelf = self;
+  for (NSNumber *delay in @[ @0, @0.1, @0.3 ])
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+                     [weakSelf layoutTrafficLights];
+                   });
 }
 - (void)layoutTrafficLights {
   NSWindow *window = _window.window;
@@ -3090,8 +3108,10 @@ static NSString *const kHasUnsavedInputScript =
     NSAppearanceName appearanceName = [appearance isEqual:@"dark"]    ? NSAppearanceNameDarkAqua
                                       : [appearance isEqual:@"light"] ? NSAppearanceNameAqua
                                                                       : nil;
-    if (![NSApp.appearance.name isEqual:appearanceName] && (NSApp.appearance || appearanceName))
+    if (![NSApp.appearance.name isEqual:appearanceName] && (NSApp.appearance || appearanceName)) {
       NSApp.appearance = appearanceName ? [NSAppearance appearanceNamed:appearanceName] : nil;
+      [self relayoutTrafficLightsSoon];
+    }
     [self applyLayout];
     [self orderShell];
     [self reply:rid result:@{@"ok" : @YES} error:nil];

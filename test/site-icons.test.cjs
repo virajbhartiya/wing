@@ -102,7 +102,10 @@ test("broken favicon images hide cleanly and expose the monogram fallback", () =
     },
     matches: (selector) => selector === "img.site-favicon",
   };
+  icon.src = "https://example.com/gone.png";
+  const loadedIcons = new Set([icon.src]);
   const renderer = vm.createContext({
+    loadedIcons,
     document: {
       addEventListener: (name, callback, capture) => {
         if (name === "error") {
@@ -117,6 +120,7 @@ test("broken favicon images hide cleanly and expose the monogram fallback", () =
   errorHandler({ target: icon });
   assert.equal(icon.hidden, true);
   assert.equal(icon.removed, true);
+  assert.equal(loadedIcons.has(icon.src), false, "a broken icon is not drawn eagerly again");
 });
 test("favicon sources reject unsafe URLs and use the current origin after a domain change", () => {
   const markup = context.tabIcon({

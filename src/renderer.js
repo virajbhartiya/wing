@@ -173,8 +173,12 @@ function tabIcon(t) {
     (hash, char) => (hash * 31 + char.charCodeAt(0)) % 360,
     0,
   );
-  return `<span class="site-icon${t.sleeping ? " is-sleeping" : ""}${t.loading ? " is-loading" : ""}" style="--site-hue:${hue}" aria-hidden="true"${t.sleeping ? ' title="Sleeping tab"' : ""}><span class="site-monogram">${esc(monogram)}</span><img class="site-favicon" src="${esc(favicon)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"></span>`;
+  // Rows are rebuilt on every change; an icon already shown once is drawn
+  // straight away instead of flashing its letter while it decodes again.
+  const shown = loadedIcons.has(favicon) ? " has-favicon" : "";
+  return `<span class="site-icon${shown}${t.sleeping ? " is-sleeping" : ""}${t.loading ? " is-loading" : ""}" style="--site-hue:${hue}" aria-hidden="true"${t.sleeping ? ' title="Sleeping tab"' : ""}><span class="site-monogram">${esc(monogram)}</span><img class="site-favicon" src="${esc(favicon)}" alt="" decoding="async" referrerpolicy="no-referrer"></span>`;
 }
+const loadedIcons = new Set();
 function sidebarSplit(tab) {
   return (state.splits || []).find((group) => group.tabIds.includes(tab.id));
 }
@@ -3461,6 +3465,7 @@ document.addEventListener(
   "error",
   (event) => {
     if (!event.target?.matches?.("img.site-favicon")) return;
+    loadedIcons.delete(event.target.src);
     event.target.hidden = true;
     event.target.parentElement?.classList.remove("has-favicon");
   },
@@ -3470,6 +3475,7 @@ document.addEventListener(
   "load",
   (event) => {
     if (!event.target?.matches?.("img.site-favicon")) return;
+    loadedIcons.add(event.target.src);
     event.target.parentElement?.classList.add("has-favicon");
   },
   true,
