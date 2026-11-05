@@ -1916,55 +1916,114 @@ body.sidebar-auto-hidden #toolbar {
     animation: none;
   }
 }
+/* Control-Tab: a small floating bar over the live page, no dimming. */
+#overlay:has(.recent-tabs-modal) {
+  background: none;
+  animation: none;
+  align-items: center;
+  padding: 20px;
+}
+#modal.recent-tabs-modal {
+  width: auto;
+  max-width: calc(100vw - 40px);
+  overflow: visible;
+  background: color-mix(in srgb, var(--modal) 94%, transparent);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 18px;
+  box-shadow:
+    0 18px 50px color-mix(in srgb, var(--ink) 18%, transparent),
+    0 2px 8px color-mix(in srgb, var(--ink) 8%, transparent);
+  animation: recent-tabs-in 240ms cubic-bezier(0.34, 1.45, 0.64, 1) both;
+}
+#overlay.closing:has(.recent-tabs-modal),
+#overlay.closing #modal.recent-tabs-modal {
+  animation: none;
+  opacity: 0;
+}
+@keyframes recent-tabs-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
 .recent-tabs {
-  padding: 18px;
-}
-.recent-tabs h2 {
-  margin: 0 0 12px;
-  font-size: 16px;
-}
-.recent-tabs p {
-  color: var(--muted);
-  font-size: 12px;
-  margin: 14px 0 0;
+  padding: 10px 10px 8px;
 }
 .recent-tabs-list {
-  max-height: min(420px, 60vh);
-  overflow-y: auto;
+  position: relative;
+  /* Eight tiles show at once; more scroll sideways with the selection. */
+  max-width: calc(8 * 52px + 7 * 6px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   outline: none;
 }
-.recent-tabs-row {
+.recent-tabs-list::-webkit-scrollbar {
+  display: none;
+}
+.recent-tabs-tiles {
+  position: relative;
   display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 10px;
-  border-radius: 8px;
+  gap: 6px;
+}
+.recent-tabs-glider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 13px;
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.recent-tabs-glider.placed {
+  transition: transform 260ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.recent-tabs-row {
+  position: relative;
+  flex: 0 0 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
   cursor: default;
 }
-.recent-tabs-row[aria-selected="true"] {
-  background: var(--selected);
-  outline: 1px solid var(--wing-focus);
-  outline-offset: -1px;
+.recent-tabs-icon {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
 }
-.recent-tabs-row strong,
-.recent-tabs-row small {
+.recent-tabs-icon > svg,
+.recent-tabs-icon > .wing-mark {
+  width: 22px;
+  height: 22px;
+}
+.recent-tabs-icon > .site-icon {
+  position: relative;
   display: block;
+  width: 24px;
+  height: 24px;
+}
+.recent-tabs-title {
+  max-width: calc(8 * 52px + 7 * 6px);
+  margin-top: 7px;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.recent-tabs-row > span:last-child {
-  min-width: 0;
-}
-.recent-tabs-row small {
-  margin-top: 3px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.recent-tabs-icon {
-  flex: 0 0 22px;
-  width: 22px;
-  height: 22px;
+@media (prefers-reduced-motion: reduce) {
+  #modal.recent-tabs-modal {
+    animation: none;
+  }
+  .recent-tabs-glider.placed {
+    transition: none;
+  }
 }
 
 /* Browser controls and keyboard-visible organizational selections. */
