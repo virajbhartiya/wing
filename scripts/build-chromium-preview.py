@@ -147,7 +147,9 @@ def main():
                  'NSSupportsAutomaticGraphicsSwitching':True,
                  'NSCameraUsageDescription':'Wing lets websites use your camera only after you allow access.',
                  'NSMicrophoneUsageDescription':'Wing lets websites use your microphone only after you allow access.',
-                 'NSBluetoothAlwaysUsageDescription':'Wing lets you connect a Bluetooth device to a website you choose.'}
+                 'NSBluetoothAlwaysUsageDescription':'Wing lets you connect a Bluetooth device to a website you choose.',
+                 'NSLocationUsageDescription':'Wing shares your location with a website only after you allow it.',
+                 'NSLocationWhenInUseUsageDescription':'Wing shares your location with a website only after you allow it.'}
         if args.production:
             plist['CFBundleURLTypes'] = [{'CFBundleURLName':'Web links', 'CFBundleTypeRole':'Viewer', 'CFBundleURLSchemes':['http','https','wingbrowser']}]
             plist['LSApplicationCategoryType'] = 'public.app-category.productivity'
@@ -164,8 +166,16 @@ def main():
         for item in (framework / 'Versions/Current/Helpers').iterdir():
             if item.is_file() or item.suffix == '.app':
                 run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(entitlements), str(item))
-        for item in [framework, app]:
-            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(entitlements), str(item))
+        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(entitlements), str(framework))
+        # The hardened runtime silently denies devices the app does not declare,
+        # so websites could never reach the camera, microphone or location.
+        app_entitlements = stage / 'app-entitlements.plist'
+        app_entitlements.write_bytes(plistlib.dumps({
+            'com.apple.security.cs.allow-jit':True, 'com.apple.security.cs.disable-library-validation':True,
+            'com.apple.security.device.audio-input':True, 'com.apple.security.device.camera':True,
+            'com.apple.security.device.bluetooth':True, 'com.apple.security.device.usb':True,
+            'com.apple.security.personal-information.location':True, 'com.apple.security.print':True}))
+        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(app_entitlements), str(app))
         run('codesign', '--verify', '--deep', '--strict', str(app))
         if host_inputs() != inputs:
             raise RuntimeError('Host inputs changed during packaging; rebuild from a stable source tree.')
