@@ -292,6 +292,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSMutableDictionary<NSString *, ArdiaCoreProfile *> *_profiles;
   NSMutableDictionary<NSString *, NSString *> *_modelURLs;
   NSMutableDictionary<NSString *, NSNumber *> *_closing;
+  NSMutableDictionary<NSString *, NSNumber *> *_freezeGenerations;
+  dispatch_source_t _memoryPressure;
   NSMutableSet<NSString *> *_loadingProfiles;
   NSMutableSet<NSString *> *_capturingTabs;
   NSMutableSet<NSString *> *_wakingTabs;
@@ -1353,6 +1355,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _profiles = [NSMutableDictionary new];
   _modelURLs = [NSMutableDictionary new];
   _closing = [NSMutableDictionary new];
+  _freezeGenerations = [NSMutableDictionary new];
   _loadingProfiles = [NSMutableSet new];
   _capturingTabs = [NSMutableSet new];
   _pictureInPictureTabs = [NSMutableSet new];
@@ -1497,10 +1500,8 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                                         block:^(NSTimer *timer) {
                                           [weakSelf archiveIdlePagesAt:NSDate.date.timeIntervalSince1970 * 1000
                                                         completion:^{ }];
-                                          [weakSelf trimMemoryAutomatic:YES
-                                                             completion:^{
-                                                             }];
                                         }];
+  [self watchMemoryPressure];
   _modifierObserver = [NSEvent
       addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
                                    handler:^NSEvent *(NSEvent *event) {
@@ -1544,6 +1545,57 @@ static NSString *const kHasUnsavedInputScript =
     if ([record[@"id"] isEqual:identity] && [record[@"transient"] boolValue])
       return NO;
   return YES;
+}
+// Background pages freeze a minute after they leave the screen: timers and
+// animation stop but the document stays, so returning is instant, not a reload.
+// Pages are only discarded (and reload on return) when macOS is short of memory.
+static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
+  @"mail.google.com", @"calendar.google.com", @"app.slack.com", @"web.whatsapp.com",
+  @"discord.com", @"teams.microsoft.com", @"teams.live.com", @"outlook.office.com",
+  @"outlook.live.com", @"web.telegram.org", @"messages.google.com"
+];
+- (BOOL)mayFreezePage:(ArdiaCoreTab *)page {
+  NSString *host = [NSURL URLWithString:page.url].host.lowercaseString ?: @"";
+  for (NSString *awake in kAlwaysAwakeHosts)
+    if ([host isEqual:awake] || [host hasSuffix:[@"." stringByAppendingString:awake]])
+      return NO;
+  return !page.frozen && !page.discarded && [self mayRetirePage:page] &&
+         ![_screenSharingTabs containsObject:[self identityForTab:page]];
+}
+- (void)scheduleFreeze:(NSString *)identity {
+  NSNumber *generation = @(_freezeGenerations[identity].integerValue + 1);
+  _freezeGenerations[identity] = generation;
+  __weak WingChromiumHost *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    WingChromiumHost *host = weakSelf;
+    ArdiaCoreTab *page = host ? host->_tabs[identity] : nil;
+    if (page && [host->_freezeGenerations[identity] isEqual:generation] &&
+        [host mayFreezePage:page])
+      page.frozen = YES;
+  });
+}
+// Anything that runs script in, shows or closes a page wakes it first; a hidden
+// page goes back to sleep a minute later.
+- (void)thaw:(ArdiaCoreTab *)page {
+  NSString *identity = page ? [self identityForTab:page] : nil;
+  if (!identity || !page.frozen) return;
+  page.frozen = NO;
+  if (!page.view.superview) [self scheduleFreeze:identity];
+}
+- (void)watchMemoryPressure {
+  _memoryPressure = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+                                           DISPATCH_MEMORYPRESSURE_CRITICAL,
+                                           dispatch_get_main_queue());
+  __weak WingChromiumHost *weakSelf = self;
+  dispatch_source_set_event_handler(_memoryPressure, ^{
+    WingChromiumHost *host = weakSelf;
+    if (!host) return;
+    // macOS warns often during ordinary heavy use; only a critical shortage is
+    // worth a reload, and then only for pages over the budget or long idle.
+    [host trimMemoryAutomatic:YES completion:^{
+    }];
+  });
+  dispatch_resume(_memoryPressure);
 }
 - (BOOL)mayDiscardPage:(ArdiaCoreTab *)page {
   return !page.discarded && [self mayRetirePage:page];
@@ -1591,6 +1643,7 @@ static NSString *const kHasUnsavedInputScript =
       continue;
     }
     dispatch_group_enter(group);
+    [self thaw:page];
     [page evaluate:kHasUnsavedInputScript
         completion:^(NSString *raw) {
           id value = raw ? Parse(raw) : nil;
@@ -1663,6 +1716,7 @@ static NSString *const kHasUnsavedInputScript =
               automatic:automatic
              completion:completion];
     };
+    [self thaw:page];
     [page evaluate:kHasUnsavedInputScript
         completion:^(NSString *raw) {
           id value = raw ? Parse(raw) : nil;
@@ -2024,6 +2078,20 @@ static NSString *const kHasUnsavedInputScript =
                      [weakSelf layoutTrafficLights];
                    });
 }
+// The Dock icon set above lasts only while Wing runs. Finder, Launchpad and a
+// quit Dock read the bundle, which every reinstall replaces, so the chosen icon
+// is written onto the bundle again whenever it is missing. Violet is the default.
+- (void)stampBundleIcon:(NSString *)name image:(NSImage *)image {
+  NSBundle *bundle = NSBundle.mainBundle;
+  if ([bundle.infoDictionary[@"WingQualificationOnly"] boolValue]) return;
+  NSString *marker = [bundle.bundlePath stringByAppendingPathComponent:@"Icon\r"];
+  BOOL stamped = [NSFileManager.defaultManager fileExistsAtPath:marker];
+  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+  BOOL wanted = ![name isEqual:@"violet"];
+  if (wanted ? stamped && [[defaults stringForKey:@"WingBundleIcon"] isEqual:name] : !stamped) return;
+  if ([NSWorkspace.sharedWorkspace setIcon:wanted ? image : nil forFile:bundle.bundlePath options:0])
+    [defaults setObject:wanted ? name : nil forKey:@"WingBundleIcon"];
+}
 - (void)layoutTrafficLights {
   NSWindow *window = _window.window;
   NSButton *close = [window standardWindowButton:NSWindowCloseButton];
@@ -2050,6 +2118,7 @@ static NSString *const kHasUnsavedInputScript =
   [_extensionPanel close];
   [_extensionSidebar close];
   [_maintenanceTimer invalidate];
+  if (_memoryPressure) dispatch_source_cancel(_memoryPressure);
   for (WingDeviceChooser *chooser in [_deviceChoosers.allValues copy]) [chooser cancel];
   [_importProcess stop];
   [NSAppleEventManager.sharedAppleEventManager
@@ -2669,10 +2738,12 @@ static NSString *const kHasUnsavedInputScript =
       [visible addObject:pane[@"id"]];
   for (NSString *identity in _tabs)
     if (![visible containsObject:identity]) {
+      if (_tabs[identity].view.superview) [self scheduleFreeze:identity];
       [_tabs[identity] noteShownByHost:NO];
       [_tabs[identity].view removeFromSuperview];
       [_tabs[identity].devToolsView removeFromSuperview];
-    }
+    } else
+      [self thaw:_tabs[identity]];
   CGFloat contentLeft = _window.hostView.bounds.size.width;
   for (NSDictionary *pane in _lastSync[@"panes"])
     contentLeft = MIN(contentLeft, [pane[@"x"] doubleValue]);
@@ -2972,6 +3043,7 @@ static NSString *const kHasUnsavedInputScript =
         @"hidden" : @(page.view.hiddenOrHasHiddenAncestor),
         @"devToolsVisible" : @(page.devToolsView.superview != nil),
         @"discarded" : @(page.discarded),
+        @"frozen" : @(page.frozen),
         @"x" : @(bounds.origin.x),
         @"y" : @(bounds.origin.y),
         @"width" : @(bounds.size.width),
@@ -3196,6 +3268,7 @@ static NSString *const kHasUnsavedInputScript =
                                               inDirectory:@"assets/icons"];
     NSImage *image = path ? [[NSImage alloc] initWithContentsOfFile:path] : nil;
     if (image) NSApp.applicationIconImage = image;
+    if (image) [self stampBundleIcon:data[@"icon"] image:image];
     [self reply:rid result:@{@"ok" : @(image != nil)} error:nil];
     return;
   }
@@ -3590,6 +3663,7 @@ static NSString *const kHasUnsavedInputScript =
     return;
   }
   ArdiaCoreTab *page = Identifier(data[@"id"]) ? _tabs[data[@"id"]] : nil;
+  [self thaw:page];
   if ([action isEqual:@"close"]) {
     if (page && !page.closed) {
       _closing[data[@"id"]] = @([data[@"archive"] boolValue]);
