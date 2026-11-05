@@ -79,7 +79,7 @@ static NSMutableArray *gMinis;
 - (void)attachProfile:(ArdiaCoreProfile *)profile url:(NSString *)url adopting:(ArdiaCoreTab *)adopted {
   BOOL first = !_core;
   if (first) {
-    _core = [[ArdiaCoreWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 720)];
+    _core = [[ArdiaCoreWindow alloc] initWithContentRect:NSMakeRect(0, 0, 960, 620)];
     _core.delegate = self;
   }
   [_core prepareProfile:profile];
