@@ -125,6 +125,48 @@ function initialState() {
     sidebarHidden: false,
   };
 }
+// A private window's workspace: one Space on the off-the-record profile, the
+// normal window's layout settings, always dark, and nothing to restore.
+function privateState(settings = {}) {
+  const base = initialState();
+  const space = {
+    id: id(),
+    name: "Private",
+    icon: "◐",
+    theme: "graphite",
+    profileId: "private",
+    colors: {
+      dark: { sidebar: "#1b1823", frame: "#251d33", accent: "#b9a6ff" },
+    },
+  };
+  const home = newTab(space.id);
+  const keep = [
+    "sidebarWidth",
+    "tabLayout",
+    "toolbarHidden",
+    "splitOrientation",
+    "search",
+    "archiveHours",
+  ];
+  const inherited = Object.fromEntries(
+    keep.filter((key) => key in settings).map((key) => [key, settings[key]]),
+  );
+  return validateState({
+    ...base,
+    spaces: [space],
+    activeSpaceId: space.id,
+    activeTabId: home.id,
+    profiles: [{ id: "private", name: "Private" }],
+    tabs: [home],
+    settings: {
+      ...base.settings,
+      ...inherited,
+      appearance: "dark",
+      dark: true,
+      onboarded: true,
+    },
+  });
+}
 function spaceOf(state, tab) {
   return state.spaces.find((s) => s.id === tab?.spaceId);
 }
@@ -572,6 +614,7 @@ module.exports = {
   normalizeCustomColors,
   newTab,
   initialState,
+  privateState,
   visibleTabs,
   internalPage,
   spaceOf,

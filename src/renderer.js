@@ -333,6 +333,12 @@ function render() {
     state.settings.sidebarWidth + "px",
   );
   document.body.classList.toggle("dark", dark);
+  if (document.body.classList.contains("private")) {
+    $(".home-content .eyebrow").textContent = "PRIVATE WINDOW";
+    $(".home-content h1").textContent = "Browse privately";
+    $(".home-content p").textContent =
+      "Wing won’t remember the pages you visit, your searches or what you fill in forms once you close every private window. Downloaded files are kept.";
+  }
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   const actions = $("#extension-actions");
   actions.setAttribute(

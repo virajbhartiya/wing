@@ -7,7 +7,6 @@
 #import "DeviceChooser.h"
 #import "PromptPopover.h"
 #import "MiniWindow.h"
-#import "PrivateWindow.h"
 #import <AppKit/AppKit.h>
 #include <cmath>
 #include <dlfcn.h>
@@ -233,6 +232,9 @@ static BOOL ValidSync(NSDictionary *data) {
     : NSObject <ArdiaCoreEngineDelegate, ArdiaCoreWindowDelegate,
                 ArdiaCoreTabDelegate>
 @end
+static WingChromiumHost *gMainHost;
+static NSMutableArray<WingChromiumHost *> *gPrivateHosts;
+static __weak ArdiaCoreProfile *gLastPrivateProfile;
 // Human wording for site prompts.
 static NSString *SiteName(NSString *origin) {
   NSString *host = [NSURL URLWithString:origin ?: @""].host ?: origin ?: @"This website";
@@ -342,6 +344,13 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   BOOL _qualificationStarted;
   BOOL _shellRaised;
   NSMutableArray<NSString *> *_externalURLs;
+  // A private window is a second host on an off-the-record profile. It shares
+  // the shell and layout code, never touches disk, and leaves app-wide duties
+  // (menus, Apple events, maintenance) to the main host.
+  BOOL _private;
+  NSDictionary *_privateSettings;
+  NSMutableArray *_observers;
+  id _themeObserver;
 }
 - (void)send:(NSString *)kind data:(id)data {
   if (_shell && !_shell.closed)
@@ -476,6 +485,11 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSString *requestId = request[@"id"];
   if (![requestId isKindOfClass:NSString.class])
     return;
+  WingChromiumHost *owner = [WingChromiumHost hostForTab:tab];
+  if (owner != self) {
+    [owner engine:engine permissionRequest:request tab:tab];
+    return;
+  }
   if (![self identityForTab:tab] || tab.closed) {
     [ArdiaCoreEngine resolvePermission:requestId result:@"deny" remember:NO];
     return;
@@ -503,6 +517,12 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 }
 - (void)engine:(ArdiaCoreEngine *)engine
     permissionRequestDismissed:(NSString *)requestId {
+  if (self == gMainHost)
+    for (WingChromiumHost *host in gPrivateHosts)
+      if (host->_permissionAlerts[requestId]) {
+        [host engine:engine permissionRequestDismissed:requestId];
+        return;
+      }
   WingPromptPopover *prompt = _permissionAlerts[requestId];
   [_permissionAlerts removeObjectForKey:requestId];
   [prompt dismiss];
@@ -512,6 +532,11 @@ static NSString *PermissionSymbol(NSArray *kinds) {
     if (chooser.tab == tab) [chooser cancel];
 }
 - (void)engine:(ArdiaCoreEngine *)engine deviceChooser:(NSDictionary *)state tab:(ArdiaCoreTab *)tab {
+  WingChromiumHost *owner = [WingChromiumHost hostForTab:tab];
+  if (owner != self) {
+    [owner engine:engine deviceChooser:state tab:tab];
+    return;
+  }
   NSNumber *identity = state[@"id"];
   if (![identity isKindOfClass:NSNumber.class]) return;
   WingDeviceChooser *chooser = _deviceChoosers[identity];
@@ -1326,7 +1351,8 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                   reply(nil, @"Unknown import operation.");
               }];
 }
-- (void)engineDidStart {
+// Per-window collections, shared by the main and private hosts.
+- (void)prepareState {
   _tabs = [NSMutableDictionary new];
   _extensionPanel = [WingExtensionPanel new];
   _extensionSidebar = [WingExtensionSidebar new];
@@ -1337,12 +1363,6 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
       [sidebarHost focusAfterExtensionChange];
     });
   };
-  _externalURLs = [NSMutableArray new];
-  [NSAppleEventManager.sharedAppleEventManager
-      setEventHandler:self
-          andSelector:@selector(handleOpenURL:reply:)
-        forEventClass:'GURL'
-           andEventID:'GURL'];
   _serviceTabs = [NSMutableDictionary new];
   _serviceURLs = [NSMutableDictionary new];
   _extensionManagers = [NSMutableDictionary new];
@@ -1362,7 +1382,6 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _crashedTabs = [NSMutableDictionary new];
   _hangPrompts = [NSMutableDictionary new];
   _screenSharingTabs = [NSMutableSet new];
-  [ArdiaCoreEngine setAutoPictureInPicture:NO];
   _wakingTabs = [NSMutableSet new];
   _pendingCreatedTabs = [NSMutableSet new];
   _protectedProfiles = [NSMutableSet new];
@@ -1371,26 +1390,9 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _protectionTabs = [NSMutableDictionary new];
   _protectionDeadlines = [NSMutableDictionary new];
   _protectionURLs = [NSMutableDictionary new];
-  ArdiaCoreEngine *engine = ArdiaCoreEngine.sharedEngine;
-  // The engine default profile is reserved for trusted UI. Website profiles
-  // are loaded separately, including Wing's "default" browsing profile.
-  _workspacePath = [@(getenv("WING_PROFILE_ROOT"))
-      stringByAppendingPathComponent:@"wing-workspace.json"];
-  _shellURL = [NSURL fileURLWithPath:[NSBundle.mainBundle.resourcePath
-                                         stringByAppendingPathComponent:
-                                             @"shell/index.html"]]
-                  .absoluteString;
-  engine.pageScript = [NSString
-      stringWithFormat:
-          @"(post)=>{if(window!==top)return()=>{};if(location.protocol==='"
-          @"chrome-extension:'&&location.pathname==='/"
-          @"control.html'){Object.defineProperty(window,'__wingServicePost',{"
-          @"value:post});return()=>{};}if(location.href!==%@)return()=>{};"
-          @"Object."
-          @"defineProperty(window,'__wingNativePost',{value:post});return(kind,"
-          @"json)=>{if(kind==='wing-native')window.dispatchEvent(new "
-          @"CustomEvent('wing-native',{detail:JSON.parse(json)}));}}",
-          JSON(_shellURL)];
+}
+// The window, its transparent shell and the observers that follow it.
+- (void)buildWindow {
   _window = [[ArdiaCoreWindow alloc]
       initWithContentRect:NSMakeRect(100, 100, 1200, 800)];
   _window.delegate = self;
@@ -1401,7 +1403,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _window.window.titlebarAppearsTransparent = YES;
   _window.window.titleVisibility = NSWindowTitleHidden;
   _window.window.tabbingMode = NSWindowTabbingModeDisallowed;
-  [_window.window setFrameAutosaveName:@"WingMainWindow"];
+  if (!_private) [_window.window setFrameAutosaveName:@"WingMainWindow"];
   // A saved frame can point at a display that is no longer attached.
   BOOL visible = NO;
   for (NSScreen *screen in NSScreen.screens)
@@ -1415,7 +1417,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _uiWindow.window.excludedFromWindowsMenu = YES;
   _uiWindow.delegate = self;
   _shell = [_uiWindow openTab:_shellURL
-                      profile:engine.defaultProfile
+                      profile:ArdiaCoreEngine.sharedEngine.defaultProfile
                    foreground:YES];
   _shell.delegate = self;
   // Native sidebar material behind a transparent shell, tinted by CSS.
@@ -1441,38 +1443,39 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                 [weakSelf layoutTrafficLights];
                 [weakSelf send:@"resize" data:@{}];
               }];
+  _observers = [NSMutableArray new];
   for (NSNotificationName name in @[ NSWindowDidExitFullScreenNotification,
                                      NSWindowDidBecomeKeyNotification,
                                      NSWindowDidResignKeyNotification ])
-    [NSNotificationCenter.defaultCenter
+    [_observers addObject:[NSNotificationCenter.defaultCenter
         addObserverForName:name
                     object:_window.window
                      queue:NSOperationQueue.mainQueue
                 usingBlock:^(NSNotification *note) {
                   [weakSelf layoutTrafficLights];
-                }];
+                }]];
   // Auto follows the Mac, whose Light/Dark switch rebuilds the title bar too.
-  [NSDistributedNotificationCenter.defaultCenter
+  _themeObserver = [NSDistributedNotificationCenter.defaultCenter
       addObserverForName:@"AppleInterfaceThemeChangedNotification"
                   object:nil
                    queue:NSOperationQueue.mainQueue
               usingBlock:^(NSNotification *note) {
                 [weakSelf relayoutTrafficLightsSoon];
               }];
-  [NSNotificationCenter.defaultCenter
+  [_observers addObject:[NSNotificationCenter.defaultCenter
       addObserverForName:NSWindowDidEnterFullScreenNotification
                   object:_window.window
                    queue:NSOperationQueue.mainQueue
               usingBlock:^(NSNotification *note) {
                 [weakSelf send:@"window-state" data:@{@"fullScreen" : @YES}];
-              }];
-  [NSNotificationCenter.defaultCenter
+              }]];
+  [_observers addObject:[NSNotificationCenter.defaultCenter
       addObserverForName:NSWindowWillExitFullScreenNotification
                   object:_window.window
                    queue:NSOperationQueue.mainQueue
               usingBlock:^(NSNotification *note) {
                 [weakSelf send:@"window-state" data:@{@"fullScreen" : @NO}];
-              }];
+              }]];
   // The shell asks for a window drag after mousedown on empty chrome; keep
   // the originating event so AppKit can run its native move loop.
   _mouseDownMonitor = [NSEvent
@@ -1483,6 +1486,38 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                                        host->_lastMouseDown = event;
                                      return event;
                                    }];
+}
+- (void)engineDidStart {
+  gMainHost = self;
+  [self prepareState];
+  _externalURLs = [NSMutableArray new];
+  [NSAppleEventManager.sharedAppleEventManager
+      setEventHandler:self
+          andSelector:@selector(handleOpenURL:reply:)
+        forEventClass:'GURL'
+           andEventID:'GURL'];
+  [ArdiaCoreEngine setAutoPictureInPicture:NO];
+  ArdiaCoreEngine *engine = ArdiaCoreEngine.sharedEngine;
+  // The engine default profile is reserved for trusted UI. Website profiles
+  // are loaded separately, including Wing's "default" browsing profile.
+  _workspacePath = [@(getenv("WING_PROFILE_ROOT"))
+      stringByAppendingPathComponent:@"wing-workspace.json"];
+  _shellURL = [NSURL fileURLWithPath:[NSBundle.mainBundle.resourcePath
+                                         stringByAppendingPathComponent:
+                                             @"shell/index.html"]]
+                  .absoluteString;
+  engine.pageScript = [NSString
+      stringWithFormat:
+          @"(post)=>{if(window!==top)return()=>{};if(location.protocol==='"
+          @"chrome-extension:'&&location.pathname==='/"
+          @"control.html'){Object.defineProperty(window,'__wingServicePost',{"
+          @"value:post});return()=>{};}if(location.href!==%@)return()=>{};"
+          @"Object."
+          @"defineProperty(window,'__wingNativePost',{value:post});return(kind,"
+          @"json)=>{if(kind==='wing-native')window.dispatchEvent(new "
+          @"CustomEvent('wing-native',{detail:JSON.parse(json)}));}}",
+          JSON(_shellURL)];
+  [self buildWindow];
   [NSAppleEventManager.sharedAppleEventManager
       setEventHandler:self
           andSelector:@selector(handleReopen:reply:)
@@ -1494,6 +1529,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   [self layoutTrafficLights];
   [self installMenus];
   [_shell focus];
+  __weak WingChromiumHost *weakSelf = self;
   _maintenanceTimer =
       [NSTimer scheduledTimerWithTimeInterval:60
                                       repeats:YES
@@ -1507,13 +1543,92 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                                    handler:^NSEvent *(NSEvent *event) {
                                      if (!(event.modifierFlags &
                                            NSEventModifierFlagControl))
-                                       [weakSelf
+                                       [[WingChromiumHost keyHost]
                                            send:@"action"
                                            data:@{
                                              @"name" : @"recent-tabs-commit"
                                            }];
                                      return event;
                                    }];
+}
+// The host whose window is in front: menus, shortcuts and Control-Tab go there.
+// Key status alone is not enough, since no window is key while Wing is behind.
++ (WingChromiumHost *)keyHost {
+  NSWindow *front = NSApp.keyWindow;
+  if (!front)
+    for (NSWindow *window in NSApp.orderedWindows)
+      if (window.visible && ![window isKindOfClass:NSPanel.class] && window.canBecomeMainWindow) {
+        front = window;
+        break;
+      }
+  for (WingChromiumHost *host in gPrivateHosts)
+    if (front && host->_window.window == front) return host;
+  return gMainHost;
+}
+// Engine-wide callbacks reach the main host; pages may belong to a private one.
++ (WingChromiumHost *)hostForTab:(ArdiaCoreTab *)tab {
+  for (WingChromiumHost *host in gPrivateHosts)
+    if ([host identityForTab:tab]) return host;
+  return gMainHost;
+}
+- (instancetype)initPrivateWithProfile:(ArdiaCoreProfile *)profile
+                              settings:(NSDictionary *)settings {
+  if (!(self = [super init])) return nil;
+  _private = YES;
+  [self prepareState];
+  _externalURLs = [NSMutableArray new];
+  _shellURL = gMainHost->_shellURL;
+  _profiles[@"private"] = profile;
+  gLastPrivateProfile = profile;
+  _privateSettings = settings ?: @{};
+  [self buildWindow];
+  NSWindow *window = _window.window;
+  window.title = @"Private Browsing";
+  window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  NSWindow *parent = [WingChromiumHost keyHost]->_window.window;
+  if (parent.visible) {
+    [window setFrame:parent.frame display:NO];
+    [window setFrameTopLeftPoint:[window cascadeTopLeftFromPoint:NSMakePoint(
+                                                                     NSMinX(parent.frame),
+                                                                     NSMaxY(parent.frame))]];
+  } else
+    [window center];
+  [_window showInactive];
+  [window makeKeyAndOrderFront:nil];
+  [self layoutTrafficLights];
+  [_shell focus];
+  return self;
+}
+// Closing a private window drops its pages; the last one takes the profile with it.
+- (void)closePrivateWindow {
+  _quitting = YES;
+  for (ArdiaCoreTab *page in [_tabs.allValues arrayByAddingObjectsFromArray:_protectionTabs.allValues]) {
+    page.delegate = nil;
+    if (!page.closed) [page closeNow];
+  }
+  [_tabs removeAllObjects];
+  [_protectionTabs removeAllObjects];
+  for (WingPromptPopover *prompt in _permissionAlerts.allValues) [prompt dismiss];
+  for (WingPromptPopover *prompt in _hangPrompts.allValues) [prompt dismiss];
+  for (id observer in _observers) [NSNotificationCenter.defaultCenter removeObserver:observer];
+  [NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];
+  [NSDistributedNotificationCenter.defaultCenter removeObserver:_themeObserver];
+  [NSEvent removeMonitor:_mouseDownMonitor];
+  _observers = nil;
+  _resizeObserver = _themeObserver = _mouseDownMonitor = nil;
+  _shell.delegate = nil;
+  ArdiaCoreWindow *ui = _uiWindow;
+  _uiWindow.delegate = nil;
+  dispatch_async(dispatch_get_main_queue(), ^{ [ui close]; });
+  ArdiaCoreProfile *profile = _profiles[@"private"];
+  [gPrivateHosts removeObject:self];
+  BOOL shared = NO;
+  for (WingChromiumHost *host in gPrivateHosts)
+    shared = shared || host->_profiles[@"private"] == profile;
+  if (profile && !shared)
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [ArdiaCoreEngine.sharedEngine releaseProfile:profile];
+    });
 }
 // Editors exist on most web apps, so an editable element only counts as unsaved
 // once the user has typed in it and it still holds text. Sending a message
@@ -1783,8 +1898,12 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                    : [data[@"type"] isEqual:@"palette"]
                        ? [@"palette-" stringByAppendingString:data[@"mode"] ?: @"new"]
                        : nil;
-  if (name && [WingPrivateWindow performMenuAction:name args:data[@"args"] ?: @{}])
+  WingChromiumHost *target = [WingChromiumHost keyHost];
+  if (target != self) {
+    [target send:payload[@"kind"] data:payload[@"data"]];
+    if ([payload[@"kind"] isEqual:@"command"]) [target->_shell focus];
     return;
+  }
   if (name && [WingMiniWindow performMenuAction:name args:data[@"args"] ?: @{}])
     return;
   if (!_window.window.visible) [self showMainWindow:nil];
@@ -2029,6 +2148,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 }
 - (void)quit:(id)sender {
   _quitting = YES;
+  for (WingChromiumHost *host in gPrivateHosts) host->_quitting = YES;
   [ArdiaCoreEngine.sharedEngine quit];
 }
 - (void)engineQuitCancelled {
@@ -2039,6 +2159,10 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [self engineQuitCancelled];
 }
 - (BOOL)windowShouldClose:(ArdiaCoreWindow *)window {
+  if (_private) {
+    if (window == _window && !_quitting && !gMainHost->_quitting) [self closePrivateWindow];
+    return YES;
+  }
   // Mac browsers keep running when the window closes; the Dock icon,
   // ⌘N or an opened link brings the same workspace back.
   if (window == _window && !_quitting) {
@@ -2136,7 +2260,14 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 - (ArdiaCoreWindow *)engineWindowForNewBrowserOfProfile:
                          (ArdiaCoreProfile *)profile
                                                    type:(NSString *)type {
-  return [WingPrivateWindow engineWindowForProfile:profile] ?: _window;
+  // Popups from a private page stay in a private window, the front one first.
+  if (profile.offTheRecord) {
+    WingChromiumHost *front = [WingChromiumHost keyHost];
+    if (front->_private && front->_profiles[@"private"] == profile) return front->_window;
+    for (WingChromiumHost *host in gPrivateHosts)
+      if (host->_profiles[@"private"] == profile) return host->_window;
+  }
+  return _window;
 }
 // Only the page overrides in the Develop menu may reach the protocol.
 - (void)runDevCalls:(NSArray *)calls
@@ -2286,11 +2417,41 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [self reply:rid result:@{@"ok" : @YES, @"open" : @(WingMiniWindow.openCount)} error:nil];
 }
 - (void)newPrivateWindow:(id)sender {
-  BOOL duck = [_lastSync[@"workspace"][@"settings"][@"search"] isEqual:@"duckduckgo"];
-  [WingPrivateWindow
-      openFromProfile:_window.activeProfile ?: ArdiaCoreEngine.sharedEngine.defaultProfile
-                  url:nil
-               search:duck ? @"https://duckduckgo.com/?q=" : @"https://www.google.com/search?q="];
+  WingChromiumHost *main = gMainHost;
+  // Private windows share one off-the-record profile while any is open.
+  WingChromiumHost *first = gPrivateHosts.firstObject;
+  ArdiaCoreProfile *existing = first ? first->_profiles[@"private"] : nil;
+  NSMutableDictionary *settings =
+      [main->_lastSync[@"workspace"][@"settings"] mutableCopy] ?: [NSMutableDictionary new];
+  void (^open)(ArdiaCoreProfile *) = ^(ArdiaCoreProfile *profile) {
+    gPrivateHosts = gPrivateHosts ?: [NSMutableArray new];
+    [gPrivateHosts addObject:[[WingChromiumHost alloc] initPrivateWithProfile:profile
+                                                                     settings:settings]];
+  };
+  if (existing && !existing.destroyed) {
+    open(existing);
+    return;
+  }
+  ArdiaCoreProfile *base = main->_window.activeProfile ?: main->_profiles[@"default"];
+  if (!base) {
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"A private window couldn’t be opened.";
+    alert.informativeText = @"Open a page in Wing first, then try again.";
+    [alert runModal];
+    return;
+  }
+  [ArdiaCoreEngine.sharedEngine
+      offTheRecordProfileFor:base
+                  completion:^(ArdiaCoreProfile *offTheRecord, NSString *error) {
+                    if (!offTheRecord) {
+                      NSAlert *alert = [NSAlert new];
+                      alert.messageText = @"A private window couldn’t be opened.";
+                      alert.informativeText = error ?: @"";
+                      [alert runModal];
+                      return;
+                    }
+                    open(offTheRecord);
+                  }];
 }
 - (void)window:(ArdiaCoreWindow *)window
     didInsertTab:(ArdiaCoreTab *)tab
@@ -2590,7 +2751,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     }
   }
   const char *scriptPath = getenv("WING_CHROMIUM_TEST_SCRIPT");
-  if (tab == _shell && !tab.loading && !_qualificationStarted && scriptPath) {
+  if (tab == _shell && !_private && !tab.loading && !_qualificationStarted && scriptPath) {
     _qualificationStarted = YES;
     NSString *script = [NSString stringWithContentsOfFile:@(scriptPath)
                                                  encoding:NSUTF8StringEncoding
@@ -2715,9 +2876,11 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [_pendingCreatedTabs removeObject:identity];
     else if ([_pendingCreatedTabs containsObject:identity])
       continue;
-    if (!record || [record[@"closed"] boolValue] ||
-        ![page.profile.name
-            isEqual:[@"Wing-" stringByAppendingString:profileId ?: @""]]) {
+    // Off-the-record profiles have no stable name, so private pages match by profile.
+    BOOL ownProfile = _private ? page.profile == _profiles[profileId ?: @""]
+                               : [page.profile.name
+                                     isEqual:[@"Wing-" stringByAppendingString:profileId ?: @""]];
+    if (!record || [record[@"closed"] boolValue] || !ownProfile) {
       [self closeExtensionViewsForTabID:identity];
       [_tabs removeObjectForKey:identity];
       [_crashedTabs removeObjectForKey:identity];
@@ -2770,6 +2933,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if (!Identifier(profileId))
       continue;
     ArdiaCoreProfile *profile = _profiles[profileId];
+    if (!profile && _private) continue;
     if (!profile) {
       if (![_loadingProfiles containsObject:profileId]) {
         [_loadingProfiles addObject:profileId];
@@ -2993,6 +3157,23 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [self reply:rid result:nil error:@"Browser is closing."];
     return;
   }
+  // Private windows keep nothing: no saved workspace, library, profiles,
+  // imports, extensions or app-wide settings.
+  static NSSet *notPrivate;
+  if (!notPrivate)
+    notPrivate = [NSSet setWithArray:@[
+      @"workspace-recover", @"service", @"delete-profile", @"throwaway-profile",
+      @"browser-import", @"browser-profiles", @"extensions-unpacked", @"extensions-reload",
+      @"extensions-watch", @"extensions-install", @"extension-capabilities",
+      @"download-directory", @"default-browser", @"default-browser-prompt", @"app-icon",
+      @"mini-open", @"run-tool", @"metrics", @"trim-memory", @"password-apps",
+      @"password-app-open", @"clear-site-data", @"fill-login", @"test-archive-idle",
+      @"test-install-unpacked"
+    ]];
+  if (_private && [notPrivate containsObject:action]) {
+    [self reply:rid result:nil error:@"Not available in a private window."];
+    return;
+  }
   if ([action isEqual:@"window-drag"]) {
     NSEvent *down = _lastMouseDown;
     [self reply:rid result:@{@"ok" : @YES} error:nil];
@@ -3017,6 +3198,31 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   if ([action isEqual:@"test-minis"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
     if ([data[@"close"] boolValue]) [WingMiniWindow closeAll];
     [self reply:rid result:@{@"windows" : WingMiniWindow.diagnostics} error:nil];
+    return;
+  }
+  if ([action isEqual:@"test-private"] && getenv("WING_CHROMIUM_TEST_SCRIPT") && !_private) {
+    WingChromiumHost *host = gPrivateHosts.lastObject;
+    if ([data[@"open"] boolValue]) {
+      [self newPrivateWindow:nil];
+      [self reply:rid result:@{@"ok" : @YES} error:nil];
+    } else if ([data[@"close"] boolValue]) {
+      for (WingChromiumHost *each in [gPrivateHosts copy])
+        [each->_window.window performClose:nil];
+      [self reply:rid result:@{@"windows" : @(gPrivateHosts.count)} error:nil];
+    } else if ([data[@"script"] isKindOfClass:NSString.class] && host) {
+      [host->_shell evaluate:data[@"script"]
+                  completion:^(NSString *result) {
+                    [self reply:rid result:result ?: NSNull.null error:nil];
+                  }];
+    } else
+      [self reply:rid
+           result:@{
+             @"windows" : @(gPrivateHosts.count),
+             @"front" : @(host && [WingChromiumHost keyHost] == host),
+             @"offTheRecord" : @(host && host->_profiles[@"private"].offTheRecord),
+             @"released" : @(!gLastPrivateProfile || gLastPrivateProfile.destroyed)
+           }
+            error:nil];
     return;
   }
   if ([action isEqual:@"diagnostics"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
@@ -3095,6 +3301,17 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       }];
     return;
   }
+  if ([action isEqual:@"bootstrap"] && _private) {
+    [self reply:rid
+         result:@{
+           @"workspace" : NSNull.null,
+           @"private" : @YES,
+           @"settings" : _privateSettings,
+           @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion
+         }
+          error:nil];
+    return;
+  }
   if ([action isEqual:@"bootstrap"]) {
     NSData *saved = [NSData dataWithContentsOfFile:_workspacePath];
     id state = saved ? [NSJSONSerialization JSONObjectWithData:saved
@@ -3152,7 +3369,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [self reply:rid result:nil error:@"Invalid workspace layout"];
       return;
     }
-    if ([data[@"persist"] boolValue]) {
+    if ([data[@"persist"] boolValue] && !_private) {
       NSError *error;
       NSMutableDictionary *durable = [state mutableCopy];
       NSMutableArray *tabs = [NSMutableArray new];
@@ -3182,7 +3399,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     NSAppearanceName appearanceName = [appearance isEqual:@"dark"]    ? NSAppearanceNameDarkAqua
                                       : [appearance isEqual:@"light"] ? NSAppearanceNameAqua
                                                                       : nil;
-    if (![NSApp.appearance.name isEqual:appearanceName] && (NSApp.appearance || appearanceName)) {
+    if (!_private && ![NSApp.appearance.name isEqual:appearanceName] &&
+        (NSApp.appearance || appearanceName)) {
       NSApp.appearance = appearanceName ? [NSAppearance appearanceNamed:appearanceName] : nil;
       [self relayoutTrafficLightsSoon];
     }

@@ -29,7 +29,43 @@ let sequence = 0,
   overlay = false,
   overlayToken = 0,
   shellRaised = false,
-  shellLowerTimer = 0;
+  shellLowerTimer = 0,
+  privateMode = false;
+// A private window keeps one in-memory Space; anything that would save or
+// reach the person's other profiles stays in the normal window.
+const NOT_PRIVATE = new Set([
+  "settings",
+  "features-settings",
+  "delete-space",
+  "boost",
+  "reorder-space",
+  "save-space",
+  "swipe-profile",
+  "space-index",
+  "space",
+  "pin",
+  "favorite",
+  "folder",
+  "save-folder",
+  "remove-folder",
+  "reset-pin",
+  "reset-pin-id",
+  "new-throwaway",
+  "browser-profiles",
+  "browser-import",
+  "export",
+  "import",
+  "export-space",
+  "library-data",
+  "extensions-install",
+  "extensions-store-install",
+  "extension-capabilities",
+  "protection-settings",
+  "default-browser",
+  "updates-check",
+  "mini-visit",
+  "pulls-open",
+]);
 function native(action, data = {}) {
   return new Promise((resolve, reject) => {
     const id = ++sequence;
@@ -121,7 +157,7 @@ window.addEventListener("wing-native", (event) => {
       workspace.closed(data.id, data.archive);
       await publish();
     });
-  else if (workspace && kind === "service-event")
+  else if (workspace && kind === "service-event" && !privateMode)
     enqueue(async () => {
       if (data.profileId === profileId()) {
         await library();
@@ -132,6 +168,13 @@ window.addEventListener("wing-native", (event) => {
   else if (workspace && kind === "resize") enqueue(() => publish(false));
 });
 const ready = native("bootstrap").then(async (result) => {
+  if (result.private) {
+    privateMode = true;
+    document.body.classList.add("private");
+    workspace = new ChromiumWorkspace(M.privateState(result.settings));
+    version = result.version;
+    return;
+  }
   const opened = await openWorkspace(result, (after) =>
     native("workspace-recover", { after }),
   );
@@ -195,6 +238,7 @@ async function publish(persist = true) {
   updateShellRaise(260);
   const snapshot = workspace.snapshot(version);
   const address = document.querySelector("#address")?.getBoundingClientRect();
+  persist = persist && !privateMode;
   await native("sync", {
     workspace: workspace.state,
     panes: workspace.layout(innerWidth, innerHeight),
@@ -369,6 +413,8 @@ const DEVELOPER_ACTIONS = new Set([
   "emoji-panel",
 ]);
 async function invoke(action, data = {}) {
+  if (privateMode && NOT_PRIVATE.has(action))
+    throw Error("Not available in a private window.");
   if (DEVELOPER_ACTIONS.has(action)) {
     await ready;
     const result = await developerAction(action, data);
@@ -701,6 +747,7 @@ async function invoke(action, data = {}) {
     if (action === "native-archive-idle")
       return native("test-archive-idle", data);
     if (action === "native-minis") return native("test-minis", data);
+    if (action === "native-test-private") return native("test-private", data);
     if (action === "native-install-unpacked")
       return native("test-install-unpacked", { ...data, profile: profileId() });
     if (action === "native-diagnostics" || action === "native-evaluate")
@@ -944,6 +991,7 @@ window.wing = {
 require("./chromium-actions.cjs").installBrowserActions(window.wing);
 // App icon and the default browser question wait for the saved workspace.
 ready.then(async () => {
+  if (privateMode) return;
   const { settings } = workspace.state;
   if (settings.appIcon) native("app-icon", { icon: settings.appIcon }).catch(() => {});
   if (!shouldAskDefaultBrowser({ packaged: true, isDefault: false, settings })) return;

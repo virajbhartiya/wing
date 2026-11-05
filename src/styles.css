@@ -3137,3 +3137,26 @@ body.tabs-top #toolbar-add-space {
 .json-null {
   opacity: 0.6;
 }
+
+/* Private windows: one Space, nothing saved, so personal features stay hidden. */
+body.private #favorites,
+body.private #edit-space,
+body.private #pinned,
+body.private #clear-today,
+body.private #library-button,
+body.private #spaces,
+body.private #add-space,
+body.private #toolbar-spaces,
+body.private .launch-section {
+  display: none !important;
+}
+body.private .space-heading #space-name::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+}
