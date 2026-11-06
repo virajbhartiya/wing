@@ -7,6 +7,7 @@
 #import "DeviceChooser.h"
 #import "PromptPopover.h"
 #import "MiniWindow.h"
+#import "CastPicker.h"
 #import <AppKit/AppKit.h>
 #include <cmath>
 #include <dlfcn.h>
@@ -283,6 +284,8 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   return @"hand.raised.fill";
 }
 static NSUInteger gHoverPeekGeneration;
+// uBlock Origin Lite: declarative rules the engine applies without a background page.
+static NSString *const kProtectionFolder = @"uBOLite.chromium";
 @implementation WingChromiumHost {
   ArdiaCoreWindow *_window, *_uiWindow;
   ArdiaCoreTab *_shell;
@@ -339,6 +342,10 @@ static NSUInteger gHoverPeekGeneration;
   NSMutableDictionary<NSString *, WingPromptPopover *> *_hangPrompts;
   NSMutableDictionary<NSString *, NSDictionary *> *_externalAppAlerts;
   NSMutableDictionary<NSNumber *, WingDeviceChooser *> *_deviceChoosers;
+  WingCastPicker *_castPicker;
+  NSView *_hoverCard;
+  ArdiaCoreTab *_hoverTab;
+  NSString *_hoverURL;
   BOOL _automaticPictureInPicture;
   NSMutableSet<NSString *> *_pictureInPictureTabs;
   NSMutableSet<NSString *> *_screenSharingTabs;
@@ -403,7 +410,7 @@ static NSUInteger gHoverPeekGeneration;
            [self->_window prepareProfile:loaded];
            [loaded loadComponentExtension:
                        [NSBundle.mainBundle.resourcePath
-                           stringByAppendingPathComponent:@"uBlock0.chromium"]];
+                           stringByAppendingPathComponent:kProtectionFolder]];
            [self service:request
                  profile:profileId
                    reply:rid
@@ -641,14 +648,43 @@ static NSUInteger gHoverPeekGeneration;
         [ArdiaCoreEngine resolveExtensionInstallPrompt:prompt[@"requestId"] accepted:choice == 1];
       }];
 }
-// The engine calls these unconditionally. Wing has no Cast interface yet.
+// Cast: the engine discovers devices and owns routes; Wing shows the list.
 - (void)engine:(ArdiaCoreEngine *)engine
     castDialog:(NSDictionary *)dialog
            tab:(ArdiaCoreTab *)tab {
+  WingChromiumHost *owner = [WingChromiumHost hostForTab:tab];
+  if (owner && owner != self) {
+    [owner engine:engine castDialog:dialog tab:tab];
+    return;
+  }
+  if (_castPicker && _castPicker.tab != tab) {
+    [_castPicker close];
+    _castPicker = nil;
+  }
+  if (!_castPicker) {
+    if (![dialog[@"open"] boolValue] || _quitting || tab.closed) {
+      if ([dialog[@"open"] boolValue]) [ArdiaCoreEngine closeCastDialog:[dialog[@"id"] intValue]];
+      return;
+    }
+    _castPicker = [[WingCastPicker alloc] initWithTab:tab view:_window.hostView anchor:[self promptAnchor]];
+    __weak WingChromiumHost *host = self;
+    __weak WingCastPicker *picker = _castPicker;
+    _castPicker.onClose = ^{
+      WingChromiumHost *owner = host;
+      if (owner && owner->_castPicker == picker) owner->_castPicker = nil;
+    };
+  }
+  [_castPicker update:dialog];
 }
 - (void)engine:(ArdiaCoreEngine *)engine
     castRoutes:(NSArray *)routes
        profile:(ArdiaCoreProfile *)profile {
+  NSMutableArray *active = [NSMutableArray array];
+  for (NSDictionary *route in routes)
+    if ([route isKindOfClass:NSDictionary.class]) [active addObject:route];
+  for (WingChromiumHost *host in [@[ gMainHost ?: self ] arrayByAddingObjectsFromArray:gPrivateHosts ?: @[]])
+    if (host->_profiles.allValues.count && [host->_profiles.allValues containsObject:profile])
+      [host send:@"command" data:@{@"type" : @"cast-routes", @"routes" : active}];
 }
 - (void)engine:(ArdiaCoreEngine *)engine
     extensionInstallFailed:(NSString *)message
@@ -842,7 +878,7 @@ static NSUInteger gHoverPeekGeneration;
     [self applyLayout];
   });
 }
-// uBlock Origin's own dashboard messaging holds its trusted-site list.
+// uBlock Origin Lite's own messaging holds its per-site filtering modes.
 - (void)allowlist:(ArdiaCoreTab *)helper
              host:(NSString *)host
             allow:(id)allow
@@ -866,11 +902,14 @@ static NSUInteger gHoverPeekGeneration;
     return;
   }
   NSData *args = [NSJSONSerialization dataWithJSONObject:@[ host, allow ] options:0 error:nil];
+  // A trusted site is uBO Lite's "no filtering" mode (0); untrusting restores
+  // the default mode.
   NSString *script = [NSString stringWithFormat:
-      @"(async([host,allow])=>{if(typeof vAPI==='undefined'||!vAPI.messaging){post('result',JSON.stringify({waiting:true}));return}"
-      @"const m=vAPI.messaging;const r=await m.send('dashboard',{what:'getWhitelist'});let list=r.whitelist;"
-      @"const has=list.includes(host);if(allow!==null&&allow!==has){list=allow?[...list,host]:list.filter(x=>x!==host);"
-      @"await m.send('dashboard',{what:'setWhitelist',whitelist:list.join('\\n')})}"
+      @"(async([host,allow])=>{const send=m=>chrome.runtime.sendMessage(m);"
+      @"let level=globalThis.chrome?.runtime?.sendMessage?await send({what:'getFilteringMode',hostname:host}):undefined;"
+      @"if(typeof level!=='number'){post('result',JSON.stringify({waiting:true}));return}"
+      @"const has=level===0;if(allow!==null&&allow!==has){const target=allow?0:await send({what:'getDefaultFilteringMode'});"
+      @"await send({what:'setFilteringMode',hostname:host,level:target})}"
       @"post('result',JSON.stringify({host,allowed:allow===null?has:allow}))})(%@).catch(e=>post('result',JSON.stringify({error:String(e)})))",
       [[NSString alloc] initWithData:args encoding:NSUTF8StringEncoding]];
   [helper evaluate:script
@@ -1060,7 +1099,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
            [self->_window prepareProfile:profile];
            [profile loadComponentExtension:[NSBundle.mainBundle.resourcePath
                                                stringByAppendingPathComponent:
-                                                   @"uBlock0.chromium"]];
+                                                   kProtectionFolder]];
          }
          ready(profile, profile ? nil : @"Import destination could not load.");
        }];
@@ -1323,7 +1362,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                   }
                         profile:profileId
                           reply:rid
-                       attempts:100];
+                       attempts:400];
                 } else if ([operation isEqual:@"passwords"]) {
                   if (![profile
                           respondsToSelector:@selector(
@@ -1545,8 +1584,21 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
       addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged | NSEventMaskKeyDown |
                                            NSEventMaskLeftMouseDown | NSEventMaskScrollWheel
                                    handler:^NSEvent *(NSEvent *event) {
+                                     WingChromiumHost *host = [WingChromiumHost keyHost];
+                                     if (!host)
+                                       return event;
+                                     // Clicking the preview card opens its link in a Peek.
+                                     if (event.type == NSEventTypeLeftMouseDown && host->_hoverCard &&
+                                         event.window == host->_window.window &&
+                                         NSPointInRect([host->_hoverCard convertPoint:event.locationInWindow fromView:nil],
+                                                       host->_hoverCard.bounds)) {
+                                       [host promoteHoverCard];
+                                       return nil;
+                                     }
                                      // Any other input cancels a pending Shift-hover preview.
                                      NSUInteger generation = ++gHoverPeekGeneration;
+                                     if (event.type == NSEventTypeKeyDown && host->_hoverCard)
+                                       [host closeHoverCard];
                                      if (event.type != NSEventTypeFlagsChanged)
                                        return event;
                                      NSEventModifierFlags flags =
@@ -1554,23 +1606,23 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                                          (NSEventModifierFlagShift | NSEventModifierFlagControl |
                                           NSEventModifierFlagOption | NSEventModifierFlagCommand);
                                      if (!(flags & NSEventModifierFlagControl))
-                                       [[WingChromiumHost keyHost]
-                                           send:@"action"
-                                           data:@{
-                                             @"name" : @"recent-tabs-commit"
-                                           }];
-                                     if (flags == NSEventModifierFlagShift)
-                                       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 350 * NSEC_PER_MSEC),
-                                                      dispatch_get_main_queue(), ^{
-                                                        if (generation == gHoverPeekGeneration)
-                                                          [[WingChromiumHost keyHost] peekHoveredLink];
-                                                      });
+                                       [host send:@"action" data:@{@"name" : @"recent-tabs-commit"}];
+                                     if (flags != NSEventModifierFlagShift) {
+                                       [host closeHoverCard];
+                                       return event;
+                                     }
+                                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_MSEC),
+                                                    dispatch_get_main_queue(), ^{
+                                                      if (generation == gHoverPeekGeneration)
+                                                        [[WingChromiumHost keyHost] previewHoveredLink];
+                                                    });
                                      return event;
                                    }];
 }
-// Holding Shift over a link previews it in a Peek, like Shift-clicking it.
-- (void)peekHoveredLink {
-  if (_quitting || !_window.window.isKeyWindow)
+// Holding Shift over a link shows a small live preview card beside it while
+// Shift is held. Clicking the card opens the link in a Peek.
+- (void)previewHoveredLink {
+  if (_quitting || !_window.window.isKeyWindow || _hoverCard)
     return;
   NSPoint mouse = _window.window.mouseLocationOutsideOfEventStream;
   for (NSDictionary *pane in _lastSync[@"panes"]) {
@@ -1581,6 +1633,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
     for (NSDictionary *record in _lastSync[@"workspace"][@"tabs"])
       if ([record[@"id"] isEqual:pane[@"id"]] && [record[@"transient"] boolValue])
         return;
+    [page.profile warmSpareRenderer];
     [page evaluate:@"post('result',JSON.stringify((()=>{const a=[...document.querySelectorAll('a[href]:hover')].pop();"
                    @"return a&&/^https?:/.test(a.href)&&a.href!==location.href?a.href:''})()))"
         completion:^(NSString *raw) {
@@ -1588,11 +1641,80 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
           if ([value isKindOfClass:NSString.class] && [value hasPrefix:@"\""])
             value = Parse(value);
           if ([value isKindOfClass:NSString.class] && [value hasPrefix:@"http"] &&
-              [NSEvent modifierFlags] & NSEventModifierFlagShift)
-            [self send:@"action" data:@{@"name" : @"peek", @"args" : @{@"url" : value}}];
+              ([NSEvent modifierFlags] & NSEventModifierFlagShift) && !self->_hoverCard)
+            [self showHoverCard:value profile:page.profile at:mouse];
         }];
     return;
   }
+}
+- (void)showHoverCard:(NSString *)url profile:(ArdiaCoreProfile *)profile at:(NSPoint)mouse {
+  NSView *host = _window.hostView;
+  NSPoint point = [host convertPoint:mouse fromView:nil];
+  NSSize size = NSMakeSize(MIN(520, NSWidth(host.bounds) - 32), MIN(360, NSHeight(host.bounds) - 32));
+  // Beside the pointer, below it when there's room, kept inside the window.
+  CGFloat x = MIN(MAX(16, point.x + 14), NSWidth(host.bounds) - size.width - 16);
+  CGFloat below = host.isFlipped ? point.y + 18 : point.y - 18 - size.height;
+  CGFloat above = host.isFlipped ? point.y - 18 - size.height : point.y + 18;
+  BOOL fitsBelow = host.isFlipped ? below + size.height <= NSHeight(host.bounds) - 16 : below >= 16;
+  CGFloat y = MIN(MAX(16, fitsBelow ? below : above), NSHeight(host.bounds) - size.height - 16);
+  NSView *card = [[NSView alloc] initWithFrame:NSMakeRect(x, y, size.width, size.height)];
+  card.wantsLayer = YES;
+  card.layer.shadowOpacity = 0.28;
+  card.layer.shadowRadius = 18;
+  card.layer.shadowOffset = CGSizeMake(0, -6);
+  NSView *clip = [[NSView alloc] initWithFrame:card.bounds];
+  clip.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  clip.wantsLayer = YES;
+  clip.layer.cornerRadius = 12;
+  clip.layer.cornerCurve = @"continuous";
+  clip.layer.masksToBounds = YES;
+  clip.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+  clip.layer.borderWidth = 0.5;
+  clip.layer.borderColor = [NSColor.labelColor colorWithAlphaComponent:0.15].CGColor;
+  NSTextField *label = [NSTextField labelWithString:[NSURL URLWithString:url].host ?: url];
+  label.textColor = NSColor.secondaryLabelColor;
+  label.frame = NSMakeRect(16, (NSHeight(clip.bounds) - 20) / 2, NSWidth(clip.bounds) - 32, 20);
+  label.alignment = NSTextAlignmentCenter;
+  [clip addSubview:label];
+  [card addSubview:clip];
+  ArdiaCoreTab *preview = [_window openTab:url profile:profile foreground:NO];
+  preview.view.frame = clip.bounds;
+  preview.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  [clip addSubview:preview.view];
+  preview.view.hidden = NO;
+  [preview noteShownByHost:YES];
+  card.alphaValue = 0;
+  [host addSubview:card positioned:NSWindowAbove relativeTo:nil];
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+    context.duration = 0.14;
+    card.animator.alphaValue = 1;
+  }];
+  _hoverCard = card;
+  _hoverTab = preview;
+  _hoverURL = url;
+}
+- (void)closeHoverCard {
+  if (!_hoverCard)
+    return;
+  NSView *card = _hoverCard;
+  ArdiaCoreTab *preview = _hoverTab;
+  _hoverCard = nil;
+  _hoverTab = nil;
+  _hoverURL = nil;
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+    context.duration = 0.1;
+    card.animator.alphaValue = 0;
+  } completionHandler:^{
+    [card removeFromSuperview];
+    preview.delegate = nil;
+    [preview closeNow];
+  }];
+}
+- (void)promoteHoverCard {
+  NSString *url = _hoverURL;
+  [self closeHoverCard];
+  if (url)
+    [self send:@"action" data:@{@"name" : @"peek", @"args" : @{@"url" : url}}];
 }
 // The host whose window is in front: menus, shortcuts and Control-Tab go there.
 // Key status alone is not enough, since no window is key while Wing is behind.
@@ -2061,6 +2183,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [view addItem:NSMenuItem.separatorItem];
   [view addItem:[self command:@"Split View…" key:@"2" modifiers:cmd | shift data:@{@"type" : @"split-picker"}]];
   [view addItem:[self command:@"Show Reader" key:@"r" modifiers:cmd | option data:@{@"type" : @"reader"}]];
+  [view addItem:[self action:@"Cast…" key:nil modifiers:0 name:@"cast" args:nil]];
   [view addItem:[self system:@"Enter Full Screen" selector:@selector(toggleFullScreen:) key:@"f" modifiers:cmd | control]];
   [view addItem:NSMenuItem.separatorItem];
   NSMenuItem *developerHolder = [[NSMenuItem alloc] initWithTitle:@"Developer" action:nil keyEquivalent:@""];
@@ -2787,7 +2910,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                 [self->_profiles[identity]
                     loadComponentExtension:[NSBundle.mainBundle.resourcePath
                                                stringByAppendingPathComponent:
-                                                   @"uBlock0.chromium"]];
+                                                   kProtectionFolder]];
                 [tab loadURL:self->_protectionURLs[identity] userInitiated:NO];
                 return;
               }
@@ -2865,7 +2988,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [_profiles[profileId]
         loadComponentExtension:
             [NSBundle.mainBundle.resourcePath
-                stringByAppendingPathComponent:@"uBlock0.chromium"]];
+                stringByAppendingPathComponent:kProtectionFolder]];
     ArdiaCoreTab *probe = [_window openTab:_protectionURLs[profileId]
                                    profile:_profiles[profileId]
                                 foreground:NO];
@@ -3038,7 +3161,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         [_startingProtection addObject:profileId];
         [_window prepareProfile:profile];
         NSString *path = [NSBundle.mainBundle.resourcePath
-            stringByAppendingPathComponent:@"uBlock0.chromium"];
+            stringByAppendingPathComponent:kProtectionFolder];
         NSDictionary *manifest = Parse([NSString
             stringWithContentsOfFile:
                 [path stringByAppendingPathComponent:@"manifest.json"]
@@ -3062,19 +3185,16 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         NSString *extensionId = [profile loadComponentExtension:path];
         if (!extensionId)
           continue;
-        NSString *dashboard =
-            [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html",
-                                       extensionId];
-        ArdiaCoreTab *initializing = [_window openTab:dashboard
-                                              profile:profile
-                                           foreground:NO];
-        _protectionTabs[profileId] = initializing;
-        _protectionURLs[profileId] = dashboard;
-        _protectionDeadlines[profileId] =
-            [NSDate dateWithTimeIntervalSinceNow:20];
-        initializing.delegate = self;
+        // Pages wait (up to 10 s, in the engine) until the blocking rules are
+        // in force, so the first page is filtered without a startup document.
+        [profile holdNavigationsUntilRulesetsOf:extensionId];
+        [profile watchCastRoutes];
+        _protectionURLs[profileId] =
+            [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html", extensionId];
+        [_protectedProfiles addObject:profileId];
       }
-      continue;
+      if (![_protectedProfiles containsObject:profileId])
+        continue;
     }
     ArdiaCoreTab *tab = _tabs[identity];
     if (!tab && [_restoringTabs containsObject:identity])
@@ -3904,7 +4024,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [self extensionManager:profile
                    inspect:[action isEqual:@"extension-capabilities"]
                      reply:rid
-                  attempts:100];
+                  attempts:400];
     return;
   }
   if ([action isEqual:@"service"]) {
@@ -3919,7 +4039,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [self reply:rid result:nil error:@"Invalid browser service request."];
       return;
     }
-    [self service:data profile:profileId reply:rid attempts:100];
+    [self service:data profile:profileId reply:rid attempts:400];
     return;
   }
   if ([action isEqual:@"extension-actions"]) {
@@ -4114,7 +4234,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     }
     id allow = [data[@"allow"] isKindOfClass:NSNumber.class] ? data[@"allow"] : NSNull.null;
     ArdiaCoreTab *helper = [_window openTab:_protectionURLs[profileId] profile:page.profile foreground:NO];
-    [self allowlist:helper host:host allow:allow reply:rid attempts:100];
+    [self allowlist:helper host:host allow:allow reply:rid attempts:400];
     return;
   }
   if ([action isEqual:@"evaluate-page"] &&
@@ -4193,7 +4313,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                      }
                            profile:profileId
                              reply:rid
-                          attempts:100];
+                          attempts:400];
                      return;
                    }
                  [self reply:rid
@@ -4211,6 +4331,23 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [self reply:rid result:@{@"ok":@(opened || [route isEqual:@"session"])}
         error:opened || [route isEqual:@"session"] ? nil : @"Play a video on this page first."];
     }];
+    return;
+  }
+  if ([action isEqual:@"test-cast"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    if ([data[@"choose"] isKindOfClass:NSNumber.class])
+      [_castPicker chooseSinkAtIndex:[data[@"choose"] integerValue]];
+    [self reply:rid result:@{@"picker" : @(_castPicker != nil), @"state" : _castPicker.state ?: @{}} error:nil];
+    return;
+  }
+  if ([action isEqual:@"cast"]) {
+    if ([data[@"stop"] isKindOfClass:NSString.class]) {
+      [ArdiaCoreEngine terminateCastRoute:data[@"stop"]];
+      [self reply:rid result:@{@"ok" : @YES} error:nil];
+      return;
+    }
+    BOOL shown = WebURL(page.url) && [page showCastDialog];
+    [self reply:rid result:shown ? @{@"ok" : @YES} : nil
+          error:shown ? nil : @"Open a web page to cast it."];
     return;
   }
   if ([action isEqual:@"reader"]) {

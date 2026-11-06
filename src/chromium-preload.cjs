@@ -96,7 +96,10 @@ function native(action, data = {}) {
         "summarize",
       ].includes(action)
         ? 600000
-        : 15000,
+        : // The services page can take a while to start on a busy Mac.
+          action === "service"
+          ? 45000
+          : 15000,
     );
     pending.set(id, { resolve, reject, timer });
     for (const { kind, json } of nativeMessages(id, action, data))
@@ -237,6 +240,12 @@ async function syncNow() {
   return { ok: true };
 }
 setInterval(() => scheduleSync(0), 60000);
+// Start the services page once the window is up, so the first real request
+// (history, downloads, site settings) doesn't wait for it on a busy Mac.
+ready.then(() => {
+  if (!privateMode)
+    setTimeout(() => service("ping").catch(() => {}), 1500);
+});
 window.addEventListener("focus", () => scheduleSync(500));
 function enqueue(operation) {
   const result = queue.then(() => ready).then(operation);
@@ -968,6 +977,8 @@ async function invoke(action, data = {}) {
         "media-control",
         "reader",
         "summarize",
+        "cast",
+        "test-cast",
       ].includes(action)
     )
       return native(action, {

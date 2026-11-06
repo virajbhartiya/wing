@@ -98,29 +98,29 @@ def main():
         for name in ['chromium-import-helper.cjs', 'profile-import.cjs', 'browser-formats.cjs', 'profile-reader.cjs', 'import-controller.cjs', 'wing-profile-migration.cjs', 'model.cjs', 'splits.cjs', 'themes.cjs']:
             shutil.copy2(ROOT / 'src' / name, helper / name)
         (helper / 'provenance.json').write_text(json.dumps(NODE_IMPORT, indent=2)+'\n')
-        shutil.copy2(ROOT / 'native/chromium/protection-ready.js', resources / 'protection-ready.js')
         shutil.copytree(ROOT / 'native/chromium/reader', resources / 'reader', dirs_exist_ok=True)
-        ubo_archive = verified_asset(UBO['url'], UBO['sha256'], vendor / 'uBlock0_1.75.0.chromium.zip')
-        cookies = verified_asset(UBO['cookieURL'], UBO['cookieSHA256'], vendor / 'easylist-cookies.txt')
+        ubo_archive = verified_asset(UBO['url'], UBO['sha256'], vendor / f"uBOLite_{UBO['version']}.chromium.zip")
+        ubo = resources / 'uBOLite.chromium'
         with zipfile.ZipFile(ubo_archive) as source:
             for name in source.namelist():
                 if Path(name).is_absolute() or '..' in Path(name).parts:
                     raise RuntimeError('Unsafe extension archive path')
-            source.extractall(resources)
-        ubo = resources / 'uBlock0.chromium'
+            source.extractall(ubo)
         manifest = json.loads((ubo / 'manifest.json').read_text())
         manifest['key'] = UBO['componentKey']
         # Component extensions cannot resolve the optional enterprise schema as
         # a packaged Chrome resource. Filtering code and permissions are intact.
         manifest.pop('storage', None)
+        # Cookie notices are hidden by default, as they were with full uBlock.
+        for ruleset in manifest['declarative_net_request']['rule_resources']:
+            if ruleset['id'] in UBO['enableRulesets']:
+                ruleset['enabled'] = True
         (ubo / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
-        assets = json.loads((ubo / 'assets/assets.json').read_text())
-        cookie_path = 'assets/thirdparties/easylist-cookies.txt'
-        (ubo / cookie_path).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(cookies, ubo / cookie_path)
-        assets['fanboy-cookiemonster']['contentURL'].insert(0, cookie_path)
-        assets['fanboy-cookiemonster']['off'] = False
-        (ubo / 'assets/assets.json').write_text(json.dumps(assets, indent=2)+'\n')
+        details = json.loads((ubo / 'rulesets/ruleset-details.json').read_text())
+        for ruleset in details:
+            if ruleset['id'] in UBO['enableRulesets']:
+                ruleset['enabled'] = True
+        (ubo / 'rulesets/ruleset-details.json').write_text(json.dumps(details, indent=1)+'\n')
         (resources / 'ublock-provenance.json').write_text(json.dumps(UBO, indent=2)+'\n')
         if source_receipt:
             shutil.copytree(source_receipt['framework'], frameworks / 'Chromium Framework.framework', symlinks=True)
@@ -133,7 +133,7 @@ def main():
         framework = frameworks / 'Chromium Framework.framework'
         binary = framework / 'Versions/Current/Chromium Framework'
         run('xcrun', 'clang++', '-std=c++20', '-O2', '-arch', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch], '-mmacosx-version-min=14.0', '-fobjc-arc',
-            '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(binary), '-framework', 'AppKit',
+            '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(ROOT / 'native/chromium/CastPicker.mm'), str(binary), '-framework', 'AppKit',
             '-o', str(macos / product))
         # Page summaries use Apple's on-device model; the host only runs this on macOS 26.
         run('xcrun', 'swiftc', '-O', '-target', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch]+'-apple-macos26.0',
@@ -162,7 +162,10 @@ def main():
                  'NSMicrophoneUsageDescription':'Wing lets websites use your microphone only after you allow access.',
                  'NSBluetoothAlwaysUsageDescription':'Wing lets you connect a Bluetooth device to a website you choose.',
                  'NSLocationUsageDescription':'Wing shares your location with a website only after you allow it.',
-                 'NSLocationWhenInUseUsageDescription':'Wing shares your location with a website only after you allow it.'}
+                 'NSLocationWhenInUseUsageDescription':'Wing shares your location with a website only after you allow it.',
+                 # Cast finds Chromecasts and TVs on the local network.
+                 'NSLocalNetworkUsageDescription':'Wing looks for Chromecasts and TVs on your network when you cast a tab.',
+                 'NSBonjourServices':['_googlecast._tcp']}
         if args.production:
             plist['CFBundleURLTypes'] = [{'CFBundleURLName':'Web links', 'CFBundleTypeRole':'Viewer', 'CFBundleURLSchemes':['http','https','wingbrowser']}]
             plist['LSApplicationCategoryType'] = 'public.app-category.productivity'

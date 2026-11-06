@@ -1072,6 +1072,7 @@ function dialogHead(title) {
   return `<div class="dialog-head"><h2>${title}</h2><button class="icon" data-dismiss aria-label="Close dialog">${icon("close")}</button></div>`;
 }
 let localServers = [];
+let castRoutes = [];
 const DEV_COMMANDS = [
   ["Hard Refresh", "Develop · ⇧⌘R", "dev-reload"],
   ["View Page Source", "Develop", "dev-source"],
@@ -1273,6 +1274,24 @@ function renderPalette(rebuild = true) {
         glyph: "download",
         run: () => openLibrary("downloads"),
       },
+      {
+        label: "Cast This Tab…",
+        detail: "To a Chromecast or TV on your network",
+        glyph: "external",
+        run: () => {
+          closeModal();
+          act("cast");
+        },
+      },
+      ...castRoutes.map((route) => ({
+        label: `Stop Casting${route.description ? ` · ${route.description}` : ""}`,
+        detail: "Cast",
+        glyph: "close",
+        run: () => {
+          closeModal();
+          act("cast", { stop: route.id });
+        },
+      })),
       {
         label: "Summarize This Page",
         detail: "Key points, made on this Mac",
@@ -3506,6 +3525,15 @@ window.wing.onCommand((c) => {
     case "reader":
       toggleReader();
       break;
+    case "cast-routes": {
+      const known = new Set(castRoutes.map((route) => route.id));
+      castRoutes = Array.isArray(c.routes) ? c.routes : [];
+      document.body.classList.toggle("casting", castRoutes.length > 0);
+      for (const route of castRoutes)
+        if (!known.has(route.id))
+          toast(`Casting${route.description ? `: ${route.description}` : ""}. Stop it from ⌘T.`);
+      break;
+    }
     case "import":
       openBrowserImport();
       break;

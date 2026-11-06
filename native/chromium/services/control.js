@@ -18,6 +18,9 @@ const download = async (id) => {
   return items[0];
 };
 const handlers = {
+  async ping() {
+    return { ok: true };
+  },
   async "import-cookie"({ cookie }) {
     const result = await chrome.cookies.set(cookie);
     if (!result) throw Error("Cookie was rejected.");

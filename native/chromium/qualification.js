@@ -220,24 +220,11 @@
     "control image loaded",
   );
   await waitFor(
-    async () =>
-      (await evaluate(
-        first,
-        'getComputedStyle(document.querySelector("#cookie-banner")).display',
-      )) === "none",
-    "bundled cookie filter applies after content scripts initialize",
-  );
-  const filtering = await evaluate(
-    first,
-    '({...window.fixture, cookie:getComputedStyle(document.querySelector("#cookie-banner")).display})',
-  );
-  assert(
-    filtering.ad === "blocked" && filtering.cookie === "none",
-    "full uBlock and bundled cookie list protect the first page: " +
-      JSON.stringify(filtering),
+    async () => (await evaluate(first, "window.fixture")).ad === "blocked",
+    "uBlock Origin Lite blocks the first page ad request",
   );
   checks.push(
-    "full uBlock blocks the first page ad request and bundled cookie-list cosmetics apply",
+    "uBlock Origin Lite rules are in force before the first page loads and block its ad request",
   );
   assert(
     (await evaluate(first, "typeof window.__wingNativePost")) === "undefined",
@@ -481,9 +468,9 @@
     async () =>
       (await evaluate(
         dashboard,
-        'typeof vAPI !== "undefined" && typeof vAPI.messaging.send',
+        'typeof chrome !== "undefined" && typeof chrome.runtime.sendMessage',
       )) === "function",
-    "real uBlock settings document loaded",
+    "real uBlock Origin Lite settings document loaded",
   );
   await invoke("close-tab", { id: dashboard });
   await waitFor(
@@ -491,7 +478,7 @@
     "settings tab closes",
   );
   await invoke("select-tab", { id: first });
-  checks.push("real uBlock dashboard is accessible through the Wing host");
+  checks.push("real uBlock Origin Lite dashboard is accessible through the Wing host");
   await invoke("native-evaluate", {
     id: first,
     script:

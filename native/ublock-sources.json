@@ -1,8 +1,10 @@
 {
-  "version": "1.75.0",
-  "url": "https://github.com/gorhill/uBlock/releases/download/1.75.0/uBlock0_1.75.0.chromium.zip",
-  "sha256": "393cf95709d1074d4022970e9014e434395c53a822387f1e25f43be97cf4b582",
-  "componentKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv1MPdIgJjIsN4Y0N/20GDNPfN4J//aknk5dsH8Y1LBxSnz3Jp/BT187Gub5cv6lee5CUVDmVBa3Yiqow8GMna5KwX+ZP+yc1pt/ewzyNxm2BzoQPgWz+1DgZaahz56/szi1EEtWVYxd3wNxFN4wPDqwV6aqlnV4R3RnxlF1ocw1kDgJ+8BxR1EY+MB+H8bymdef+xB3TNifBZIVmZt81cC3UMOG6KWRTU1wtIXsW+ZqSv5zaeFHLkjG4MPB7EfcMGrvO80ElJBZZLdrTmYOL4uUPsz2Wy6GiPWzpDmzzI9RfsZm11sLiJo63blcPF0Cz3sM0wQfxJPPcQuqkZDReswIDAQAB",
-  "cookieURL": "https://raw.githubusercontent.com/uBlockOrigin/uAssets/77cb1ef921d8acab50ac5881fbb0692ce7a7d800/thirdparties/easylist-cookies.txt",
-  "cookieSHA256": "f57aef05a78461e56de1469b192ce3afaa887c1d7cb8103b81d32d5685e535f6"
+  "name": "uBlock Origin Lite",
+  "version": "2026.1026.1812",
+  "url": "https://github.com/uBlockOrigin/uBOL-home/releases/download/2026.1026.1812/uBOLite_2026.1026.1812.chromium.zip",
+  "sha256": "d3788eac9f0a44c67f3745a43c3fd446ef33d56b1121f469b19e0fa0a836c2b5",
+  "componentKey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwxJ9sQ3I2scE4QuVxmtdGjfDeOWDasbfqFcUCG7qx6GGDzFK3JcJ1yqp9ZbnLCjmh68YyyjlzGsPuqOjGxxer4rxr8ohXMVWP3rvhiWzxzGSwmTwlvzWjDA4+svIBp3lrx5HupLT/YuCQ7+tel7uI1Wg9a15mU0qbsIipN2FCZVFr+woew9Pkf4FXmiPYuFDE1LTBQRS2zNSrDlymSTJRVCgzdlD7ahn7wHnA9fnKIvLlhRbpav0sI/RIYN7X8k5Gs2xETikVxfz0NN4gLt1U1LCBm7SzDMA7jS0xVhd/zANyHpNhLaA6xdVxPRgtZJzHyu6l2uOXGqP+yJyLxpspQIDAQAB",
+  "enableRulesets": [
+    "annoyances-cookies"
+  ]
 }
