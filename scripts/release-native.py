@@ -61,6 +61,10 @@ def main():
     parser.add_argument('--notes', type=pathlib.Path, help='Markdown release notes')
     parser.add_argument('--allow-dirty', action='store_true', help='build only; never with --publish')
     parser.add_argument('--intel', action='store_true', help='also ship an Intel (x64) build')
+    # Under Rosetta the x64 engine starts too slowly for the qualification
+    # watchdogs; only an Intel Mac can qualify it.
+    parser.add_argument('--intel-untested', action='store_true',
+                        help='skip x64 qualification; say so in the release notes')
     args = parser.parse_args()
     if args.publish and (args.allow_dirty or not args.notes):
         raise SystemExit('--publish needs --notes and a clean tree.')
@@ -78,7 +82,8 @@ def main():
     if args.intel:
         receipt = f'{build}/wing-build-receipt-x64.json'
         run('python3', 'scripts/build-chromium-preview.py', '--arch', 'x64', '--source-receipt', receipt)
-        qualify('--arch', 'x64')
+        if not args.intel_untested:
+            qualify('--arch', 'x64')
         run('python3', 'scripts/build-chromium-preview.py', '--production', '--arch', 'x64', '--source-receipt', receipt)
         apps['x64'] = pathlib.Path(json.loads((ROOT / 'native/build/chromium-production-x64/latest.json').read_text())['app'])
     version = json.loads((ROOT / 'package.json').read_text())['version']
