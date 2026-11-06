@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def host_inputs(root=ROOT):
     paths = [p for folder in ('src', 'native/chromium') for p in (root / folder).rglob('*')
-             if p.is_file() and p.suffix in {'.cjs', '.js', '.mm', '.h', '.html', '.css', '.json'}
+             if p.is_file() and p.suffix in {'.cjs', '.js', '.mm', '.h', '.swift', '.html', '.css', '.json'}
              and p.name != 'preload.bundle.cjs']
     paths += [root / name for name in ('scripts/build-chromium-preview.py',
               'scripts/chromium_distribution.py', 'package.json', 'native/node-import-sources.json', 'native/ublock-sources.json')]

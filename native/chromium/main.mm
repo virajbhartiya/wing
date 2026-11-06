@@ -282,6 +282,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   if ([all containsString:@"clipboard"]) return @"doc.on.clipboard";
   return @"hand.raised.fill";
 }
+static NSUInteger gHoverPeekGeneration;
 @implementation WingChromiumHost {
   ArdiaCoreWindow *_window, *_uiWindow;
   ArdiaCoreTab *_shell;
@@ -299,6 +300,7 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   NSMutableSet<NSString *> *_loadingProfiles;
   NSMutableSet<NSString *> *_capturingTabs;
   NSMutableSet<NSString *> *_wakingTabs;
+  NSMutableDictionary<NSString *, NSNumber *> *_departures;
   NSMutableSet<NSString *> *_pendingCreatedTabs;
   NSMutableSet<NSString *> *_protectedProfiles;
   NSMutableSet<NSString *> *_checkingProtection;
@@ -1383,6 +1385,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _hangPrompts = [NSMutableDictionary new];
   _screenSharingTabs = [NSMutableSet new];
   _wakingTabs = [NSMutableSet new];
+  _departures = [NSMutableDictionary new];
   _pendingCreatedTabs = [NSMutableSet new];
   _protectedProfiles = [NSMutableSet new];
   _checkingProtection = [NSMutableSet new];
@@ -1539,17 +1542,57 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                                         }];
   [self watchMemoryPressure];
   _modifierObserver = [NSEvent
-      addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
+      addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged | NSEventMaskKeyDown |
+                                           NSEventMaskLeftMouseDown | NSEventMaskScrollWheel
                                    handler:^NSEvent *(NSEvent *event) {
-                                     if (!(event.modifierFlags &
-                                           NSEventModifierFlagControl))
+                                     // Any other input cancels a pending Shift-hover preview.
+                                     NSUInteger generation = ++gHoverPeekGeneration;
+                                     if (event.type != NSEventTypeFlagsChanged)
+                                       return event;
+                                     NSEventModifierFlags flags =
+                                         event.modifierFlags &
+                                         (NSEventModifierFlagShift | NSEventModifierFlagControl |
+                                          NSEventModifierFlagOption | NSEventModifierFlagCommand);
+                                     if (!(flags & NSEventModifierFlagControl))
                                        [[WingChromiumHost keyHost]
                                            send:@"action"
                                            data:@{
                                              @"name" : @"recent-tabs-commit"
                                            }];
+                                     if (flags == NSEventModifierFlagShift)
+                                       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 350 * NSEC_PER_MSEC),
+                                                      dispatch_get_main_queue(), ^{
+                                                        if (generation == gHoverPeekGeneration)
+                                                          [[WingChromiumHost keyHost] peekHoveredLink];
+                                                      });
                                      return event;
                                    }];
+}
+// Holding Shift over a link previews it in a Peek, like Shift-clicking it.
+- (void)peekHoveredLink {
+  if (_quitting || !_window.window.isKeyWindow)
+    return;
+  NSPoint mouse = _window.window.mouseLocationOutsideOfEventStream;
+  for (NSDictionary *pane in _lastSync[@"panes"]) {
+    ArdiaCoreTab *page = _tabs[pane[@"id"]];
+    if (!page || page.view.hidden || !page.view.superview ||
+        !NSPointInRect([page.view convertPoint:mouse fromView:nil], page.view.bounds))
+      continue;
+    for (NSDictionary *record in _lastSync[@"workspace"][@"tabs"])
+      if ([record[@"id"] isEqual:pane[@"id"]] && [record[@"transient"] boolValue])
+        return;
+    [page evaluate:@"post('result',JSON.stringify((()=>{const a=[...document.querySelectorAll('a[href]:hover')].pop();"
+                   @"return a&&/^https?:/.test(a.href)&&a.href!==location.href?a.href:''})()))"
+        completion:^(NSString *raw) {
+          id value = raw ? Parse(raw) : nil;
+          if ([value isKindOfClass:NSString.class] && [value hasPrefix:@"\""])
+            value = Parse(value);
+          if ([value isKindOfClass:NSString.class] && [value hasPrefix:@"http"] &&
+              [NSEvent modifierFlags] & NSEventModifierFlagShift)
+            [self send:@"action" data:@{@"name" : @"peek", @"args" : @{@"url" : value}}];
+        }];
+    return;
+  }
 }
 // The host whose window is in front: menus, shortcuts and Control-Tab go there.
 // Key status alone is not enough, since no window is key while Wing is behind.
@@ -1645,7 +1688,7 @@ static NSString *const kHasUnsavedInputScript =
 - (BOOL)mayRetirePage:(ArdiaCoreTab *)page {
   NSString *identity = [self identityForTab:page];
   if (_quitting || !identity || page.closed || page.loading ||
-      page.audible || page.view.superview || page.devToolsView ||
+      page.audible || (page.view.superview && !_departures[identity]) || page.devToolsView ||
       [_capturingTabs containsObject:identity] || [_pictureInPictureTabs containsObject:identity])
     return NO;
   NSDictionary *state = _lastSync[@"workspace"];
@@ -1799,38 +1842,34 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
            completion();
          }];
 }
-// One page at a time, so the budget only counts pages that really slept.
+// Every page is asked about unsaved input at once; the budget is then applied
+// oldest first, so it only counts pages that really slept.
 - (void)discardFrom:(NSArray *)records
               index:(NSUInteger)index
           remaining:(NSInteger)remaining
               limit:(NSInteger)limit
           automatic:(BOOL)automatic
          completion:(void (^)(void))completion {
-  for (; index < records.count; index++) {
-    NSDictionary *record = records[index];
-    ArdiaCoreTab *page = _tabs[record[@"id"]];
-    if (!page)
+  double now = NSDate.date.timeIntervalSince1970 * 1000;
+  NSMutableDictionary<NSString *, NSNumber *> *clean = [NSMutableDictionary new];
+  dispatch_group_t group = dispatch_group_create();
+  for (NSUInteger i = index; i < records.count; i++) {
+    NSString *identity = records[i][@"id"];
+    ArdiaCoreTab *page = _tabs[identity];
+    BOOL idle = now - [records[i][@"lastActive"] doubleValue] > 300000;
+    if (!page || clean[identity] || (automatic && !idle && remaining <= limit) ||
+        ![self mayDiscardPage:page])
       continue;
-    BOOL idle = NSDate.date.timeIntervalSince1970 * 1000 -
-                    [record[@"lastActive"] doubleValue] >
-                300000;
-    if (automatic && !idle && remaining <= limit)
-      continue;
-    if (![self mayDiscardPage:page])
-      continue;
+    clean[identity] = @NO;
     __block BOOL settled = NO;
-    void (^settle)(BOOL) = ^(BOOL clean) {
+    void (^settle)(BOOL) = ^(BOOL answer) {
       if (settled)
         return;
       settled = YES;
-      BOOL slept = clean && [self mayDiscardPage:page] && [page discard];
-      [self discardFrom:records
-                  index:index + 1
-              remaining:remaining - (slept ? 1 : 0)
-                  limit:limit
-              automatic:automatic
-             completion:completion];
+      clean[identity] = @(answer);
+      dispatch_group_leave(group);
     };
+    dispatch_group_enter(group);
     [self thaw:page];
     [page evaluate:kHasUnsavedInputScript
         completion:^(NSString *raw) {
@@ -1839,14 +1878,25 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
             value = Parse(value);
           settle([value isKindOfClass:NSNumber.class] && ![value boolValue]);
         }];
-    // A hung renderer never answers; it must not stall the remaining pages.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+    // A hung renderer never answers; it must not stall the other pages.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), ^{
                      settle(NO);
                    });
-    return;
   }
-  completion();
+  dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+    NSInteger live = remaining;
+    for (NSUInteger i = index; i < records.count; i++) {
+      NSString *identity = records[i][@"id"];
+      ArdiaCoreTab *page = self->_tabs[identity];
+      BOOL idle = now - [records[i][@"lastActive"] doubleValue] > 300000;
+      if (!page || ![clean[identity] boolValue] || (automatic && !idle && live <= limit))
+        continue;
+      if ([self mayDiscardPage:page] && [page discard])
+        live--;
+    }
+    completion();
+  });
 }
 // Menu items route through the same shell actions as keyboard shortcuts.
 // Keys the engine reserves are consumed in preHandleKeyEvent before the menu
@@ -2901,14 +2951,38 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   for (NSDictionary *pane in _lastSync[@"panes"])
     if (Identifier(pane[@"id"]))
       [visible addObject:pane[@"id"]];
-  for (NSString *identity in _tabs)
+  NSView *departing;
+  for (NSString *identity in _tabs) {
+    ArdiaCoreTab *page = _tabs[identity];
     if (![visible containsObject:identity]) {
-      if (_tabs[identity].view.superview) [self scheduleFreeze:identity];
-      [_tabs[identity] noteShownByHost:NO];
-      [_tabs[identity].view removeFromSuperview];
-      [_tabs[identity].devToolsView removeFromSuperview];
-    } else
-      [self thaw:_tabs[identity]];
+      // The page being left fades out over the incoming one, so a switch never
+      // flashes an empty frame while the new page paints.
+      if (!_departures[identity] && visible.count && page.view.superview == _window.hostView &&
+          !page.view.hidden && _window.window.isVisible) {
+        NSNumber *generation = @(arc4random());
+        _departures[identity] = generation;
+        [page.devToolsView removeFromSuperview];
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+          context.duration = 0.18;
+          page.view.animator.alphaValue = 0;
+        } completionHandler:^{ [self finishDeparture:identity generation:generation]; }];
+      }
+      if (_departures[identity]) {
+        departing = page.view;
+        continue;
+      }
+      if (page.view.superview) [self scheduleFreeze:identity];
+      [page noteShownByHost:NO];
+      [page.view removeFromSuperview];
+      [page.devToolsView removeFromSuperview];
+    } else {
+      if (_departures[identity]) {
+        [_departures removeObjectForKey:identity];
+        page.view.alphaValue = 1;
+      }
+      [self thaw:page];
+    }
+  }
   CGFloat contentLeft = _window.hostView.bounds.size.width;
   for (NSDictionary *pane in _lastSync[@"panes"])
     contentLeft = MIN(contentLeft, [pane[@"x"] doubleValue]);
@@ -3029,7 +3103,9 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [tab reload];
     }
     if (tab.view.superview != _window.hostView)
-      [_window.hostView addSubview:tab.view];
+      [_window.hostView addSubview:tab.view
+                        positioned:departing ? NSWindowBelow : NSWindowAbove
+                        relativeTo:departing];
     CGFloat height = _window.hostView.bounds.size.height;
     CGFloat x = [pane[@"x"] doubleValue], y = [pane[@"y"] doubleValue],
             w = [pane[@"width"] doubleValue], h = [pane[@"height"] doubleValue];
@@ -3086,6 +3162,23 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if (page.devToolsView.superview == _window.hostView)
       page.devToolsView.hidden = NO;
   }
+  for (NSString *identity in _departures)
+    _tabs[identity].view.hidden = NO;
+}
+- (void)finishDeparture:(NSString *)identity generation:(NSNumber *)generation {
+  if (![_departures[identity] isEqual:generation])
+    return;
+  [_departures removeObjectForKey:identity];
+  ArdiaCoreTab *page = _tabs[identity];
+  if (!page)
+    return;
+  page.view.alphaValue = 1;
+  for (NSDictionary *pane in _lastSync[@"panes"])
+    if ([pane[@"id"] isEqual:identity])
+      return;
+  if (page.view.superview) [self scheduleFreeze:identity];
+  [page noteShownByHost:NO];
+  [page.view removeFromSuperview];
 }
 - (void)window:(ArdiaCoreWindow *)window didActivateTab:(ArdiaCoreTab *)tab {
   if (window != _window || _quitting)
@@ -3246,7 +3339,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         @"id" : identity,
         @"url" : page.url,
         @"profile" : page.profile.name,
-        @"visible" : @(page.view.superview != nil),
+        @"visible" : @(page.view.superview != nil && !_departures[identity]),
         @"attachedToWindow" : @(page.view.window == _window.window),
         @"hidden" : @(page.view.hiddenOrHasHiddenAncestor),
         @"devToolsVisible" : @(page.devToolsView.superview != nil),
@@ -3873,6 +3966,56 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     } else [self saveData:body name:@"Wing-capture.png" reply:rid];
     return;
   }
+  if ([action isEqual:@"icloud-sync-read"] || [action isEqual:@"icloud-sync-write"]) {
+    // Only Wing/Sync.json in iCloud Drive and the local base beside the workspace.
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSString *drive = getenv("WING_ICLOUD_SYNC_DIR")
+                          ? @(getenv("WING_ICLOUD_SYNC_DIR"))
+                          : [NSHomeDirectory() stringByAppendingPathComponent:
+                                                   @"Library/Mobile Documents/com~apple~CloudDocs"];
+    NSString *folder = [drive stringByAppendingPathComponent:@"Wing"];
+    NSString *file = [folder stringByAppendingPathComponent:@"Sync.json"];
+    NSString *basePath = [_workspacePath.stringByDeletingLastPathComponent
+        stringByAppendingPathComponent:@"wing-sync-base.json"];
+    BOOL isFolder = NO;
+    if (_private || ![files fileExistsAtPath:drive isDirectory:&isFolder] || !isFolder) {
+      [self reply:rid
+           result:nil
+            error:@"iCloud Drive is off on this Mac. Turn it on in System Settings → Apple Account → iCloud."];
+      return;
+    }
+    id (^readJSON)(NSString *) = ^id(NSString *path) {
+      NSData *body = [NSData dataWithContentsOfFile:path];
+      id value = body.length && body.length < 5000000
+                     ? [NSJSONSerialization JSONObjectWithData:body options:0 error:nil]
+                     : nil;
+      return [value isKindOfClass:NSDictionary.class] ? value : NSNull.null;
+    };
+    if ([action isEqual:@"icloud-sync-read"]) {
+      // A file another Mac wrote may still be in the cloud only; ask for it.
+      [files startDownloadingUbiquitousItemAtURL:[NSURL fileURLWithPath:file] error:nil];
+      [self reply:rid result:@{@"remote" : readJSON(file), @"base" : readJSON(basePath)} error:nil];
+      return;
+    }
+    BOOL ok = YES;
+    for (NSArray *pair in @[ @[ @"file", file ], @[ @"base", basePath ] ]) {
+      id value = data[pair[0]];
+      if (![value isKindOfClass:NSDictionary.class])
+        continue;
+      NSData *body = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
+      if (!body || body.length >= 5000000) {
+        ok = NO;
+        continue;
+      }
+      [files createDirectoryAtPath:[pair[1] stringByDeletingLastPathComponent]
+          withIntermediateDirectories:YES
+                           attributes:nil
+                                error:nil];
+      ok = [body writeToFile:pair[1] atomically:YES] && ok;
+    }
+    [self reply:rid result:ok ? @{@"ok" : @YES} : nil error:ok ? nil : @"Wing couldn't write to iCloud Drive."];
+    return;
+  }
   if ([action isEqual:@"clipboard"]) {
     if (![data[@"text"] isKindOfClass:NSString.class])
       return;
@@ -4089,6 +4232,73 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
           [self reply:rid
                result:[value isKindOfClass:NSDictionary.class] ? value : @{@"reader" : @NO, @"unavailable" : @YES}
                 error:nil];
+        }];
+    return;
+  }
+  if ([action isEqual:@"summarize"]) {
+    NSString *helper = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent
+        stringByAppendingPathComponent:@"wing-summarize"];
+    if (![NSProcessInfo.processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){26, 0, 0}] ||
+        ![NSFileManager.defaultManager isExecutableFileAtPath:helper]) {
+      [self reply:rid result:nil error:@"Page summaries need macOS 26 with Apple Intelligence."];
+      return;
+    }
+    if (![page.url hasPrefix:@"http"]) {
+      [self reply:rid result:nil error:@"Open a web page to summarize it."];
+      return;
+    }
+    NSString *library = [NSString
+        stringWithContentsOfFile:[[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"reader"]
+                                     stringByAppendingPathComponent:@"Readability.js"]
+                        encoding:NSUTF8StringEncoding
+                           error:nil] ?: @"";
+    // Readability finds the article on a copy of the page; the page itself is untouched.
+    NSString *script = [NSString
+        stringWithFormat:@"post('result',JSON.stringify((()=>{let t='';try{%@\n"
+                         @"t=new Readability(document.cloneNode(true)).parse()?.textContent||''}catch(e){}"
+                         @"t=(t.trim().length>200?t:document.body?.innerText||'').replace(/\\s+/g,' ').trim();"
+                         @"return{title:document.title,text:t.slice(0,20000)}})()))",
+                         library];
+    NSString *title = page.title ?: @"";
+    [page evaluate:script
+        completion:^(NSString *json) {
+          id value = json ? Parse(json) : nil;
+          if ([value isKindOfClass:NSString.class])
+            value = Parse(value);
+          NSString *text = [value isKindOfClass:NSDictionary.class] ? value[@"text"] : nil;
+          if (![text isKindOfClass:NSString.class] || text.length < 80) {
+            [self reply:rid result:nil error:@"There isn't enough text on this page to summarize."];
+            return;
+          }
+          dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            NSTask *task = [NSTask new];
+            task.executableURL = [NSURL fileURLWithPath:helper];
+            NSPipe *input = [NSPipe pipe], *output = [NSPipe pipe], *errors = [NSPipe pipe];
+            task.standardInput = input;
+            task.standardOutput = output;
+            task.standardError = errors;
+            NSError *error;
+            BOOL launched = [task launchAndReturnError:&error];
+            if (launched) {
+              [input.fileHandleForWriting writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+              [input.fileHandleForWriting closeFile];
+            }
+            NSData *out = launched ? [output.fileHandleForReading readDataToEndOfFile] : nil;
+            NSData *err = launched ? [errors.fileHandleForReading readDataToEndOfFile] : nil;
+            if (launched) [task waitUntilExit];
+            NSString *summary = out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : nil;
+            NSString *problem = err.length ? [[NSString alloc] initWithData:err encoding:NSUTF8StringEncoding] : nil;
+            BOOL ok = launched && task.terminationStatus == 0 && summary.length;
+            dispatch_async(dispatch_get_main_queue(), ^{
+              if (ok)
+                [self reply:rid
+                     result:@{@"summary" : [summary stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet],
+                              @"title" : title}
+                      error:nil];
+              else
+                [self reply:rid result:nil error:problem.length ? problem : @"The page couldn't be summarized."];
+            });
+          });
         }];
     return;
   }

@@ -160,6 +160,7 @@ class ChromiumWorkspace {
           "automaticPictureInPicture",
           "onboarded",
           "linksInMini",
+          "icloudSync",
           "askSpaceForLinks",
           "defaultBrowserPromptOff",
         ])

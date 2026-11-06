@@ -17,6 +17,7 @@ const runTool = async (tool, args) => {
   return result.stdout;
 };
 const navigation = require("./navigation.cjs");
+const ICloud = require("./icloud-sync.cjs");
 const { nativeMessages } = require("./native-messages.cjs");
 const pending = new Map(),
   states = new Set(),
@@ -35,6 +36,7 @@ let sequence = 0,
 // reach the person's other profiles stays in the normal window.
 const NOT_PRIVATE = new Set([
   "settings",
+  "icloud-sync-now",
   "features-settings",
   "delete-space",
   "boost",
@@ -91,6 +93,7 @@ function native(action, data = {}) {
         "capture-full-page",
         "save-pdf",
         "save-page",
+        "summarize",
       ].includes(action)
         ? 600000
         : 15000,
@@ -198,6 +201,43 @@ const ready = native("bootstrap").then(async (result) => {
     2500,
   );
 });
+// iCloud Drive layout sync: pull the other Macs' changes, merge, then write ours.
+let syncTimer = null;
+function scheduleSync(delay = 8000) {
+  if (privateMode || !workspace?.state.settings.icloudSync) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(
+    () => enqueue(() => syncNow().catch(() => {})),
+    delay,
+  );
+}
+async function syncNow() {
+  const { remote, base } = await native("icloud-sync-read");
+  const baseLayout = base && ICloud.validLayout(base) ? base : null;
+  const remoteLayout =
+    remote && ICloud.validLayout(remote.layout) ? remote.layout : null;
+  if (
+    remoteLayout &&
+    ICloud.fingerprint(remoteLayout) !== ICloud.fingerprint(baseLayout)
+  ) {
+    const next = structuredClone(workspace.state);
+    if (ICloud.merge(next, remoteLayout, baseLayout)) {
+      M.validateState(next);
+      workspace.state = next;
+      await publish(true, false);
+    }
+    await native("icloud-sync-write", { base: remoteLayout });
+  }
+  const local = ICloud.layoutOf(workspace.state);
+  if (ICloud.fingerprint(local) !== ICloud.fingerprint(remoteLayout))
+    await native("icloud-sync-write", {
+      file: { version: 1, updatedAt: Date.now(), layout: local },
+      base: local,
+    });
+  return { ok: true };
+}
+setInterval(() => scheduleSync(0), 60000);
+window.addEventListener("focus", () => scheduleSync(500));
 function enqueue(operation) {
   const result = queue.then(() => ready).then(operation);
   queue = result.catch((error) =>
@@ -234,7 +274,7 @@ function updateShellRaise(lowerDelay = 0) {
   if (wanted || !lowerDelay) return apply();
   shellLowerTimer = setTimeout(apply, lowerDelay);
 }
-async function publish(persist = true) {
+async function publish(persist = true, sync = true) {
   updateShellRaise(260);
   const snapshot = workspace.snapshot(version);
   const address = document.querySelector("#address")?.getBoundingClientRect();
@@ -256,6 +296,7 @@ async function publish(persist = true) {
   if (persist)
     for (const id of workspace.removedProfiles.splice(0))
       native("delete-profile", { id }).catch(() => {});
+  if (persist && sync) scheduleSync();
   states.forEach((callback) => callback(snapshot));
   return snapshot;
 }
@@ -799,6 +840,11 @@ async function invoke(action, data = {}) {
         systemDark: matchMedia("(prefers-color-scheme: dark)").matches,
       };
     if (action === "focus-shell") return native("focus-shell");
+    if (action === "icloud-sync-now")
+      // Already inside the action queue.
+      return syncNow().catch((error) => ({
+        error: error.message,
+      }));
     if (action === "copy-text")
       return native("clipboard", {
         text: String(data.text || "").slice(0, 100000),
@@ -921,6 +967,7 @@ async function invoke(action, data = {}) {
         "fill-login",
         "media-control",
         "reader",
+        "summarize",
       ].includes(action)
     )
       return native(action, {

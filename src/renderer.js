@@ -25,6 +25,8 @@ const icons = {
     '<path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
   sparkle:
     '<path d="m12 3 2.6 6.4L21 12l-6.4 2.6L12 21l-2.6-6.4L3 12l6.4-2.6z"/>',
+  summary:
+    '<path d="M4 7h9M4 12h9M4 17h6"/><path d="m18 4 1.2 2.8L22 8l-2.8 1.2L18 12l-1.2-2.8L14 8l2.8-1.2z"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   pin: '<path d="m8 3 8 0-1 7 4 4H5l4-4zM12 14v7"/>',
@@ -624,6 +626,30 @@ function askText(title, placeholder, done) {
   });
   $("#ask-text").focus();
 }
+// One-click page summary from Apple's on-device model; the page never leaves the Mac.
+async function summarizePage() {
+  const tab = current();
+  if (!/^https?:/.test(tab?.url || ""))
+    return toast("Open a web page to summarize it.");
+  showModal(
+    "summary",
+    `<div class="dialog-content summary">${dialogHead("Summary")}<p class="summary-source">${esc(tab.title || tab.url)}</p><div id="summary-body" class="summary-loading" role="status">Summarizing on this Mac…</div></div>`,
+  );
+  const r = await act("summarize");
+  if (modalType !== "summary") return;
+  const body = $("#summary-body");
+  body.classList.remove("summary-loading");
+  if (!r || r.error) {
+    body.classList.add("summary-error");
+    body.textContent = r?.error || "The page couldn’t be summarized.";
+    return;
+  }
+  const lines = String(r.summary)
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[•*-]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
+  body.innerHTML = `<ul class="summary-list">${lines.map((line) => `<li>${esc(line)}</li>`).join("")}</ul><p class="summary-note">Made by Apple Intelligence on this Mac. Check important details on the page.</p>`;
+}
 async function toggleReader() {
   const r = await act("reader");
   if (r?.unavailable) toast("Reader isn’t available for this page.");
@@ -1134,6 +1160,39 @@ function renderPalette(rebuild = true) {
           act("new-tab", { url: `http://localhost:${port}` });
         },
       })),
+      ...(() => {
+        // Air Traffic Control: send links to this site from other apps here.
+        let host;
+        try {
+          host = /^https?:/.test(current()?.url || "")
+            ? new URL(current().url).hostname.replace(/^www\./, "")
+            : "";
+        } catch {}
+        const space = currentSpace();
+        const routes = state.settings.routes || [];
+        if (!host || !space || state.spaces.length < 2) return [];
+        const existing = routes.find(
+          (r) => r.type === "host" && r.value === host,
+        );
+        if (existing?.spaceId === space.id) return [];
+        return [
+          {
+            label: `Always Open ${host} in ${space.name}`,
+            detail: "Links from other apps go to this Space",
+            glyph: "globe",
+            run: async () => {
+              closeModal();
+              const r = await act("features-settings", {
+                routes: [
+                  { type: "host", value: host, spaceId: space.id },
+                  ...routes.filter((x) => x !== existing),
+                ],
+              });
+              if (!r?.error) toast(`Links to ${host} now open in ${space.name}`);
+            },
+          },
+        ];
+      })(),
       {
         label: "New Mini Window",
         detail: "A quick look, outside your tabs  ⌥⌘N",
@@ -1210,6 +1269,12 @@ function renderPalette(rebuild = true) {
         detail: "Your downloaded files",
         glyph: "download",
         run: () => openLibrary("downloads"),
+      },
+      {
+        label: "Summarize This Page",
+        detail: "Key points, made on this Mac",
+        glyph: "summary",
+        run: () => summarizePage(),
       },
       {
         label: "Show Reader",
@@ -2064,7 +2129,16 @@ function settingsPanes() {
           "Folders",
           "Organize pinned tabs in this Space.",
           `<button class="secondary" id="folders-settings">Edit…</button>`,
-        ),
+        ) +
+        (chromium
+          ? settingToggle(
+              "icloud-sync",
+              "Sync with iCloud Drive",
+              "Keep Spaces, pinned tabs and Favorites the same on your Macs. History, open tabs and passwords stay on this Mac.",
+              state.settings.icloudSync === true,
+              "icloud sync macs devices",
+            )
+          : ""),
     },
     {
       id: "privacy",
@@ -2238,6 +2312,18 @@ function bindSettings() {
   on("toolbar-hidden", "onchange", feature("toolbarHidden"));
   on("clean-copy", "onchange", feature("cleanCopy"));
   on("links-in-mini", "onchange", feature("linksInMini"));
+  on("icloud-sync", "onchange", async (e) => {
+    const on = e.target.checked;
+    await act("features-settings", { icloudSync: on });
+    if (!on) return;
+    const r = await act("icloud-sync-now");
+    if (r?.error) {
+      e.target.checked = false;
+      await act("features-settings", { icloudSync: false });
+      return toast(r.error);
+    }
+    toast("Spaces now sync through iCloud Drive.");
+  });
   on("automatic-pip", "onchange", feature("automaticPictureInPicture"));
   on("make-default", "onclick", async () => {
     const r = await act("default-browser");
@@ -2870,6 +2956,7 @@ $("#split-button").onclick = openSplit;
 $("#favorite-button").onclick = () =>
   act("favorite", { id: state.activeTabId });
 $("#boost-button").onclick = openBoost;
+$("#summarize-button").onclick = () => summarizePage();
 $("#copy-url").onclick = () => {
   act("copy-url");
   toast("Address copied.");
@@ -3172,7 +3259,7 @@ function settleProfileSwipe(direction = 0) {
   } else sidebar.classList.add("profile-swipe-settling");
   profileSwipeSettle = setTimeout(() => {
     sidebar.classList.remove("profile-swipe-enter", "profile-swipe-settling");
-  }, 220);
+  }, 320);
 }
 profileSwipeReducedMotion.addEventListener("change", () =>
   settleProfileSwipe(),
@@ -3322,6 +3409,7 @@ const assignments = {
   "#forward": "forward",
   "#reload": "reload",
   "#copy-url": "copy",
+  "#summarize-button": "summary",
   "#split-button": "split",
   "#favorite-button": "star",
   "#settings-button": "settings",
@@ -3355,12 +3443,20 @@ const stopOnboardingCheck = window.wing.onState(() => {
 });
 window.wing.onState((next) => {
   const previousProfile = currentSpace()?.profileId;
+  const previousIndex = state?.spaces.findIndex(
+    (s) => s.id === state.activeSpaceId,
+  );
   state = { ...state, ...next };
   render();
   if (profileSwipeDirection && previousProfile !== currentSpace()?.profileId) {
     clearTimeout(profileSwipeAcknowledgement);
     settleProfileSwipe(profileSwipeDirection);
     profileSwipeDirection = 0;
+  } else if (previousIndex >= 0) {
+    // Clicked or shortcut Space switches slide in from the side they came from.
+    const index = state.spaces.findIndex((s) => s.id === state.activeSpaceId);
+    if (index >= 0 && index !== previousIndex)
+      settleProfileSwipe(index > previousIndex ? 1 : -1);
   }
 });
 window.wing.onCommand((c) => {

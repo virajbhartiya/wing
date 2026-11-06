@@ -769,14 +769,15 @@ h1 {
   box-shadow:
     0 25px 100px color-mix(in srgb, var(--ink) 21%, transparent),
     0 4px 12px color-mix(in srgb, var(--ink) 9%, transparent);
-  animation: appear var(--wing-normal) var(--wing-ease);
+  animation: appear var(--wing-slow) var(--wing-spring-soft);
+  transform-origin: 50% 0;
 }
 #overlay.closing {
-  animation: overlay-out 130ms ease-in forwards;
+  animation: overlay-out 140ms ease-in forwards;
   pointer-events: none;
 }
 #overlay.closing #modal {
-  animation: disappear 130ms ease-in forwards;
+  animation: disappear 140ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 @keyframes overlay-in {
   from {
@@ -791,7 +792,7 @@ h1 {
 @keyframes disappear {
   to {
     opacity: 0;
-    transform: translateY(-4px) scale(0.985);
+    transform: translateY(-6px) scale(0.97);
   }
 }
 .palette-input-wrap {
@@ -1199,7 +1200,7 @@ body.dark .orb {
   opacity: 0.18;
 }
 [data-tab].entering {
-  animation: tab-enter 160ms cubic-bezier(0.25, 0.1, 0.25, 1) both;
+  animation: tab-enter 240ms var(--wing-spring-soft) both;
 }
 @keyframes tab-enter {
   from {
@@ -1210,7 +1211,10 @@ body.dark .orb {
 @keyframes appear {
   from {
     opacity: 0;
-    transform: translateY(-8px) scale(0.99);
+    transform: translateY(-10px) scale(0.965);
+  }
+  40% {
+    opacity: 1;
   }
   to {
     opacity: 1;
@@ -1487,7 +1491,7 @@ body.sidebar-auto-hidden #sidebar {
   border-radius: 12px;
   background: linear-gradient(150deg, var(--base), var(--base2));
   transition:
-    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 280ms var(--wing-spring-soft),
     box-shadow 220ms ease;
 }
 body.sidebar-auto-hidden.sidebar-revealed #sidebar {
@@ -1691,7 +1695,7 @@ body.sidebar-auto-hidden.sidebar-revealed #sidebar {
     opacity 180ms ease-out;
 }
 #sidebar.profile-swipe-enter > :is(#favorites, .space-heading, #tab-scroll) {
-  animation: wing-profile-arrival 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: wing-profile-arrival 300ms var(--wing-spring-soft) both;
 }
 @keyframes wing-profile-arrival {
   from {
@@ -3159,4 +3163,47 @@ body.private .space-heading #space-name::before {
   border-radius: 50%;
   background: var(--accent);
   vertical-align: 1px;
+}
+/* Page summary card. */
+.summary .summary-source {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.summary-loading {
+  color: var(--muted);
+  padding: 8px 0 14px;
+  animation: summary-pulse 1.4s ease-in-out infinite;
+}
+@keyframes summary-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.summary-error {
+  color: var(--muted);
+  padding: 8px 0 14px;
+}
+.summary-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  display: grid;
+  gap: 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.summary-list li {
+  animation: tab-enter 240ms var(--wing-spring-soft) both;
+}
+.summary-list li:nth-child(2) { animation-delay: 40ms; }
+.summary-list li:nth-child(3) { animation-delay: 80ms; }
+.summary-list li:nth-child(4) { animation-delay: 120ms; }
+.summary-list li:nth-child(5) { animation-delay: 160ms; }
+.summary-note {
+  margin: 14px 0 4px;
+  color: var(--muted);
+  font-size: 11.5px;
 }

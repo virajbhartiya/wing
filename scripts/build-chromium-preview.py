@@ -135,6 +135,9 @@ def main():
         run('xcrun', 'clang++', '-std=c++20', '-O2', '-arch', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch], '-mmacosx-version-min=14.0', '-fobjc-arc',
             '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(binary), '-framework', 'AppKit',
             '-o', str(macos / product))
+        # Page summaries use Apple's on-device model; the host only runs this on macOS 26.
+        run('xcrun', 'swiftc', '-O', '-target', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch]+'-apple-macos26.0',
+            str(ROOT / 'native/chromium/Summarize.swift'), '-o', str(macos / 'wing-summarize'))
         shutil.copytree(ROOT / 'assets/icons', resources / 'assets/icons')
         shell = resources / 'shell'
         shell.mkdir()
@@ -185,6 +188,7 @@ def main():
             'com.apple.security.device.audio-input':True, 'com.apple.security.device.camera':True,
             'com.apple.security.device.bluetooth':True, 'com.apple.security.device.usb':True,
             'com.apple.security.personal-information.location':True, 'com.apple.security.print':True}))
+        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', str(macos / 'wing-summarize'))
         run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(app_entitlements), str(app))
         run('codesign', '--verify', '--deep', '--strict', str(app))
         if host_inputs() != inputs:
