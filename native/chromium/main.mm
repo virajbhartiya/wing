@@ -1728,8 +1728,10 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     WingChromiumHost *host = weakSelf;
     ArdiaCoreTab *page = host ? host->_tabs[identity] : nil;
     if (page && [host->_freezeGenerations[identity] isEqual:generation] &&
-        [host mayFreezePage:page])
+        [host mayFreezePage:page]) {
       page.frozen = YES;
+      [host pageChanged:page];
+    }
   });
 }
 // Anything that runs script in, shows or closes a page wakes it first; a hidden
@@ -1738,6 +1740,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   NSString *identity = page ? [self identityForTab:page] : nil;
   if (!identity || !page.frozen) return;
   page.frozen = NO;
+  [self pageChanged:page];
   if (!page.view.superview) [self scheduleFreeze:identity];
 }
 - (void)watchMemoryPressure {
@@ -2597,7 +2600,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
           @"id" : identity,
           @"url" : tab.url ?: @"",
           @"title" : tab.title ?: @"",
-          @"loading" : @(tab.loading),
+          // A paused or sleeping page can't finish loading until it wakes.
+          @"loading" : @(tab.loading && !tab.frozen && !tab.discarded),
           @"canGoBack" : @(tab.canGoBack),
           @"canGoForward" : @(tab.canGoForward),
           @"audible" : @(tab.audible),

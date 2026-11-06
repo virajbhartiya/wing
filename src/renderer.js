@@ -178,7 +178,10 @@ function tabIcon(t) {
   // Rows are rebuilt on every change; an icon already shown once is drawn
   // straight away instead of flashing its letter while it decodes again.
   const shown = loadedIcons.has(favicon) ? " has-favicon" : "";
-  return `<span class="site-icon${shown}${t.sleeping ? " is-sleeping" : ""}${t.loading ? " is-loading" : ""}" style="--site-hue:${hue}" aria-hidden="true"${t.sleeping ? ' title="Sleeping tab"' : ""}><span class="site-monogram">${esc(monogram)}</span><img class="site-favicon" src="${esc(favicon)}" alt="" decoding="async" referrerpolicy="no-referrer"></span>`;
+  // Background pages (Sheets, Docs) can report loading indefinitely while
+  // hidden; only the page in front shows progress.
+  const loading = t.loading && t.id === state?.activeTabId;
+  return `<span class="site-icon${shown}${t.sleeping ? " is-sleeping" : ""}${loading ? " is-loading" : ""}" style="--site-hue:${hue}" aria-hidden="true"${t.sleeping ? ' title="Sleeping tab"' : ""}><span class="site-monogram">${esc(monogram)}</span><img class="site-favicon" src="${esc(favicon)}" alt="" decoding="async" referrerpolicy="no-referrer"></span>`;
 }
 const loadedIcons = new Set();
 function sidebarSplit(tab) {
