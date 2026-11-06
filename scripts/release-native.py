@@ -88,7 +88,9 @@ def main():
             *(['--untested-intel'] if args.intel_untested else []))
         apps['x64'] = pathlib.Path(json.loads((ROOT / 'native/build/chromium-production-x64/latest.json').read_text())['app'])
     version = json.loads((ROOT / 'package.json').read_text())['version']
-    tags = output('git', 'tag', '--list').split()
+    # A release can exist on GitHub without its tag having been fetched here.
+    tags = output('git', 'tag', '--list').split() + output(
+        'gh', 'release', 'list', '--repo', REPO, '--limit', '200', '--json', 'tagName', '--jq', '.[].tagName').split()
     tag = next_tag(version, tags)
     dist = ROOT / 'dist'
     shutil.rmtree(dist, ignore_errors=True)
