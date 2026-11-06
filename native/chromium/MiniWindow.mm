@@ -19,6 +19,8 @@ static NSMutableArray *gMinis;
   WingMiniExpand _expandHandler;
   WingMiniVisit _visit;
   BOOL _closing, _opening;
+  NSLayoutConstraint *_addressWidth;
+  id _resizeObserver;
 }
 
 + (NSUInteger)openCount {
@@ -107,13 +109,22 @@ static NSMutableArray *gMinis;
   if (first) {
     NSWindow *window = _core.window;
     window.title = @"Mini Wing";
-    window.minSize = NSMakeSize(420, 300);
+    window.minSize = NSMakeSize(520, 300);
     window.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
     window.titleVisibility = NSWindowTitleHidden;
     NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"WingMiniToolbar"];
     toolbar.delegate = self;
     toolbar.displayMode = NSToolbarDisplayModeIconOnly;
     window.toolbar = toolbar;
+    __weak WingMiniWindow *weakSelf = self;
+    _resizeObserver = [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowDidResizeNotification
+                    object:window
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                  [weakSelf fitAddress];
+                }];
+    [self fitAddress];
     [window center];
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -176,19 +187,43 @@ static NSMutableArray *gMinis;
   _address = [NSTextField new];
   _address.placeholderString = @"Search or enter website";
   _address.bezelStyle = NSTextFieldRoundedBezel;
+  _address.alignment = NSTextAlignmentCenter;
   _address.font = [NSFont systemFontOfSize:12];
+  _address.lineBreakMode = NSLineBreakByTruncatingTail;
   _address.cell.scrollable = YES;
   _address.cell.usesSingleLineMode = YES;
   _address.target = self;
   _address.action = @selector(go:);
   _address.delegate = self;
-  [_address.widthAnchor constraintGreaterThanOrEqualToConstant:140].active = YES;
-  NSLayoutConstraint *preferred = [_address.widthAnchor constraintEqualToConstant:280];
-  preferred.priority = NSLayoutPriorityDefaultLow;
-  preferred.active = YES;
+  // The field takes whatever the toolbar has left, pushing Profile and Open in
+  // Wing to the trailing edge.
+  _addressWidth = [_address.widthAnchor constraintEqualToConstant:280];
+  _addressWidth.active = YES;
+  [self fitAddress];
   item.view = _address;
   item.label = @"Address";
   return item;
+}
+
+// Like Safari's compact bar: the site name at rest, the full address to edit.
+- (void)controlTextDidBeginEditing:(NSNotification *)notification {
+  _address.alignment = NSTextAlignmentLeft;
+  _address.stringValue = [self visibleURL];
+}
+- (void)controlTextDidEndEditing:(NSNotification *)notification {
+  _address.alignment = NSTextAlignmentCenter;
+  [self refresh];
+}
+
+// NSToolbar never stretches a view item on its own, so size the field to
+// what the window has left after the fixed controls.
+- (void)fitAddress {
+  CGFloat width = NSWidth(_core.window.frame);
+  if (!_addressWidth || width <= 0) return;
+  // Traffic lights, back/forward, the profile menu (capped at 120) and Open in Wing.
+  CGFloat profile = _profile ? MIN(120, _profile.fittingSize.width) : 110;
+  CGFloat reserved = 92 + 76 + profile + 64;
+  _addressWidth.constant = MAX(140, width - reserved);
 }
 
 #pragma mark Actions
@@ -253,6 +288,7 @@ static NSMutableArray *gMinis;
     [_core.window performClose:nil];
   else if ([name isEqual:@"palette-navigate"]) {
     [_core.window makeFirstResponder:_address];
+    _address.stringValue = [self visibleURL];
     [_address selectText:nil];
   } else if ([name isEqual:@"reload"])
     [_tab reload];
@@ -271,7 +307,11 @@ static NSMutableArray *gMinis;
   _back.enabled = _tab.canGoBack;
   _forward.enabled = _tab.canGoForward;
   _expand.enabled = url.length > 0;
-  if (!_address.currentEditor) _address.stringValue = url;
+  if (_address.currentEditor) return;
+  NSString *host = [NSURL URLWithString:url].host;
+  if ([host hasPrefix:@"www."]) host = [host substringFromIndex:4];
+  _address.stringValue = host.length ? host : url;
+  _address.toolTip = url;
 }
 - (void)tabDidChangeTitle:(ArdiaCoreTab *)tab { [self refresh]; }
 - (void)tabDidChangeURL:(ArdiaCoreTab *)tab {
@@ -341,6 +381,7 @@ static NSMutableArray *gMinis;
 - (BOOL)windowShouldClose:(ArdiaCoreWindow *)window {
   if (_closing) return YES;
   _closing = YES;
+  [NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];
   _tab.delegate = nil;
   [_tab closeNow];
   [gMinis removeObject:self];
