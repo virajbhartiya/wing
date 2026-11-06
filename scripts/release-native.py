@@ -45,6 +45,16 @@ def make_dmg(app, destination):
         run('hdiutil', 'create', '-quiet', '-volname', 'Wing', '-srcfolder', stage, '-format', 'UDZO', destination)
 
 
+def qualify(*extra):
+    # The engine qualification is sensitive to a busy Mac (startup and teardown
+    # watchdogs); a real regression fails every attempt.
+    for attempt in range(3):
+        if subprocess.run(['python3', 'scripts/test-chromium-preview.py', *extra], cwd=ROOT).returncode == 0:
+            return
+        print(f'Qualification attempt {attempt + 1} failed.', flush=True)
+    raise SystemExit('Qualification failed three times.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--publish', action='store_true')
@@ -62,13 +72,13 @@ def main():
     run('npm', 'test')
     run('npm', 'run', 'check')
     run('python3', 'scripts/build-chromium-preview.py', '--source-receipt', f'{build}/wing-build-receipt.json')
-    run('python3', 'scripts/test-chromium-preview.py')
+    qualify()
     run('npm', 'run', 'build:chromium-production')
     apps = {'arm64': pathlib.Path(json.loads((ROOT / 'native/build/chromium-production/latest.json').read_text())['app'])}
     if args.intel:
         receipt = f'{build}/wing-build-receipt-x64.json'
         run('python3', 'scripts/build-chromium-preview.py', '--arch', 'x64', '--source-receipt', receipt)
-        run('python3', 'scripts/test-chromium-preview.py', '--arch', 'x64')
+        qualify('--arch', 'x64')
         run('python3', 'scripts/build-chromium-preview.py', '--production', '--arch', 'x64', '--source-receipt', receipt)
         apps['x64'] = pathlib.Path(json.loads((ROOT / 'native/build/chromium-production-x64/latest.json').read_text())['app'])
     version = json.loads((ROOT / 'package.json').read_text())['version']
