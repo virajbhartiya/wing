@@ -8,6 +8,7 @@
 #import "PromptPopover.h"
 #import "MiniWindow.h"
 #import "CastPicker.h"
+#import "WebKitPage.h"
 #import <AppKit/AppKit.h>
 #include <cmath>
 #include <dlfcn.h>
@@ -304,6 +305,10 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   NSMutableSet<NSString *> *_capturingTabs;
   NSMutableSet<NSString *> *_wakingTabs;
   NSMutableDictionary<NSString *, NSNumber *> *_departures;
+  // A page in HTML fullscreen (a video's ⤢ button) fills the whole window, and
+  // the window goes full screen with it unless it already was.
+  ArdiaCoreTab *_fullscreenTab;
+  BOOL _fullscreenTookWindow;
   NSMutableSet<NSString *> *_pendingCreatedTabs;
   NSMutableSet<NSString *> *_protectedProfiles;
   NSMutableSet<NSString *> *_checkingProtection;
@@ -348,6 +353,11 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   NSString *_hoverURL;
   BOOL _automaticPictureInPicture;
   NSMutableSet<NSString *> *_pictureInPictureTabs;
+  // Pages Wing floated into picture in picture itself (a tab switch or leaving
+  // the app); they come back into the window when they're shown again.
+  NSMutableSet<NSString *> *_miniPlayerTabs;
+  // Tabs shown by WebKit instead of Chromium (streaming sites, for DRM video).
+  NSMutableDictionary<NSString *, WingWebKitPage *> *_webkitPages;
   NSMutableSet<NSString *> *_screenSharingTabs;
   BOOL _quitting;
   BOOL _qualificationStarted;
@@ -1420,6 +1430,8 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _loadingProfiles = [NSMutableSet new];
   _capturingTabs = [NSMutableSet new];
   _pictureInPictureTabs = [NSMutableSet new];
+  _miniPlayerTabs = [NSMutableSet new];
+  _webkitPages = [NSMutableDictionary new];
   _crashedTabs = [NSMutableDictionary new];
   _hangPrompts = [NSMutableDictionary new];
   _screenSharingTabs = [NSMutableSet new];
@@ -1510,6 +1522,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                    queue:NSOperationQueue.mainQueue
               usingBlock:^(NSNotification *note) {
                 [weakSelf send:@"window-state" data:@{@"fullScreen" : @YES}];
+                [weakSelf applyLayout];
               }]];
   [_observers addObject:[NSNotificationCenter.defaultCenter
       addObserverForName:NSWindowWillExitFullScreenNotification
@@ -1517,7 +1530,17 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                    queue:NSOperationQueue.mainQueue
               usingBlock:^(NSNotification *note) {
                 [weakSelf send:@"window-state" data:@{@"fullScreen" : @NO}];
+                [weakSelf windowWillLeaveFullScreen];
               }]];
+  for (NSNotificationName name in @[ NSApplicationDidBecomeActiveNotification,
+                                     NSApplicationDidResignActiveNotification ])
+    [_observers addObject:[NSNotificationCenter.defaultCenter
+        addObserverForName:name
+                    object:NSApp
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification *note) {
+                  [weakSelf applicationActiveChanged:[note.name isEqual:NSApplicationDidBecomeActiveNotification]];
+                }]];
   // The shell asks for a window drag after mousedown on empty chrome; keep
   // the originating event so AppKit can run its native move loop.
   _mouseDownMonitor = [NSEvent
@@ -2815,7 +2838,10 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   NSString *identity = [self identityForTab:tab];
   if (!identity) return;
   if ([state[@"active"] boolValue]) [_pictureInPictureTabs addObject:identity];
-  else [_pictureInPictureTabs removeObject:identity];
+  else {
+    [_pictureInPictureTabs removeObject:identity];
+    [_miniPlayerTabs removeObject:identity];
+  }
   [self pageChanged:tab];
 }
 - (void)tab:(ArdiaCoreTab *)tab
@@ -2835,6 +2861,36 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 - (void)window:(ArdiaCoreWindow *)window
     devToolsDidChangeForTab:(ArdiaCoreTab *)tab
                        view:(NSView *)view {
+  [self applyLayout];
+}
+- (void)window:(ArdiaCoreWindow *)window
+                    tab:(ArdiaCoreTab *)tab
+    didChangeFullscreen:(BOOL)fullscreen {
+  if (window != _window || _quitting)
+    return;
+  NSWindow *native = _window.window;
+  BOOL windowFull = (native.styleMask & NSWindowStyleMaskFullScreen) != 0;
+  if (fullscreen) {
+    _fullscreenTab = tab;
+    if (!windowFull) {
+      _fullscreenTookWindow = YES;
+      [native toggleFullScreen:nil];
+    }
+  } else if (tab == _fullscreenTab) {
+    _fullscreenTab = nil;
+    if (_fullscreenTookWindow && windowFull)
+      [native toggleFullScreen:nil];
+    _fullscreenTookWindow = NO;
+  }
+  [self applyLayout];
+}
+- (void)windowWillLeaveFullScreen {
+  // Leaving the Mac's full screen (green button, ⌃⌘F) ends the video's too.
+  _fullscreenTookWindow = NO;
+  ArdiaCoreTab *tab = _fullscreenTab;
+  _fullscreenTab = nil;
+  if (tab && !tab.closed)
+    [tab exitFullscreen];
   [self applyLayout];
 }
 - (void)tabDidChangeURL:(ArdiaCoreTab *)tab {
@@ -3082,6 +3138,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   for (NSString *identity in _tabs) {
     ArdiaCoreTab *page = _tabs[identity];
     if (![visible containsObject:identity]) {
+      if (page.view.superview == _window.hostView && !page.view.hidden && !_departures[identity])
+        [self openMiniPlayer:page identity:identity];
       // The page being left fades out over the incoming one, so a switch never
       // flashes an empty frame while the new page paints.
       if (!_departures[identity] && visible.count && page.view.superview == _window.hostView &&
@@ -3108,7 +3166,23 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         page.view.alphaValue = 1;
       }
       [self thaw:page];
+      [self closeMiniPlayer:identity];
     }
+  }
+  for (NSString *identity in _webkitPages.allKeys) {
+    NSDictionary *record;
+    for (NSDictionary *candidate in state[@"tabs"])
+      if ([candidate[@"id"] isEqual:identity]) {
+        record = candidate;
+        break;
+      }
+    WingWebKitPage *webkit = _webkitPages[identity];
+    if (!record || [record[@"closed"] boolValue]) {
+      [webkit close];
+      [_webkitPages removeObjectForKey:identity];
+      [_modelURLs removeObjectForKey:identity];
+    } else if (![visible containsObject:identity])
+      [webkit.view removeFromSuperview];
   }
   CGFloat contentLeft = _window.hostView.bounds.size.width;
   for (NSDictionary *pane in _lastSync[@"panes"])
@@ -3133,6 +3207,20 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       }
     if (!Identifier(profileId))
       continue;
+    if (_webkitPages[identity] || WingStreamingURL(record[@"url"])) {
+      CGFloat x = [pane[@"x"] doubleValue], y = [pane[@"y"] doubleValue],
+              w = [pane[@"width"] doubleValue], h = [pane[@"height"] doubleValue];
+      if (sidebarWidth > 0) {
+        CGFloat scale = (available - sidebarWidth - 8) / available;
+        x = contentLeft + (x - contentLeft) * scale;
+        w *= scale;
+      }
+      [self showWebKitPage:identity record:record profileId:profileId
+                     frame:NSMakeRect(x, _window.hostView.isFlipped ? y : _window.hostView.bounds.size.height - y - h,
+                                      MAX(1, w), MAX(1, h))
+                    active:[identity isEqual:state[@"activeTabId"]]];
+      continue;
+    }
     ArdiaCoreProfile *profile = _profiles[profileId];
     if (!profile && _private) continue;
     if (!profile) {
@@ -3288,6 +3376,137 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   }
   for (NSString *identity in _departures)
     _tabs[identity].view.hidden = NO;
+  ArdiaCoreTab *full = _fullscreenTab;
+  if (full && (full.closed || full.view.superview != _window.hostView)) {
+    // The fullscreen page left the screen (tab switch, close): end it.
+    _fullscreenTab = nil;
+    if (!full.closed)
+      [full exitFullscreen];
+    if (_fullscreenTookWindow && (_window.window.styleMask & NSWindowStyleMaskFullScreen))
+      [_window.window toggleFullScreen:nil];
+    _fullscreenTookWindow = NO;
+  } else if (full) {
+    [full.devToolsView setHidden:YES];
+    if (_window.hostView.subviews.lastObject != full.view)
+      [_window.hostView addSubview:full.view positioned:NSWindowAbove relativeTo:nil];
+    full.view.frame = _window.hostView.bounds;
+    full.view.layer.cornerRadius = 0;
+    full.view.hidden = NO;
+  }
+}
+- (void)showWebKitPage:(NSString *)identity
+                record:(NSDictionary *)record
+             profileId:(NSString *)profileId
+                 frame:(NSRect)frame
+                active:(BOOL)active {
+  WingWebKitPage *webkit = _webkitPages[identity];
+  if (!webkit) {
+    // A Chromium page that reached a streaming site moves over to WebKit.
+    ArdiaCoreTab *page = _tabs[identity];
+    if (page) {
+      [self closeExtensionViewsForTabID:identity];
+      [_tabs removeObjectForKey:identity];
+      [_crashedTabs removeObjectForKey:identity];
+      [_hangPrompts[identity] dismiss];
+      [_hangPrompts removeObjectForKey:identity];
+      [_appliedStyles removeObjectForKey:identity];
+      [_wakingTabs removeObject:identity];
+      [_capturingTabs removeObject:identity];
+      [_pictureInPictureTabs removeObject:identity];
+      [_screenSharingTabs removeObject:identity];
+      [_departures removeObjectForKey:identity];
+      if (page == _fullscreenTab)
+        _fullscreenTab = nil;
+      page.delegate = nil;
+      [page.view removeFromSuperview];
+      [page.devToolsView removeFromSuperview];
+      [page closeNow];
+    }
+    webkit = [[WingWebKitPage alloc] initWithProfile:profileId ephemeral:_private];
+    __weak WingChromiumHost *weakSelf = self;
+    __weak WingWebKitPage *weakPage = webkit;
+    webkit.onChange = ^{
+      [weakSelf webKitPageChanged:weakPage identity:identity];
+    };
+    webkit.onOpen = ^(NSString *url) {
+      [weakSelf send:@"action" data:@{@"name" : @"new-tab", @"args" : @{@"url" : url}}];
+    };
+    _webkitPages[identity] = webkit;
+    _modelURLs[identity] = record[@"url"];
+    [webkit load:record[@"url"]];
+  } else if (![_modelURLs[identity] isEqual:record[@"url"]]) {
+    _modelURLs[identity] = record[@"url"];
+    if (![webkit.url isEqual:record[@"url"]])
+      [webkit load:record[@"url"]];
+  }
+  if (webkit.view.superview != _window.hostView)
+    [_window.hostView addSubview:webkit.view];
+  webkit.view.frame = frame;
+  webkit.view.wantsLayer = YES;
+  webkit.view.layer.cornerRadius = 10;
+  webkit.view.layer.cornerCurve = @"continuous";
+  webkit.view.layer.masksToBounds = YES;
+  if (active && _window.window.firstResponder == _window.window)
+    [webkit focus];
+}
+- (void)webKitPageChanged:(WingWebKitPage *)webkit identity:(NSString *)identity {
+  if (!webkit || _webkitPages[identity] != webkit || _quitting)
+    return;
+  [self send:@"page"
+        data:@{
+          @"id" : identity,
+          @"url" : webkit.url,
+          @"title" : webkit.title,
+          @"loading" : @(webkit.loading),
+          @"canGoBack" : @(webkit.canGoBack),
+          @"canGoForward" : @(webkit.canGoForward),
+          @"audible" : @NO,
+          @"muted" : @NO,
+          @"capturing" : @NO,
+          @"screenSharing" : @NO,
+          @"pictureInPicture" : @NO,
+          @"favicon" : webkit.faviconURL,
+          @"progress" : @(webkit.progress),
+          @"zoom" : @1,
+          @"crashed" : @""
+        }];
+}
+// The mini player: a video playing with sound floats into picture in picture
+// when its tab leaves the screen or Wing goes to the background.
+- (void)openMiniPlayer:(ArdiaCoreTab *)page identity:(NSString *)identity {
+  if (!_automaticPictureInPicture || _quitting || page.closed || page.discarded || page.frozen ||
+      [_pictureInPictureTabs containsObject:identity])
+    return;
+  NSTimeInterval asked = NSProcessInfo.processInfo.systemUptime;
+  [page evaluate:@"post('result',JSON.stringify([...document.querySelectorAll('video')].some(v=>"
+                 @"!v.paused&&!v.ended&&v.readyState>2&&v.videoWidth>0&&!v.muted&&v.volume>0)))"
+      completion:^(NSString *json) {
+        if (![json isEqual:@"true"] || page.closed || self->_quitting)
+          return;
+        [page enterPictureInPictureForClickAt:asked
+                                   completion:^(NSString *route, BOOL opened) {
+                                     if (opened) [self->_miniPlayerTabs addObject:identity];
+                                   }];
+      }];
+}
+- (void)closeMiniPlayer:(NSString *)identity {
+  if (![_miniPlayerTabs containsObject:identity])
+    return;
+  [_miniPlayerTabs removeObject:identity];
+  if ([_pictureInPictureTabs containsObject:identity])
+    [_tabs[identity] exitPictureInPicture];
+}
+- (void)applicationActiveChanged:(BOOL)active {
+  for (NSDictionary *pane in _lastSync[@"panes"]) {
+    NSString *identity = pane[@"id"];
+    ArdiaCoreTab *page = Identifier(identity) ? _tabs[identity] : nil;
+    if (!page || page.view.superview != _window.hostView || page.view.hidden)
+      continue;
+    if (active)
+      [self closeMiniPlayer:identity];
+    else if (page != _fullscreenTab && _window.window.isVisible && !_window.window.isMiniaturized)
+      [self openMiniPlayer:page identity:identity];
+  }
 }
 - (void)finishDeparture:(NSString *)identity generation:(NSNumber *)generation {
   if (![_departures[identity] isEqual:generation])
@@ -3604,11 +3823,9 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [self backupWorkspace:body force:NO];
     }
     _lastSync = data;
-    BOOL automaticPiP = [state[@"settings"][@"automaticPictureInPicture"] boolValue];
-    if (automaticPiP != _automaticPictureInPicture) {
-      _automaticPictureInPicture = automaticPiP;
-      [ArdiaCoreEngine setAutoPictureInPicture:automaticPiP];
-    }
+    // Wing runs the mini player itself; Chromium's own automatic picture in
+    // picture stays off so a page never floats twice.
+    _automaticPictureInPicture = [state[@"settings"][@"automaticPictureInPicture"] boolValue];
     // Wing's mode reaches window controls and each page's prefers-color-scheme.
     NSString *appearance = state[@"settings"][@"appearance"];
     if (![appearance isKindOfClass:NSString.class])
@@ -4149,6 +4366,47 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [self reply:rid result:@{@"ok" : @YES} error:nil];
     return;
   }
+  WingWebKitPage *webkit = Identifier(data[@"id"]) ? _webkitPages[data[@"id"]] : nil;
+  if (webkit) {
+    if ([action isEqual:@"close"]) {
+      [webkit close];
+      [_webkitPages removeObjectForKey:data[@"id"]];
+      [_modelURLs removeObjectForKey:data[@"id"]];
+      [self reply:rid result:@{@"pending" : @NO} error:nil];
+      return;
+    }
+    if ([action isEqual:@"test-webkit"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+      [webkit evaluate:@"let fps = false; try { await navigator.requestMediaKeySystemAccess('com.apple.fps', "
+                       @"[{initDataTypes:['sinf','skd'],videoCapabilities:[{contentType:'video/mp4;codecs=\"avc1.42E01E\"'}]}]); "
+                       @"fps = true } catch (e) { fps = String(e) } return JSON.stringify({fps, ua: navigator.userAgent})"
+            completion:^(id value) {
+              [self reply:rid
+                   result:@{
+                     @"url" : webkit.url,
+                     @"title" : webkit.title,
+                     @"shown" : @(webkit.view.superview == self->_window.hostView),
+                     @"chromium" : @(self->_tabs[data[@"id"]] != nil),
+                     @"js" : [value description] ?: @""
+                   }
+                    error:nil];
+            }];
+      return;
+    }
+    NSDictionary<NSString *, NSString *> *simple = @{
+      @"back" : @"goBack", @"forward" : @"goForward", @"reload" : @"reload",
+      @"dev-reload" : @"reload", @"stop" : @"stop", @"focus" : @"focus"
+    };
+    if (!simple[action]) {
+      [self reply:rid result:nil error:@"This page plays in WebKit, which doesn't support that."];
+      return;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    [webkit performSelector:NSSelectorFromString(simple[action])];
+#pragma clang diagnostic pop
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
   ArdiaCoreTab *page = Identifier(data[@"id"]) ? _tabs[data[@"id"]] : nil;
   [self thaw:page];
   if ([action isEqual:@"close"]) {
@@ -4337,6 +4595,47 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if ([data[@"choose"] isKindOfClass:NSNumber.class])
       [_castPicker chooseSinkAtIndex:[data[@"choose"] integerValue]];
     [self reply:rid result:@{@"picker" : @(_castPicker != nil), @"state" : _castPicker.state ?: @{}} error:nil];
+    return;
+  }
+  if ([action isEqual:@"test-fullscreen"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    // A click inside the page gives it the user activation fullscreen needs.
+    if ([data[@"click"] boolValue] && page.view.window) {
+      NSWindow *window = page.view.window;
+      [NSApp activateIgnoringOtherApps:YES];
+      [window makeKeyAndOrderFront:nil];
+      NSPoint point = [page.view convertPoint:NSMakePoint(NSMidX(page.view.bounds), NSMidY(page.view.bounds))
+                                       toView:nil];
+      NSView *target = [window.contentView.superview hitTest:point];
+      NSLog(@"test-fullscreen click target %@", target);
+      for (NSEventType type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {
+        NSEvent *event = [NSEvent mouseEventWithType:type location:point modifierFlags:0
+                                           timestamp:NSProcessInfo.processInfo.systemUptime
+                                        windowNumber:window.windowNumber context:nil
+                                         eventNumber:0 clickCount:1 pressure:1];
+        if (type == NSEventTypeLeftMouseDown)
+          [target mouseDown:event];
+        else
+          [target mouseUp:event];
+      }
+    }
+    if ([data[@"exit"] boolValue])
+      [page exitFullscreen];
+    if ([data[@"simulate"] isKindOfClass:NSNumber.class])
+      [self window:_window tab:page didChangeFullscreen:[data[@"simulate"] boolValue]];
+    [page evaluate:@"post('result',JSON.stringify([String(window.fs),!!document.fullscreenElement,innerWidth,innerHeight]))"
+        completion:^(NSString *json) {
+          [self reply:rid
+               result:@{
+                 @"tab" : @(self->_fullscreenTab == page),
+                 @"window" : @((self->_window.window.styleMask & NSWindowStyleMaskFullScreen) != 0),
+                 @"page" : NSStringFromRect(page.view.frame),
+                 @"host" : NSStringFromRect(self->_window.hostView.bounds),
+                 @"screen" : NSStringFromRect(self->_window.window.screen.frame),
+                 @"front" : @(self->_window.hostView.subviews.lastObject == page.view),
+                 @"js" : json ?: @""
+               }
+                error:nil];
+        }];
     return;
   }
   if ([action isEqual:@"cast"]) {

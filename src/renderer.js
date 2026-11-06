@@ -2102,8 +2102,8 @@ function settingsPanes() {
         (chromium
           ? settingToggle(
               "automatic-pip",
-              "Automatic picture in picture",
-              "Playing videos follow you when you switch tabs.",
+              "Mini player",
+              "A playing video floats in a small window when you switch tabs or leave Wing.",
               s.automaticPictureInPicture,
               "pip video",
             )

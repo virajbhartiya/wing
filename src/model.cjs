@@ -114,7 +114,8 @@ function initialState() {
     boosts: {},
     settings: {
       archiveHours: 12,
-      automaticPictureInPicture: false,
+      automaticPictureInPicture: true,
+      miniPlayerIntroduced: true,
       dark: false,
       onboarded: false,
       search: "google",
@@ -475,6 +476,11 @@ function validateState(value) {
   if (!["top", "sidebar"].includes(settings.tabLayout))
     settings.tabLayout = "top";
   settings.dark = !!settings.dark;
+  // The mini player arrived on by default; turn it on once for older layouts,
+  // whose saved false was only the old default.
+  if (value.settings && value.settings.miniPlayerIntroduced !== true)
+    settings.automaticPictureInPicture = true;
+  settings.miniPlayerIntroduced = true;
   settings.automaticPictureInPicture =
     settings.automaticPictureInPicture === true;
   if (!["horizontal", "vertical"].includes(settings.splitOrientation))

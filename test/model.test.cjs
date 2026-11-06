@@ -142,3 +142,13 @@ test("Space icons keep whole emoji and fall back when empty", () => {
   assert.equal(m.spaceIcon("Work"), "W");
   assert.equal(m.spaceIcon("  "), "✳");
 });
+test("the mini player turns on once for layouts saved before it, then keeps the choice", () => {
+  const old = m.initialState();
+  delete old.settings.miniPlayerIntroduced;
+  old.settings.automaticPictureInPicture = false;
+  const migrated = m.validateState(JSON.parse(JSON.stringify(old)));
+  assert.equal(migrated.settings.automaticPictureInPicture, true);
+  migrated.settings.automaticPictureInPicture = false;
+  assert.equal(m.validateState(migrated).settings.automaticPictureInPicture, false);
+  assert.equal(m.initialState().settings.automaticPictureInPicture, true);
+});

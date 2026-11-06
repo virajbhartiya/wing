@@ -979,6 +979,8 @@ async function invoke(action, data = {}) {
         "summarize",
         "cast",
         "test-cast",
+        "test-fullscreen",
+        "test-webkit",
       ].includes(action)
     )
       return native(action, {
