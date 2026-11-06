@@ -43,13 +43,23 @@ def main():
     parser.add_argument('--source-receipt', type=Path, help='Use a completed Wing source framework build')
     parser.add_argument("--production", action="store_true", help="Stage a qualified persistent-profile app; does not install it")
     parser.add_argument('--arch', choices=['arm64', 'x64'], default='arm64')
+    # Rosetta cannot qualify the x64 engine; vouch for the host code with the
+    # arm64 qualification of the same inputs instead, and say so in the release.
+    parser.add_argument('--untested-intel', action='store_true', help='x64 production without x64 qualification')
     args = parser.parse_args()
+    if args.untested_intel and not (args.production and args.arch == 'x64'):
+        raise SystemExit('--untested-intel only applies to an x64 production build.')
     inputs = host_inputs()
     if not args.source_receipt:
         # The vendored prebuilt engine is Chromium 155; the host is written against the pinned source engine.
         raise SystemExit('Pass --source-receipt from a compiled source engine (see README)')
     source_receipt = verify_receipt(args.source_receipt) if args.source_receipt else None
-    if args.production:
+    if args.untested_intel:
+        report = json.loads((ROOT / qualification_report('arm64')).read_text())
+        if not report.get('passed') or report.get('hostInputs') != inputs:
+            raise SystemExit('The arm64 build of this exact host code must pass qualification first.')
+        print('Warning: building an x64 app that has not been qualified on Intel.', flush=True)
+    elif args.production:
         report = json.loads((ROOT / qualification_report(args.arch)).read_text())
         verify_qualification(report, source_receipt, inputs)
     product = 'Wing' if args.production else 'Wing Chromium Preview'

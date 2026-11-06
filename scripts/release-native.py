@@ -84,7 +84,8 @@ def main():
         run('python3', 'scripts/build-chromium-preview.py', '--arch', 'x64', '--source-receipt', receipt)
         if not args.intel_untested:
             qualify('--arch', 'x64')
-        run('python3', 'scripts/build-chromium-preview.py', '--production', '--arch', 'x64', '--source-receipt', receipt)
+        run('python3', 'scripts/build-chromium-preview.py', '--production', '--arch', 'x64', '--source-receipt', receipt,
+            *(['--untested-intel'] if args.intel_untested else []))
         apps['x64'] = pathlib.Path(json.loads((ROOT / 'native/build/chromium-production-x64/latest.json').read_text())['app'])
     version = json.loads((ROOT / 'package.json').read_text())['version']
     tags = output('git', 'tag', '--list').split()
