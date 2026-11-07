@@ -197,7 +197,8 @@ def main():
         if host_inputs() != inputs:
             raise RuntimeError('Host inputs changed during packaging; rebuild from a stable source tree.')
         # Keep every existing preview intact; each successful build has its own path.
-        destination = Path(tempfile.mkdtemp(prefix='build-', dir=output)) / app.name
+        # Spotlight skips a .noindex folder, so builds don't show up as more Wings.
+        destination = Path(tempfile.mkdtemp(prefix='build-', suffix='.noindex', dir=output)) / app.name
         shutil.move(app, destination)
         (output / 'latest.json').write_text(json.dumps({'app':str(destination), 'qualificationOnly':not args.production, 'engineKind':engine_receipt['kind']}, indent=2)+'\n')
         print(f'Built {product} staging artifact: {destination}')
