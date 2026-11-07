@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
 const icons = {
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  pull: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4m2-2.5L10.5 6 13 8.5"/>',
   volume:
     '<path d="m11 5-6 4H2v6h3l6 4zM15 8a6 6 0 0 1 0 8M18 5a10 10 0 0 1 0 14"/>',
   muted: '<path d="m11 5-6 4H2v6h3l6 4zM16 9l6 6m0-6-6 6"/>',
@@ -457,6 +458,7 @@ function render() {
       .map(tabHTML)
       .join(""),
   );
+  renderPrFolder();
   const spaceButtons = state.spaces
       .map(
         (s) =>
@@ -1949,11 +1951,103 @@ async function refreshPulls() {
   pullsBusy = false;
   if (data && !data.error) pullsData = data;
   renderPulls();
+  renderPrFolder();
 }
+const prSidebarOn = () =>
+  window.wing.engine === "chromium" &&
+  !document.body.classList.contains("private") &&
+  state?.settings.pullRequestsInSidebar !== false;
 setInterval(() => {
-  if (!document.hidden && state?.tabs.some((t) => t.url === "wing://pulls"))
+  if (
+    !document.hidden &&
+    (prSidebarOn() || state?.tabs.some((t) => t.url === "wing://pulls"))
+  )
     refreshPulls();
 }, 120000);
+// Coming back to Wing refreshes a list older than a minute.
+window.addEventListener("focus", () => {
+  if (prSidebarOn() && Date.now() - (pullsData?.fetchedAt || 0) > 60000)
+    refreshPulls();
+});
+// The sidebar's live Pull Requests folder: compact rows, review requests first.
+const PR_FOLDER_LIMIT = 6;
+function prFolderRow(p, activeURL) {
+  const ci = p.draft ? "draft" : p.ci;
+  const review = { approved: "✓", changes: "✕", waiting: "" }[p.review] || "";
+  const detail = [
+    `${p.repo} #${p.number}`,
+    p.author && p.section === "review" ? `by ${p.author}` : "",
+    p.draft ? "Draft" : PR_CI[p.ci]?.[0] || "",
+    PR_REVIEW[p.review]?.[0] || "",
+    p.conflict ? "Conflicts" : "",
+    p.additions || p.deletions ? `+${p.additions} −${p.deletions}` : "",
+    prAge(p.updatedAt) ? `updated ${prAge(p.updatedAt)} ago` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const active = activeURL && activeURL.startsWith(p.url);
+  return `<button class="pr-item ${active ? "active" : ""}" data-pr-open="${esc(p.url)}" title="${esc(p.title)}\n${esc(detail)}"><span class="pr-dot ${esc(ci)}" aria-hidden="true"></span><span class="pr-item-title">${esc(p.title)}</span>${p.conflict ? '<span class="pr-mark bad" aria-label="Conflicts">!</span>' : ""}${review ? `<span class="pr-mark ${p.review === "approved" ? "good" : "bad"}" aria-label="${esc(PR_REVIEW[p.review][0])}">${review}</span>` : ""}<span class="pr-num">#${esc(String(p.number))}</span></button>`;
+}
+let prFolderExpanded = new Set();
+function renderPrFolder() {
+  const folder = $("#pr-folder");
+  if (!folder || !state) return;
+  folder.hidden = !prSidebarOn();
+  if (folder.hidden) return;
+  if (!pullsData && !pullsBusy) refreshPulls();
+  const collapsed = state.settings.pullRequestsCollapsed === true;
+  const items = pullsData?.items || [];
+  const review = items.filter((p) => p.section === "review");
+  const mine = items.filter((p) => p.section === "mine");
+  const activeURL = state.tabs.find((t) => t.id === state.activeTabId)?.url || "";
+  const group = (key, label, rows) => {
+    if (!rows.length) return "";
+    const open = prFolderExpanded.has(key);
+    const shown = open ? rows : rows.slice(0, PR_FOLDER_LIMIT);
+    const more = rows.length - shown.length;
+    return `<div class="pr-group">${label}</div>${shown.map((p) => prFolderRow(p, activeURL)).join("")}${more > 0 ? `<button class="pr-more" data-pr-more="${key}">${more} more</button>` : ""}`;
+  };
+  const working = pullsData?.providers.some((p) => p.status === "ok");
+  const notice = !pullsData
+    ? "Fetching…"
+    : !working
+      ? pullsData.providers.find((p) => p.id === "github")?.message ||
+        "Pull requests could not be reached."
+      : !items.length
+        ? "No open pull requests."
+        : "";
+  const body = collapsed
+    ? items.filter((p) => activeURL && activeURL.startsWith(p.url)).map((p) => prFolderRow(p, activeURL)).join("")
+    : group("review", "Review requested", review) +
+      group("mine", "Yours", mine) +
+      (notice ? `<div class="pr-empty">${esc(notice)}</div>` : "");
+  patchHTML(
+    "#pr-folder",
+    `<div class="pr-folder-head"><button class="pr-folder-toggle" data-pr-toggle aria-expanded="${!collapsed}"><span>${collapsed ? "›" : "⌄"}</span>${icon("pull")}<span>Pull Requests</span>${review.length ? `<span class="pr-count" title="${review.length} waiting for your review">${review.length}</span>` : ""}</button><button class="icon pr-refresh ${pullsBusy ? "busy" : ""}" data-pr-refresh title="Refresh pull requests" aria-label="Refresh pull requests">${icon("reload")}</button></div><div class="pr-folder-children">${body}</div>`,
+  );
+}
+document.addEventListener("click", (e) => {
+  const target = e.target.closest("[data-pr-open],[data-pr-toggle],[data-pr-refresh],[data-pr-more]");
+  if (!target || !target.closest("#pr-folder")) return;
+  e.stopPropagation();
+  if (target.dataset.prOpen !== undefined) {
+    const url = target.dataset.prOpen;
+    // Reuse a tab already on this pull request, wherever it is in the Space.
+    const open = state.tabs.find(
+      (t) => t.spaceId === state.activeSpaceId && t.url.startsWith(url),
+    );
+    if (open && !(e.metaKey || e.ctrlKey)) act("select-tab", { id: open.id });
+    else act("new-tab", { url });
+  } else if (target.dataset.prToggle !== undefined)
+    act("features-settings", {
+      pullRequestsCollapsed: state.settings.pullRequestsCollapsed !== true,
+    });
+  else if (target.dataset.prRefresh !== undefined) refreshPulls();
+  else {
+    prFolderExpanded.add(target.dataset.prMore);
+    renderPrFolder();
+  }
+}, true);
 const APP_ICONS = [
   ["violet", "Violet"],
   ["midnight", "Midnight"],
@@ -2159,6 +2253,13 @@ function settingsPanes() {
               "Keep Spaces, pinned tabs and Favorites the same on your Macs. History, open tabs and passwords stay on this Mac.",
               state.settings.icloudSync === true,
               "icloud sync macs devices",
+            ) +
+            settingToggle(
+              "pr-sidebar",
+              "Pull requests in the sidebar",
+              "Your open pull requests and review requests from GitHub and GitLab, kept current under your pinned tabs.",
+              state.settings.pullRequestsInSidebar !== false,
+              "pull requests github gitlab reviews",
             )
           : ""),
     },
@@ -2347,6 +2448,7 @@ function bindSettings() {
     toast("Spaces now sync through iCloud Drive.");
   });
   on("automatic-pip", "onchange", feature("automaticPictureInPicture"));
+  on("pr-sidebar", "onchange", feature("pullRequestsInSidebar"));
   on("make-default", "onclick", async () => {
     const r = await act("default-browser");
     toast(

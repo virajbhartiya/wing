@@ -116,6 +116,8 @@ function initialState() {
       archiveHours: 12,
       automaticPictureInPicture: true,
       miniPlayerIntroduced: true,
+      pullRequestsInSidebar: true,
+      pullRequestsCollapsed: false,
       dark: false,
       onboarded: false,
       search: "google",
@@ -481,6 +483,8 @@ function validateState(value) {
   if (value.settings && value.settings.miniPlayerIntroduced !== true)
     settings.automaticPictureInPicture = true;
   settings.miniPlayerIntroduced = true;
+  settings.pullRequestsInSidebar = settings.pullRequestsInSidebar !== false;
+  settings.pullRequestsCollapsed = settings.pullRequestsCollapsed === true;
   settings.automaticPictureInPicture =
     settings.automaticPictureInPicture === true;
   if (!["horizontal", "vertical"].includes(settings.splitOrientation))

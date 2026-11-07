@@ -161,6 +161,8 @@ class ChromiumWorkspace {
           "onboarded",
           "linksInMini",
           "icloudSync",
+          "pullRequestsInSidebar",
+          "pullRequestsCollapsed",
           "askSpaceForLinks",
           "defaultBrowserPromptOff",
         ])
