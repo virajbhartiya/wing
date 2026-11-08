@@ -1953,10 +1953,36 @@ async function refreshPulls() {
   renderPulls();
   renderPrFolder();
 }
+// The folder belongs to Spaces whose profile is signed in to GitHub; each
+// profile is rechecked at most every 30 seconds as the sidebar renders.
+const githubSignIn = {};
+function githubSignedIn() {
+  const profile = currentSpace()?.profileId;
+  if (!profile) return false;
+  const known = githubSignIn[profile];
+  if (!known || (!known.busy && Date.now() - known.at > 30000)) {
+    githubSignIn[profile] = { ...known, busy: true, at: Date.now() };
+    Promise.resolve()
+      .then(() => window.wing.invoke("github-signed-in"))
+      .then((r) => r?.signedIn === true)
+      .catch(() => false)
+      .then((signedIn) => {
+        const changed = githubSignIn[profile].signedIn !== signedIn;
+        githubSignIn[profile] = { signedIn, at: Date.now() };
+        if (changed) renderPrFolder();
+      });
+  }
+  return githubSignIn[profile].signedIn === true;
+}
+// Signing in or out in a tab shows or hides the folder without a sidebar change.
+setInterval(() => {
+  if (!document.hidden && window.wing.engine === "chromium") githubSignedIn();
+}, 15000);
 const prSidebarOn = () =>
   window.wing.engine === "chromium" &&
   !document.body.classList.contains("private") &&
-  state?.settings.pullRequestsInSidebar !== false;
+  state?.settings.pullRequestsInSidebar !== false &&
+  githubSignedIn();
 setInterval(() => {
   if (
     !document.hidden &&

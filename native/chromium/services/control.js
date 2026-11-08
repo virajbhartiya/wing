@@ -134,6 +134,14 @@ const handlers = {
     );
     return { ok: true };
   },
+  // GitHub sets logged_in=yes for a signed-in session in this profile.
+  async "github-signed-in"() {
+    const cookie = await chrome.cookies.get({
+      url: "https://github.com",
+      name: "logged_in",
+    });
+    return { signedIn: cookie?.value === "yes" };
+  },
   async "extensions-list"() {
     return chrome.management.getAll();
   },

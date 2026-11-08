@@ -830,6 +830,7 @@ async function invoke(action, data = {}) {
         "extensions-list",
         "extensions-enabled",
         "extensions-remove",
+        "github-signed-in",
       ].includes(action)
     )
       return action === "extensions-list"
