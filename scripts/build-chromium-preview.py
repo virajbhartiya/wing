@@ -17,6 +17,7 @@ import urllib.request
 import zipfile
 from chromium_artifact import verify_receipt
 from chromium_distribution import host_inputs, qualification_report, verify_qualification
+from rebrand_locales import rebrand_locales
 
 ROOT = Path(__file__).resolve().parent.parent
 PINS = json.loads((ROOT / 'docs/ardiacore-provenance.json').read_text())
@@ -127,6 +128,9 @@ def main():
         else:
             with tarfile.open(archive) as source:
                 source.extractall(frameworks, filter='data')
+        # The engine's own strings say its brand; Wing's users should read Wing.
+        rebranded = rebrand_locales(frameworks / 'Chromium Framework.framework/Versions/Current/Resources')
+        print(f'Rebranded {rebranded} engine strings to Wing')
         engine_receipt = source_receipt or {'kind': 'upstream-prebuilt', **PINS}
         (resources / 'host-inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
         (resources / 'engine-provenance.json').write_text(json.dumps(engine_receipt, indent=2)+'\n')

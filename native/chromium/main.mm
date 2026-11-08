@@ -4275,6 +4275,9 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
           continue;
         NSMutableDictionary *item = [extension mutableCopy];
         [item addEntriesFromDictionary:state];
+        // An action without an icon of its own for this tab shows the extension's.
+        if (![state[@"icon"] length] && [extension[@"icon"] length])
+          item[@"icon"] = extension[@"icon"];
         [items addObject:item];
       }
       [self reply:rid result:@{@"extensions" : items} error:nil];

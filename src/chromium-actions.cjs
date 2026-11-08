@@ -32,8 +32,34 @@ function installBrowserActions(wing) {
             button.title = title;
             button.setAttribute("aria-label", title);
             button.disabled = !action.enabled;
-            const label = action.badgeText || action.name.slice(0, 1);
-            if (button.textContent !== label) button.textContent = label;
+            // The extension's own icon, with its badge over the corner; the
+            // initial only when the extension has no usable icon.
+            const icon = /^data:image\/(png|jpeg|gif|webp|svg\+xml);/.test(action.icon || "")
+              ? action.icon
+              : "";
+            const key = `${icon}|${action.badgeText}|${action.badgeColor}|${action.badgeTextColor}`;
+            if (button.dataset.key !== key) {
+              button.dataset.key = key;
+              button.replaceChildren();
+              button.classList.add("extension-action");
+              if (icon) {
+                const image = document.createElement("img");
+                image.src = icon;
+                image.alt = "";
+                image.draggable = false;
+                button.append(image);
+              } else button.append(document.createTextNode(action.name.slice(0, 1)));
+              if (action.badgeText) {
+                const badge = document.createElement("span");
+                badge.className = "extension-badge";
+                badge.textContent = action.badgeText;
+                if (/^#[0-9a-f]{6,8}$/i.test(action.badgeColor || ""))
+                  badge.style.background = action.badgeColor;
+                if (/^#[0-9a-f]{6,8}$/i.test(action.badgeTextColor || ""))
+                  badge.style.color = action.badgeTextColor;
+                button.append(badge);
+              }
+            }
           }
           for (const [id, button] of this.buttons) {
             if (!present.has(id)) {

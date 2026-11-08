@@ -3385,3 +3385,41 @@ body.private .space-heading #space-name::before {
   color: var(--ink);
   background: none;
 }
+/* Extension buttons in the toolbar: the extension's icon, badge on its corner. */
+.extension-action {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--wing-radius-sm);
+}
+.extension-action:hover {
+  background: var(--hover);
+}
+.extension-action img {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.extension-action:disabled img {
+  filter: grayscale(1);
+}
+.extension-badge {
+  position: absolute;
+  right: 0;
+  bottom: 1px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #5f6368;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 13px;
+  text-align: center;
+  pointer-events: none;
+}
