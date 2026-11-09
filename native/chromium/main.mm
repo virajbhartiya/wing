@@ -3332,8 +3332,17 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [tab devToolsLayoutForSize:pageFrame.size
                         devTools:&toolsFrame
                             page:&pageFrame];
+      // Docked DevTools spans the whole pane and the page sits over it, as in
+      // Chrome; above the page, its empty area would hide the site.
       if (toolsView.superview != _window.hostView)
-        [_window.hostView addSubview:toolsView];
+        [_window.hostView addSubview:toolsView
+                          positioned:NSWindowBelow
+                          relativeTo:tab.view];
+      else if ([_window.hostView.subviews indexOfObject:toolsView] >
+               [_window.hostView.subviews indexOfObject:tab.view])
+        [_window.hostView addSubview:tab.view
+                          positioned:NSWindowAbove
+                          relativeTo:toolsView];
       toolsView.frame = NSMakeRect(
           x + toolsFrame.origin.x,
           _window.hostView.isFlipped
