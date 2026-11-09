@@ -514,25 +514,72 @@
       ),
     ],
     downloads(records) {
+      const size = (bytes) =>
+        bytes >= 1073741824
+          ? `${(bytes / 1073741824).toFixed(1)} GB`
+          : bytes >= 1048576
+            ? `${(bytes / 1048576).toFixed(1)} MB`
+            : bytes >= 1024
+              ? `${Math.round(bytes / 1024)} KB`
+              : `${bytes || 0} B`;
+      const ago = (at) => {
+        const s = Math.max(0, (Date.now() - at) / 1000);
+        if (!at || Number.isNaN(s)) return "";
+        if (s < 60) return "Just now";
+        if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+        if (s < 86400) return `${Math.floor(s / 3600)} hr ago`;
+        return new Date(at).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+        });
+      };
+      const action = (d, op, glyph, label) =>
+        `<button class="icon dl-action" data-download-id="${esc(d.id)}" data-download-op="${op}" title="${label}" aria-label="${label} ${esc(d.name)}">${icon(glyph)}</button>`;
       return (
         records
           .filter(
             (d) => !d.profileId || d.profileId === currentSpace().profileId,
           )
-          .map(
-            (d) =>
-              `<div class="download-entry"><strong>${esc(d.name)}</strong><small>${esc(d.paused ? "Paused" : d.status)} · ${(d.received / 1048576).toFixed(1)} MB${d.total ? " / " + (d.total / 1048576).toFixed(1) + " MB" : ""}</small><div>${(d.status === "progressing" ? (d.paused ? ["resume", "cancel"] : ["pause", "cancel"]) : d.status === "completed" ? ["open", "show"] : ["retry"]).map((op) => `<button class="secondary" data-download-id="${d.id}" data-download-op="${op}">${esc(op[0].toUpperCase() + op.slice(1))}</button>`).join("")}</div></div>`,
-          )
-          .join("") || '<div class="empty">No downloads in this profile.</div>'
+          .map((d) => {
+            const live = d.status === "progressing";
+            const done = d.status === "completed";
+            const ext = (d.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || "file").toUpperCase();
+            const pct = d.total ? Math.min(100, (d.received / d.total) * 100) : 0;
+            const meta = live
+              ? `${d.paused ? "Paused · " : ""}${size(d.received)}${d.total ? ` of ${size(d.total)}` : ""}`
+              : done
+                ? [size(d.total || d.received), ago(d.at)].filter(Boolean).join(" · ")
+                : d.status === "interrupted" || d.error
+                  ? "Failed"
+                  : "Cancelled";
+            const actions = live
+              ? action(d, d.paused ? "resume" : "pause", d.paused ? "play" : "pause", d.paused ? "Resume" : "Pause") +
+                action(d, "cancel", "close", "Cancel")
+              : done
+                ? action(d, "show", "folder", "Show in Finder")
+                : action(d, "retry", "reload", "Retry");
+            return `<div class="dl-row ${done ? "done" : live ? "live" : "failed"}" ${done ? `data-download-id="${esc(d.id)}" data-download-op="open" role="button" tabindex="0" title="Open ${esc(d.name)}"` : ""}><span class="dl-file" aria-hidden="true">${esc(ext)}</span><span class="dl-main"><span class="dl-name">${esc(d.name)}</span><span class="dl-meta">${esc(meta)}</span>${live ? `<span class="dl-bar${d.total ? "" : " indeterminate"}"><span style="width:${pct.toFixed(1)}%"></span></span>` : ""}</span><span class="dl-actions">${actions}</span></div>`;
+          })
+          .join("") ||
+        '<div class="dl-empty">No downloads in this profile yet.</div>'
       );
     },
   };
   document.addEventListener("click", (e) => {
     const b = e.target.closest("[data-download-op]");
-    if (b)
+    if (b) {
+      e.stopPropagation();
       act("download-control", {
         id: b.dataset.downloadId,
         operation: b.dataset.downloadOp,
       });
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    const row = e.target.closest?.(".dl-row[data-download-op]");
+    if (row && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      row.click();
+    }
   });
 })();

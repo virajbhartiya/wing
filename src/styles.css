@@ -2073,18 +2073,177 @@ body.sidebar-auto-hidden #toolbar {
   border-radius: 5px;
   background: var(--selected);
 }
-.download-entry {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--line);
-  display: grid;
-  gap: 8px;
+/* Downloads: a compact panel hanging from the toolbar button. */
+#overlay.anchored {
+  background: transparent;
+  justify-content: flex-end;
+  padding: var(--anchor-top, 52px) var(--anchor-right, 12px) 20px 20px;
 }
-.download-entry > div {
+#modal.downloads-modal {
+  width: 340px;
+  max-height: min(440px, 70vh);
+  border-radius: var(--wing-radius-lg);
+  background: color-mix(in srgb, var(--modal) 96%, transparent);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  box-shadow:
+    0 14px 40px color-mix(in srgb, var(--ink) 16%, transparent),
+    0 2px 6px color-mix(in srgb, var(--ink) 8%, transparent);
+  transform-origin: calc(100% - 16px) 0;
+  animation: dl-in 200ms var(--wing-ease) both;
+}
+@keyframes dl-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+.dl-pop {
+  padding: 6px;
+}
+.dl-head {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
 }
-.download-entry small {
+.dl-all {
+  padding: 3px 8px;
+  border-radius: var(--wing-radius-sm);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.dl-all:hover {
+  background: var(--hover);
+}
+.dl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--wing-radius-md);
+  transition: background var(--wing-fast) var(--wing-ease);
+}
+.dl-row.done {
+  cursor: default;
+}
+.dl-row:hover,
+.dl-row:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.dl-file {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 36px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--accent);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.dl-row.failed .dl-file {
+  background: color-mix(in srgb, var(--muted) 12%, var(--surface));
   color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.dl-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.dl-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.dl-meta {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.dl-row.failed .dl-meta {
+  color: #d1453b;
+}
+.dl-bar {
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+.dl-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 300ms var(--wing-ease);
+}
+.dl-bar.indeterminate > span {
+  width: 30% !important;
+  animation: dl-slide 1.2s ease-in-out infinite;
+}
+@keyframes dl-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+.dl-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--wing-fast) var(--wing-ease);
+}
+.dl-row.live .dl-actions,
+.dl-row.failed .dl-actions,
+.dl-row:hover .dl-actions,
+.dl-row:focus-within .dl-actions {
+  opacity: 1;
+}
+.dl-action {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--wing-radius-sm);
+  color: var(--muted);
+}
+.dl-action:hover {
+  background: var(--selected);
+  color: var(--ink);
+}
+.dl-action svg {
+  width: 15px;
+  height: 15px;
+}
+.dl-empty {
+  padding: 22px 10px 26px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+#library-list .dl-row {
+  padding: 9px 10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  #modal.downloads-modal,
+  .dl-bar.indeterminate > span {
+    animation: none;
+  }
 }
 .pins-collapsed #pinned {
   display: none;
@@ -3422,4 +3581,7 @@ body.private .space-heading #space-name::before {
   line-height: 13px;
   text-align: center;
   pointer-events: none;
+}
+.dl-list:focus {
+  outline: none;
 }

@@ -575,6 +575,8 @@ function renderDownloadsButton() {
   );
   const button = $("#downloads-button");
   button.hidden = !records.length;
+  if (modalType === "downloads-summary" && $("#downloads-summary-list"))
+    patchHTML("#downloads-summary-list", window.wingFeatures?.downloads(records.slice(0, 6)) || "");
   if (!records.length) return;
   const active = records.filter((d) => d.status === "progressing" && !d.paused);
   const total = active.reduce((sum, d) => sum + (d.total || 0), 0);
@@ -592,11 +594,25 @@ function renderDownloadsButton() {
     ? `Downloading ${active.length} file${active.length > 1 ? "s" : ""}${total ? ` · ${Math.round(progress * 100)}%` : ""}`
     : "Downloads · ⇧⌘J";
 }
+// Downloads open as a small panel hanging from the toolbar button.
 $("#downloads-button").addEventListener("click", () => {
-  const records = (state.downloads || []).slice(0, 5);
+  if (modalType === "downloads-summary") return closeModal();
+  const profile = currentSpace()?.profileId;
+  const records = (state.downloads || [])
+    .filter((d) => !d.profileId || d.profileId === profile)
+    .slice(0, 6);
+  const rect = $("#downloads-button").getBoundingClientRect();
   showModal(
     "downloads-summary",
-    `<div class="dialog-content">${dialogHead("Downloads")}<div class="library-list">${window.wingFeatures?.downloads(records) || ""}</div><button class="primary" id="all-downloads">Show All Downloads</button></div>`,
+    `<div class="dl-pop"><div class="dl-head"><span>Downloads</span><button class="dl-all" id="all-downloads">Show all</button></div><div class="dl-list" id="downloads-summary-list" tabindex="-1" autofocus>${window.wingFeatures?.downloads(records) || ""}</div></div>`,
+  );
+  $("#modal").classList.add("downloads-modal");
+  const overlay = $("#overlay");
+  overlay.classList.add("anchored");
+  overlay.style.setProperty("--anchor-top", `${Math.round(rect.bottom + 6)}px`);
+  overlay.style.setProperty(
+    "--anchor-right",
+    `${Math.max(8, Math.round(innerWidth - rect.right - 6))}px`,
   );
   $("#all-downloads").addEventListener("click", () => openLibrary("downloads"));
 });
@@ -991,7 +1007,7 @@ function showModal(type, html) {
   stopMetrics();
   if (!modalType) modalOpener = document.activeElement;
   modalType = type;
-  $("#overlay").classList.remove("closing");
+  $("#overlay").classList.remove("closing", "anchored");
   $("#modal").className = "";
   $("#modal").innerHTML = html;
   $("#overlay").hidden = false;
