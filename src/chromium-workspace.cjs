@@ -271,9 +271,18 @@ class ChromiumWorkspace {
           I.nextProfileSpace(s.spaces, s.activeSpaceId, Number(data.direction)),
         );
         break;
-      case "folder":
-        O.saveFolder(s, { name: data.name || "Untitled" });
+      case "folder": {
+        this.journal.record(s);
+        const tab = s.tabs.find((t) => t.id === data.tabId);
+        const folder = O.saveFolder(s, {
+          name: data.name || "Untitled",
+          parentId: data.parentId,
+        });
+        // A folder made from a tab's menu takes that tab in, pinning it.
+        if (tab && tab.spaceId === folder.spaceId)
+          M.moveTab(s, tab.id, tab.spaceId, folder.id);
         break;
+      }
       case "reorder-tab": {
         const moving = M.splits.members(s, data.id),
           destination = M.splits.members(s, data.before)[0];

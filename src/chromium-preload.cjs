@@ -609,7 +609,7 @@ async function invoke(action, data = {}) {
         ...data,
         id: data.id || workspace.state.activeTabId,
       });
-    if (action === "tab-menu" || action === "folder-menu") {
+    if (["tab-menu", "folder-menu", "pinned-menu"].includes(action)) {
       const command = (title, type, args = {}) => ({
         title,
         kind: "command",
@@ -621,13 +621,40 @@ async function invoke(action, data = {}) {
         data: { name, args },
       });
       let items;
-      if (action === "folder-menu")
+      if (action === "pinned-menu")
         items = [
-          operation("Remove folder (keep tabs)", "remove-folder", {
-            id: data.id,
-          }),
+          {
+            ...command("New Folder…", "folder-editor"),
+            symbol: "folder.badge.plus",
+          },
         ];
-      else {
+      else if (action === "folder-menu") {
+        const folder = workspace.state.folders.find((f) => f.id === data.id);
+        if (!folder) return { ok: false };
+        items = [
+          {
+            ...command("Rename Folder…", "folder-editor", {
+              id: folder.id,
+              name: folder.name,
+              parentId: folder.parentId,
+            }),
+            symbol: "pencil",
+          },
+          {
+            ...command("New Folder Inside…", "folder-editor", {
+              parentId: folder.id,
+            }),
+            symbol: "folder.badge.plus",
+          },
+          { separator: true },
+          {
+            ...operation("Remove Folder (Keep Tabs)", "remove-folder", {
+              id: folder.id,
+            }),
+            symbol: "folder.badge.minus",
+          },
+        ];
+      } else {
         const state = workspace.state,
           tab = state.tabs.find((t) => t.id === data.id);
         if (!tab) return { ok: false };
@@ -690,6 +717,33 @@ async function invoke(action, data = {}) {
                 },
               ]
             : []),
+          {
+            title: "Move to Folder",
+            symbol: "folder",
+            items: [
+              command("New Folder…", "folder-editor", { tabId: tab.id }),
+              ...state.folders
+                .filter((f) => f.spaceId === tab.spaceId)
+                .map((f) => ({
+                  ...operation(f.name, "move-tab", {
+                    id: tab.id,
+                    spaceId: tab.spaceId,
+                    folderId: f.id,
+                  }),
+                  checked: f.id === tab.folderId,
+                  disabled: f.id === tab.folderId,
+                })),
+              ...(tab.folderId
+                ? [
+                    separator,
+                    operation("Remove from Folder", "move-tab", {
+                      id: tab.id,
+                      spaceId: tab.spaceId,
+                    }),
+                  ]
+                : []),
+            ],
+          },
           {
             title: "Move to Space",
             symbol: "square.stack",

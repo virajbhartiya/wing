@@ -526,3 +526,23 @@ test("appearance modes persist and Follow system takes the Mac's current mode", 
   const restored = new ChromiumWorkspace(JSON.parse(JSON.stringify(s)));
   assert.equal(restored.state.settings.appearance, "system");
 });
+test("a folder made from a tab's menu pins that tab inside it, and nests under a parent", () => {
+  const workspace = new ChromiumWorkspace();
+  workspace.action("new-tab", { url: "https://a.example" });
+  const a = workspace.state.activeTabId;
+  workspace.action("folder", { name: "Research", tabId: a });
+  const folder = workspace.state.folders.find((f) => f.name === "Research");
+  const tab = workspace.state.tabs.find((t) => t.id === a);
+  assert.equal(tab.folderId, folder.id);
+  assert.equal(tab.kind, "pinned");
+  workspace.action("folder", { name: "Papers", parentId: folder.id });
+  assert.equal(
+    workspace.state.folders.find((f) => f.name === "Papers").parentId,
+    folder.id,
+  );
+  workspace.action("save-folder", { id: folder.id, name: "Reading" });
+  assert.equal(folder.name, "Reading");
+  workspace.action("move-tab", { id: a, spaceId: tab.spaceId });
+  assert.equal(tab.folderId, null);
+  assert.equal(tab.kind, "pinned");
+});

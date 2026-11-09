@@ -28,15 +28,19 @@ function saveFolder(state, data) {
     throw Error("Choose a folder in this Space.");
   if (old && folderDescendants(state, old.id).has(parentId))
     throw Error("A folder cannot contain itself.");
-  if (old) Object.assign(old, { name, parentId });
-  else
-    state.folders.push({
-      id: crypto.randomUUID(),
-      spaceId,
-      name,
-      parentId,
-      collapsed: false,
-    });
+  if (old) {
+    Object.assign(old, { name, parentId });
+    return old;
+  }
+  const folder = {
+    id: crypto.randomUUID(),
+    spaceId,
+    name,
+    parentId,
+    collapsed: false,
+  };
+  state.folders.push(folder);
+  return folder;
 }
 function removeFolder(state, id) {
   const ids = folderDescendants(state, id);

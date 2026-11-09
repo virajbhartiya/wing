@@ -1713,17 +1713,21 @@ function openSpace(space = null) {
     };
   $("[name=name]").focus();
 }
-function openFolder() {
+// Creates a folder (inside parentId, taking tabId in) or renames folder id.
+function openFolder({ id, name = "", parentId = null, tabId } = {}) {
   showModal(
     "folder",
-    `<form id="folder-form" class="dialog-content">${dialogHead("New folder")}<p>Create a folder, then drag tabs into it or use their right-click menu.</p><label class="field"><span>Folder name</span><input name="name" placeholder="Research" required maxlength="80"></label><div class="dialog-actions"><button class="primary">Create folder</button></div></form>`,
+    `<form id="folder-form" class="dialog-content">${dialogHead(id ? "Rename folder" : "New folder")}${id || tabId ? "" : "<p>Create a folder, then drag pinned tabs into it or use their right-click menu.</p>"}<label class="field"><span>Folder name</span><input name="name" value="${esc(name)}" placeholder="Research" required maxlength="80"></label><div class="dialog-actions"><button class="primary">${id ? "Save name" : "Create folder"}</button></div></form>`,
   );
   $("#folder-form").onsubmit = (e) => {
     e.preventDefault();
-    act("folder", { name: new FormData(e.target).get("name") });
+    const value = new FormData(e.target).get("name");
+    if (id) act("save-folder", { id, name: value, parentId });
+    else act("folder", { name: value, parentId, tabId });
     closeModal();
   };
   $("[name=name]").focus();
+  $("[name=name]").select();
 }
 // Double-clicking a title edits it right there. Return saves, Escape cancels.
 function renameInPlace(title, t) {
@@ -3039,6 +3043,17 @@ document.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     act("folder-menu", { id: folder.dataset.folder });
   }
+  // Empty space among the pinned tabs offers a new folder.
+  if (
+    !tab &&
+    !folder &&
+    window.wing.engine === "chromium" &&
+    e.target.closest("#tab-scroll") &&
+    !e.target.closest("#pr-folder,#today,.today-heading,button,a,input")
+  ) {
+    e.preventDefault();
+    act("pinned-menu");
+  }
   const space = e.target.closest("[data-space]");
   if (space) {
     e.preventDefault();
@@ -3625,6 +3640,9 @@ window.wing.onCommand((c) => {
       break;
     case "space-editor":
       openSpace();
+      break;
+    case "folder-editor":
+      openFolder(c);
       break;
     case "rename": {
       const title = document.querySelector(
