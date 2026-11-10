@@ -95,7 +95,12 @@ def publish(tag, archives):
         signature = sign(archive)
         image = archive.with_suffix('.dmg')
         for path in [archive, image]:
-            aws('s3', 'cp', str(path), f's3://{bucket}/releases/{tag}/{path.name}', '--only-show-errors', capture=False)
+            key = f'releases/{tag}/{path.name}'
+            aws('s3', 'cp', str(path), f's3://{bucket}/{key}', '--only-show-errors', capture=False)
+            # An update the feed points at must really be there, whole.
+            size = json.loads(aws('s3api', 'head-object', '--bucket', bucket, '--key', key))['ContentLength']
+            if size != path.stat().st_size:
+                raise SystemExit(f'{key} uploaded as {size} bytes, expected {path.stat().st_size}.')
         aws('s3', 'cp', str(image), f's3://{bucket}/Wing-{arch}.dmg', '--only-show-errors',
             '--content-disposition', f'attachment; filename="Wing-{arch}.dmg"', capture=False)
         key = f'appcast-{arch}.xml'
