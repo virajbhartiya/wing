@@ -118,6 +118,8 @@ function initialState() {
       miniPlayerIntroduced: true,
       pullRequestsInSidebar: true,
       pullRequestsCollapsed: false,
+      // "ask" after a crash, or always / never send the macOS crash report.
+      crashReports: "ask",
       dark: false,
       onboarded: false,
       search: "google",
@@ -485,6 +487,8 @@ function validateState(value) {
   settings.miniPlayerIntroduced = true;
   settings.pullRequestsInSidebar = settings.pullRequestsInSidebar !== false;
   settings.pullRequestsCollapsed = settings.pullRequestsCollapsed === true;
+  if (!["ask", "always", "never"].includes(settings.crashReports))
+    settings.crashReports = "ask";
   settings.automaticPictureInPicture =
     settings.automaticPictureInPicture === true;
   if (!["horizontal", "vertical"].includes(settings.splitOrientation))

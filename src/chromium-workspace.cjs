@@ -168,6 +168,8 @@ class ChromiumWorkspace {
         ])
           if (typeof data[key] === "boolean") next[key] = data[key];
         if (I.APP_ICONS.includes(data.appIcon)) next.appIcon = data.appIcon;
+        if (["ask", "always", "never"].includes(data.crashReports))
+          next.crashReports = data.crashReports;
         if (["system", "light", "dark"].includes(data.appearance)) {
           next.appearance = data.appearance;
           next.dark =

@@ -9,6 +9,8 @@
 #import "MiniWindow.h"
 #import "CastPicker.h"
 #import "WebKitPage.h"
+#import "CrashReports.h"
+#import <Sparkle/Sparkle.h>
 #import <AppKit/AppKit.h>
 #include <cmath>
 #include <dlfcn.h>
@@ -359,6 +361,11 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   // Tabs shown by WebKit instead of Chromium (streaming sites, for DRM video).
   NSMutableDictionary<NSString *, WingWebKitPage *> *_webkitPages;
   NSMutableSet<NSString *> *_screenSharingTabs;
+  // Sparkle checks Wing's appcast; only builds with a feed URL have one.
+  SPUStandardUpdaterController *_updater;
+  // macOS crash reports waiting for the person's say on sending them.
+  NSArray<NSString *> *_pendingCrashes;
+  BOOL _cloudStarted;
   BOOL _quitting;
   BOOL _qualificationStarted;
   BOOL _shellRaised;
@@ -2127,6 +2134,13 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [app addItem:[self system:[@"About " stringByAppendingString:name]
                    selector:@selector(orderFrontStandardAboutPanel:)
                         key:nil modifiers:0]];
+  if ([NSBundle.mainBundle objectForInfoDictionaryKey:@"SUFeedURL"]) {
+    NSMenuItem *updates = [[NSMenuItem alloc] initWithTitle:@"Check for Updates…"
+                                                     action:@selector(checkForUpdates:)
+                                              keyEquivalent:@""];
+    updates.target = self;
+    [app addItem:updates];
+  }
   [app addItem:NSMenuItem.separatorItem];
   [app addItem:[self command:@"Settings…" key:@"," modifiers:cmd data:@{@"type" : @"settings"}]];
   [app addItem:[self action:@"Set as Default Browser" key:nil modifiers:0 name:@"default-browser" args:nil]];
@@ -2344,6 +2358,41 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
           }];
   [_window.window makeKeyAndOrderFront:nil];
   [NSApp activateIgnoringOtherApps:YES];
+}
+// Updates and crash reports start once the first workspace sync brings the
+// person's settings; test runs and private windows have neither.
+- (void)startCloudServices {
+  if (_cloudStarted || _private || getenv("WING_CHROMIUM_TEST_SCRIPT"))
+    return;
+  _cloudStarted = YES;
+  if ([NSBundle.mainBundle objectForInfoDictionaryKey:@"SUFeedURL"])
+    _updater = [[SPUStandardUpdaterController alloc] initWithStartingUpdater:YES
+                                                             updaterDelegate:nil
+                                                          userDriverDelegate:nil];
+  if (![self crashEndpoint])
+    return;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    NSArray *pending = [WingCrashReports pendingReports];
+    if (!pending.count)
+      return;
+    NSString *choice = self->_lastSync[@"workspace"][@"settings"][@"crashReports"];
+    if ([choice isEqual:@"always"])
+      [WingCrashReports sendReports:pending to:[self crashEndpoint]];
+    else if ([choice isEqual:@"never"])
+      [WingCrashReports dismissReports:pending];
+    else {
+      self->_pendingCrashes = pending;
+      [self send:@"command" data:@{@"type" : @"crash-prompt", @"count" : @(pending.count)}];
+    }
+  });
+}
+- (NSURL *)crashEndpoint {
+  NSString *url = [NSBundle.mainBundle objectForInfoDictionaryKey:@"WingCrashReportURL"];
+  return url.length ? [NSURL URLWithString:url] : nil;
+}
+- (void)checkForUpdates:(id)sender {
+  if (_updater)
+    [_updater checkForUpdates:sender];
 }
 - (void)quit:(id)sender {
   _quitting = YES;
@@ -3832,6 +3881,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [self backupWorkspace:body force:NO];
     }
     _lastSync = data;
+    [self startCloudServices];
     // Wing runs the mini player itself; Chromium's own automatic picture in
     // picture stays off so a page never floats twice.
     _automaticPictureInPicture = [state[@"settings"][@"automaticPictureInPicture"] boolValue];
@@ -4075,6 +4125,32 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                      withApplicationAtURL:application
                             configuration:[NSWorkspaceOpenConfiguration configuration]
                         completionHandler:nil];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"updates-status"]) {
+    [self reply:rid
+         result:_updater ? @{
+           @"state" : _updater.updater.sessionInProgress ? @"checking" : @"idle",
+           @"lastChecked" : @(_updater.updater.lastUpdateCheckDate.timeIntervalSince1970 * 1000),
+           @"automatic" : @(_updater.updater.automaticallyChecksForUpdates)
+         }
+                 : @{@"state" : @"unconfigured", @"message" : @"This build has no update channel."}
+          error:nil];
+    return;
+  }
+  if ([action isEqual:@"updates-check"]) {
+    [self checkForUpdates:nil];
+    [self reply:rid result:@{@"ok" : @(_updater != nil)} error:nil];
+    return;
+  }
+  if ([action isEqual:@"crash-reports"]) {
+    NSArray *pending = _pendingCrashes ?: @[];
+    _pendingCrashes = nil;
+    if ([data[@"send"] boolValue])
+      [WingCrashReports sendReports:pending to:[self crashEndpoint]];
+    else
+      [WingCrashReports dismissReports:pending];
     [self reply:rid result:@{@"ok" : @YES} error:nil];
     return;
   }

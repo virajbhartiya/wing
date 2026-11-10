@@ -1730,6 +1730,22 @@ function openSpace(space = null) {
   $("[name=name]").focus();
 }
 // Creates a folder (inside parentId, taking tabId in) or renames folder id.
+// After a crash, asks once whether to send the macOS crash report.
+function openCrashPrompt(count) {
+  if (modalType) return;
+  showModal(
+    "crash-prompt",
+    `<div class="dialog-content">${dialogHead("Wing quit unexpectedly")}<p>Send ${count > 1 ? `the ${count} crash reports` : "the crash report"} so it can be fixed? ${count > 1 ? "They hold" : "It holds"} what Wing was doing when it crashed, never your pages, history or passwords.</p><label class="setting-row"><span>Always send crash reports</span><input type="checkbox" id="crash-always"></label><div class="dialog-actions"><button class="secondary" id="crash-skip">Don’t Send</button><button class="primary" id="crash-send" autofocus>Send Report</button></div></div>`,
+  );
+  const answer = (send) => {
+    if ($("#crash-always").checked)
+      act("features-settings", { crashReports: send ? "always" : "never" });
+    act("crash-reports", { send });
+    closeModal();
+  };
+  $("#crash-send").onclick = () => answer(true);
+  $("#crash-skip").onclick = () => answer(false);
+}
 function openFolder({ id, name = "", parentId = null, tabId } = {}) {
   showModal(
     "folder",
@@ -2370,6 +2386,14 @@ function settingsPanes() {
           `<button class="secondary" id="update-check">Check Now</button>`,
           "update version",
         ) +
+        (chromium
+          ? settingRow(
+              "Crash reports",
+              "When Wing crashes, send Apple's crash report so it can be fixed. It holds the app's state at the crash, never your pages or history.",
+              `<select id="crash-reports">${[["ask", "Ask each time"], ["always", "Always send"], ["never", "Never send"]].map(([value, label]) => `<option value="${value}" ${state.settings.crashReports === value ? "selected" : ""}>${label}</option>`).join("")}</select>`,
+              "crash reports privacy diagnostics",
+            )
+          : "") +
         `<div class="about-card"><span class="wing-mark" aria-hidden="true"></span><div><strong>Wing 0.2.0</strong><small>Chromium ${esc(state.versions.chrome)}${chromium ? " · native host" : " · Electron " + esc(state.versions.electron)}</small><small>Independent and open source. Everything is stored on this Mac.</small></div></div>`,
     },
   ];
@@ -2495,6 +2519,9 @@ function bindSettings() {
   });
   on("automatic-pip", "onchange", feature("automaticPictureInPicture"));
   on("pr-sidebar", "onchange", feature("pullRequestsInSidebar"));
+  on("crash-reports", "onchange", (e) =>
+    act("features-settings", { crashReports: e.target.value }),
+  );
   on("make-default", "onclick", async () => {
     const r = await act("default-browser");
     toast(
@@ -3656,6 +3683,9 @@ window.wing.onCommand((c) => {
       break;
     case "space-editor":
       openSpace();
+      break;
+    case "crash-prompt":
+      openCrashPrompt(c.count);
       break;
     case "folder-editor":
       openFolder(c);

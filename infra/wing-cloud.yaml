@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Wing's update channel and crash reports. One CloudFront domain serves the
+  Sparkle appcasts and release downloads from a private bucket, and takes crash
+  reports at /v1/crash, which a Lambda stores in a second private bucket.
+  CloudFront access logs give anonymous update-check counts.
+
+Resources:
+  UpdatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  CrashBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireCrashReports
+            Status: Enabled
+            ExpirationInDays: 180
+
+  # CloudFront standard logs need ACLs on the target bucket.
+  LogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAccessLogs
+            Status: Enabled
+            ExpirationInDays: 90
+
+  UpdatesAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-updates"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  UpdatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UpdatesBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${UpdatesBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  CrashRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: store-crash-reports
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${CrashBucket.Arn}/crashes/*"
+
+  CrashFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt CrashRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      # Caps what a flood of fake reports can cost.
+      ReservedConcurrentExecutions: 5
+      Environment:
+        Variables:
+          BUCKET: !Ref CrashBucket
+      Code:
+        ZipFile: |
+          import base64, datetime, json, os, re, uuid
+          import boto3
+
+          s3 = boto3.client("s3")
+          LIMIT = 2_000_000
+
+          def reply(status, body):
+              return {"statusCode": status, "headers": {"content-type": "application/json"},
+                      "body": json.dumps(body)}
+
+          def handler(event, context):
+              if event.get("requestContext", {}).get("http", {}).get("method") != "POST":
+                  return reply(405, {"error": "POST a crash report."})
+              body = event.get("body") or ""
+              if event.get("isBase64Encoded"):
+                  body = base64.b64decode(body).decode("utf-8", "replace")
+              if len(body) > LIMIT:
+                  return reply(413, {"error": "Report too large."})
+              try:
+                  data = json.loads(body)
+              except ValueError:
+                  return reply(400, {"error": "Invalid JSON."})
+              report = data.get("report")
+              if not isinstance(report, str) or not report.startswith("{"):
+                  return reply(400, {"error": "Missing report."})
+              version = re.sub(r"[^0-9A-Za-z.\-]", "", str(data.get("version", "unknown")))[:40] or "unknown"
+              now = datetime.datetime.now(datetime.timezone.utc)
+              key = f"crashes/{now:%Y/%m/%d}/{version}/{uuid.uuid4()}.json"
+              data["receivedAt"] = now.isoformat()
+              s3.put_object(Bucket=os.environ["BUCKET"], Key=key, Body=json.dumps(data).encode(),
+                            ContentType="application/json")
+              return reply(200, {"ok": True})
+
+  CrashFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt CrashFunction.Arn
+      AuthType: NONE
+
+  CrashFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CrashFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  CrashFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CrashFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Wing updates and crash reports
+        HttpVersion: http2and3
+        # Includes India, where most early users are.
+        PriceClass: PriceClass_200
+        Logging:
+          Bucket: !GetAtt LogsBucket.RegionalDomainName
+          Prefix: cloudfront/
+          IncludeCookies: false
+        Origins:
+          - Id: updates
+            DomainName: !GetAtt UpdatesBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt UpdatesAccess.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: crash
+            DomainName: !Select [2, !Split ["/", !GetAtt CrashFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: updates
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          # Managed CachingOptimized
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CacheBehaviors:
+          # Appcasts change with every release; keep them fresh.
+          - PathPattern: "appcast*.xml"
+            TargetOriginId: updates
+            ViewerProtocolPolicy: https-only
+            Compress: true
+            # Managed CachingDisabled
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          - PathPattern: "/v1/crash"
+            TargetOriginId: crash
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            # Managed CachingDisabled
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            # Managed AllViewerExceptHostHeader
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+Outputs:
+  Domain:
+    Value: !GetAtt Distribution.DomainName
+  DistributionId:
+    Value: !Ref Distribution
+  UpdatesBucket:
+    Value: !Ref UpdatesBucket
+  CrashBucket:
+    Value: !Ref CrashBucket
+  LogsBucket:
+    Value: !Ref LogsBucket

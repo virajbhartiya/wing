@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PINS = json.loads((ROOT / 'docs/ardiacore-provenance.json').read_text())
 UBO = json.loads((ROOT / 'native/ublock-sources.json').read_text())
 NODE_IMPORT = json.loads((ROOT / 'native/node-import-sources.json').read_text())
+# Wing's update feed, signing key and crash endpoint (see infra/wing-cloud.yaml).
+CLOUD = json.loads((ROOT / 'native/chromium/cloud.json').read_text())
 
 
 def verified_asset(url, digest, destination):
@@ -136,8 +138,18 @@ def main():
         (resources / 'engine-provenance.json').write_text(json.dumps(engine_receipt, indent=2)+'\n')
         framework = frameworks / 'Chromium Framework.framework'
         binary = framework / 'Versions/Current/Chromium Framework'
+        sparkle_archive = verified_asset(CLOUD['sparkle']['url'], CLOUD['sparkle']['sha256'],
+                                         vendor.parent / 'sparkle' / Path(CLOUD['sparkle']['url']).name)
+        with tempfile.TemporaryDirectory(prefix='sparkle-') as unpacked:
+            with tarfile.open(sparkle_archive) as source:
+                source.extractall(unpacked, filter='data')
+            shutil.copytree(Path(unpacked) / 'Sparkle.framework', frameworks / 'Sparkle.framework', symlinks=True)
+        sparkle = frameworks / 'Sparkle.framework'
+        # Wing is not sandboxed, so Sparkle installs without its XPC services.
+        shutil.rmtree(sparkle / 'Versions/B/XPCServices')
         run('xcrun', 'clang++', '-std=c++20', '-O2', '-arch', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch], '-mmacosx-version-min=14.0', '-fobjc-arc',
-            '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(ROOT / 'native/chromium/CastPicker.mm'), str(ROOT / 'native/chromium/WebKitPage.mm'), str(binary), '-framework', 'AppKit', '-framework', 'WebKit',
+            '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(ROOT / 'native/chromium/CastPicker.mm'), str(ROOT / 'native/chromium/WebKitPage.mm'), str(ROOT / 'native/chromium/CrashReports.mm'), str(binary), '-framework', 'AppKit', '-framework', 'WebKit',
+            '-F', str(frameworks), '-framework', 'Sparkle', '-Wl,-rpath,@executable_path/../Frameworks',
             '-o', str(macos / product))
         # Page summaries use Apple's on-device model; the host only runs this on macOS 26.
         run('xcrun', 'swiftc', '-O', '-target', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch]+'-apple-macos26.0',
@@ -173,6 +185,13 @@ def main():
         if args.production:
             plist['CFBundleURLTypes'] = [{'CFBundleURLName':'Web links', 'CFBundleTypeRole':'Viewer', 'CFBundleURLSchemes':['http','https','wingbrowser']}]
             plist['LSApplicationCategoryType'] = 'public.app-category.productivity'
+            if CLOUD['domain']:
+                # Each architecture has its own appcast, so an update never crosses them.
+                plist['SUFeedURL'] = f"https://{CLOUD['domain']}/appcast-{args.arch}.xml"
+                plist['SUPublicEDKey'] = CLOUD['publicEDKey']
+                plist['SUEnableAutomaticChecks'] = True
+                plist['SUVerifyUpdateBeforeExtraction'] = True
+                plist['WingCrashReportURL'] = f"https://{CLOUD['domain']}/v1/crash"
         shutil.copy2(ROOT / 'assets/wing.icns', resources / 'wing.icns')
         (resources / 'bin').mkdir(exist_ok=True)
         shutil.copy2(ROOT / 'scripts/wing-cli.sh', resources / 'bin/wing')
@@ -196,6 +215,8 @@ def main():
             'com.apple.security.device.bluetooth':True, 'com.apple.security.device.usb':True,
             'com.apple.security.personal-information.location':True, 'com.apple.security.print':True}))
         run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', str(macos / 'wing-summarize'))
+        for item in [sparkle / 'Versions/B/Autoupdate', sparkle / 'Versions/B/Updater.app', sparkle]:
+            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', str(item))
         run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(app_entitlements), str(app))
         run('codesign', '--verify', '--deep', '--strict', str(app))
         if host_inputs() != inputs:

@@ -805,11 +805,22 @@ async function invoke(action, data = {}) {
       return native("context-menu", { items });
     }
     if (action === "state") return publish(false);
-    if (["updates-status", "updates-check"].includes(action))
+    if (["updates-status", "updates-check"].includes(action)) {
+      if (action === "updates-check") await native("updates-check");
+      const status = await native("updates-status");
+      if (status.state === "unconfigured") return status;
+      const last = status.lastChecked
+        ? ` Last checked ${new Date(status.lastChecked).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.`
+        : "";
       return {
-        state: "unconfigured",
-        message: "This development build has no signed update channel.",
+        ...status,
+        message:
+          action === "updates-check"
+            ? "Looking for updates…"
+            : `Wing checks for updates every day.${last}`,
       };
+    }
+    if (action === "crash-reports") return native(action, data);
     if (action === "show-download")
       return service("download-control", { id: data.id, operation: "show" });
 

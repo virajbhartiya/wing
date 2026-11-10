@@ -111,6 +111,10 @@ def main():
     run('git', 'push', 'origin', 'HEAD')
     run('gh', 'release', 'create', tag, *assets, dist / 'SHA256SUMS', '--repo', REPO, '--target',
         output('git', 'rev-parse', 'HEAD'), '--title', f'Wing {tag[1:]}', '--notes-file', args.notes, '--latest')
+    # Installed copies update themselves from Wing's own appcast.
+    if json.loads((ROOT / 'native/chromium/cloud.json').read_text())['domain']:
+        from publish_updates import publish
+        publish(tag, [path for path in assets if path.suffix == '.zip'])
 
 
 if __name__ == '__main__':
