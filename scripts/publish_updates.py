@@ -81,6 +81,31 @@ def appcast(existing, new_item):
     return b'<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(rss, encoding='utf-8')
 
 
+def stored_size(bucket, key):
+    try:
+        return json.loads(aws('s3api', 'head-object', '--bucket', bucket, '--key', key))['ContentLength']
+    except subprocess.CalledProcessError:
+        return None
+
+
+def store(bucket, key, size, command, skip_present=True):
+    """Run an S3 copy until the object is there whole. Large uploads have
+    dropped mid-way and have reported success with nothing stored."""
+    if skip_present and stored_size(bucket, key) == size:
+        print(f'{key}: already stored')
+        return
+    for attempt in range(1, 4):
+        try:
+            aws(*command, '--only-show-errors', capture=False)
+        except subprocess.CalledProcessError:
+            pass
+        stored = stored_size(bucket, key)
+        if stored == size:
+            return
+        print(f'{key}: stored {stored} bytes, expected {size}; retrying ({attempt}/3)')
+    raise SystemExit(f'{key} did not upload whole after 3 attempts.')
+
+
 def publish(tag, archives):
     outputs = stack_outputs()
     bucket, domain = outputs['UpdatesBucket'], outputs['Domain']
@@ -96,21 +121,12 @@ def publish(tag, archives):
         image = archive.with_suffix('.dmg')
         for path in [archive, image]:
             key = f'releases/{tag}/{path.name}'
-            # An update the feed points at must really be there, whole. Large
-            # uploads have reported success with nothing stored, so retry.
-            for attempt in range(1, 4):
-                aws('s3', 'cp', str(path), f's3://{bucket}/{key}', '--only-show-errors', capture=False)
-                try:
-                    size = json.loads(aws('s3api', 'head-object', '--bucket', bucket, '--key', key))['ContentLength']
-                except subprocess.CalledProcessError:
-                    size = None
-                if size == path.stat().st_size:
-                    break
-                print(f'{key}: stored {size} bytes, expected {path.stat().st_size}; retrying ({attempt}/3)')
-            else:
-                raise SystemExit(f'{key} did not upload whole after 3 attempts.')
-        aws('s3', 'cp', str(image), f's3://{bucket}/Wing-{arch}.dmg', '--only-show-errors',
-            '--content-disposition', f'attachment; filename="Wing-{arch}.dmg"', capture=False)
+            store(bucket, key, path.stat().st_size, ['s3', 'cp', str(path), f's3://{bucket}/{key}'])
+        # The stable link is a server-side copy, so a dropped connection costs little.
+        store(bucket, f'Wing-{arch}.dmg', image.stat().st_size,
+              ['s3', 'cp', f's3://{bucket}/releases/{tag}/{image.name}', f's3://{bucket}/Wing-{arch}.dmg',
+               '--metadata-directive', 'REPLACE', '--content-type', 'application/x-apple-diskimage',
+               '--content-disposition', f'attachment; filename="Wing-{arch}.dmg"'], skip_present=False)
         key = f'appcast-{arch}.xml'
         try:
             existing = aws('s3', 'cp', f's3://{bucket}/{key}', '-')
