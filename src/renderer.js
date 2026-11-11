@@ -1113,7 +1113,7 @@ function showModal(type, html) {
   stopMetrics();
   if (!modalType) modalOpener = document.activeElement;
   modalType = type;
-  $("#overlay").classList.remove("closing", "anchored");
+  $("#overlay").classList.remove("closing", "anchored", "touring");
   $("#modal").className = "";
   $("#modal").innerHTML = html;
   $("#overlay").hidden = false;
