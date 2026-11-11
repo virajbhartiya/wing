@@ -2723,6 +2723,8 @@ const IMPORT_DATA = [
 ];
 const IMPORT_NOTES = {
   arc: "Quit Arc for the freshest data. macOS may ask for Keychain access; choose Always Allow to avoid a prompt per profile.",
+  brave:
+    "Quit Brave for the freshest data. macOS may ask for Keychain access; choose Always Allow to avoid a prompt per profile.",
   chrome:
     "Quit Chrome for the freshest data. macOS may ask for Keychain access; choose Always Allow to avoid a prompt per profile.",
   safari:
@@ -2741,7 +2743,7 @@ async function openBrowserImport() {
   const profiles = (result.profiles || []).filter(
     (p) => window.wing.engine === "chromium" || p.browser !== "wing",
   );
-  const browsers = ["arc", "chrome", "safari", "wing"]
+  const browsers = ["arc", "chrome", "brave", "safari", "wing"]
     .map((id) => ({
       id,
       name:
@@ -2763,7 +2765,7 @@ async function openBrowserImport() {
         ([key, label]) =>
           `<label class="setting-row"><span>${label}</span><input type="checkbox" class="switch" name="${key}" checked></label>`,
       ).join("")}<p id="import-note"></p>`
-        : "<p>No Arc, Chrome or Safari data was found on this Mac.</p>"
+        : "<p>No Arc, Chrome, Brave or Safari data was found on this Mac.</p>"
     }<div id="import-status" role="status"></div><div class="dialog-actions"><button type="button" class="secondary" data-dismiss>Cancel</button><button class="primary" id="import-start" ${browsers.length ? "" : "disabled"}>Import</button></div></form>`,
   );
   if (!browsers.length) return;

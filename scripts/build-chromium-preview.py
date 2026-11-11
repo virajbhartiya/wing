@@ -133,6 +133,14 @@ def main():
         # The engine's own strings say its brand; Wing's users should read Wing.
         rebranded = rebrand_locales(frameworks / 'Chromium Framework.framework/Versions/Current/Resources')
         print(f'Rebranded {rebranded} engine strings to Wing')
+        # macOS names web notifications after the alerts helper; it ships as "Chromium".
+        for alerts in (frameworks / 'Chromium Framework.framework/Versions/Current/Helpers').glob('*Alerts).app'):
+            info_path = alerts / 'Contents/Info.plist'
+            info = plistlib.loads(info_path.read_bytes())
+            info['CFBundleDisplayName'] = product
+            info_path.write_bytes(plistlib.dumps(info))
+            for strings in (alerts / 'Contents/Resources').glob('*.lproj/InfoPlist.strings'):
+                strings.write_bytes(plistlib.dumps({'CFBundleDisplayName': product}, fmt=plistlib.FMT_BINARY))
         engine_receipt = source_receipt or {'kind': 'upstream-prebuilt', **PINS}
         (resources / 'host-inputs.json').write_text(json.dumps(inputs, indent=2)+'\n')
         (resources / 'engine-provenance.json').write_text(json.dumps(engine_receipt, indent=2)+'\n')

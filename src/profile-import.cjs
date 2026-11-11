@@ -18,6 +18,11 @@ const SOURCES = Object.freeze({
     root: "Google/Chrome",
     keychain: "Chrome Safe Storage",
   },
+  brave: {
+    name: "Brave",
+    root: "BraveSoftware/Brave-Browser",
+    keychain: "Brave Safe Storage",
+  },
   arc: { name: "Arc", root: "Arc/User Data", keychain: "Arc Safe Storage" },
   // ~/Library/Safari, relative to ~/Library/Application Support.
   safari: { name: "Safari", root: "../Safari" },

@@ -278,10 +278,17 @@ function read(source, options) {
     readSafari(source, options, result);
     return result;
   }
-  if (source.browser === "chrome" && options.tabs)
-    attempt("Chrome open tabs", () => {
+  if (
+    (source.browser === "chrome" || source.browser === "brave") &&
+    options.tabs
+  )
+    attempt(`${source.browserName || "Chrome"} open tabs`, () => {
       const rows = chromeOpenTabs(source);
-      if (rows.length) result.spaces.push({ name: "Chrome tabs", rows });
+      if (rows.length)
+        result.spaces.push({
+          name: `${source.browserName || "Chrome"} tabs`,
+          rows,
+        });
     });
   if (source.browser !== "wing" && options.bookmarks)
     try {
