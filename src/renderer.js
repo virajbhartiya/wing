@@ -1397,6 +1397,15 @@ function renderPalette(rebuild = true) {
         run: () => openFolder(),
       },
       {
+        label: "Take the Tour",
+        detail: "A one-minute look at how Wing works",
+        glyph: "sparkle",
+        run: () => {
+          closeModal();
+          setTimeout(() => openTour(), 160);
+        },
+      },
+      {
         label: "History & Archive",
         detail: "Find your way back",
         glyph: "clock",
@@ -3053,7 +3062,7 @@ function openOnboarding(step = 0) {
         .join(
           "",
         )}</div><button class="secondary onboarding-wide" id="onboarding-default">${icon("globe")}<span>Make Wing your default browser</span></button>`,
-      primary: "Start Browsing",
+      primary: "Show Me Around",
     },
   ];
   const current = steps[step];
@@ -3062,8 +3071,11 @@ function openOnboarding(step = 0) {
     `<div class="dialog-content onboarding" aria-live="polite"><div class="onboarding-body">${current.body}</div><div class="onboarding-footer"><div class="onboarding-dots" aria-label="Step ${step + 1} of ${steps.length}">${steps.map((_, i) => `<span class="${i === step ? "active" : ""}"></span>`).join("")}</div>${step ? `<button class="secondary" id="onboarding-back">Back</button>` : `<button class="secondary" id="onboarding-skip">Skip</button>`}<button class="primary" id="onboarding-next" autofocus>${current.primary}</button></div></div>`,
   );
   $("#modal").classList.add("onboarding-modal");
-  $("#onboarding-next").onclick = () =>
-    step === steps.length - 1 ? finish() : openOnboarding(step + 1);
+  $("#onboarding-next").onclick = () => {
+    if (step < steps.length - 1) return openOnboarding(step + 1);
+    act("features-settings", { onboarded: true });
+    openTour();
+  };
   if ($("#onboarding-skip")) $("#onboarding-skip").onclick = finish;
   if ($("#onboarding-back"))
     $("#onboarding-back").onclick = () => openOnboarding(step - 1);
@@ -3095,6 +3107,148 @@ function openOnboarding(step = 0) {
       );
     };
 }
+// A guided tour of the real interface: each step lights up the part it
+// explains. It runs after first-run setup, and from ⌘T as "Take the Tour".
+function tourSteps() {
+  const top = state.settings.tabLayout === "top",
+    visible = (el) => {
+      const r = el?.getBoundingClientRect();
+      return r && r.width > 4 && r.height > 4 && r.right > 0 && r.left < innerWidth;
+    },
+    pick = (...selectors) => selectors.map((x) => $(x)).find(visible) || null;
+  return [
+    {
+      target: () => pick("#address"),
+      title: "One bar for everything",
+      text: "Press ⌘T to search, type a site, jump to a tab you already have open, or run any command, like Split View or Reader. ⌘L edits this page’s address.",
+      keys: ["⌘T", "⌘L"],
+    },
+    {
+      target: () => pick(top ? "#tab-strip" : "#tab-scroll", "#tab-strip", "#tab-scroll"),
+      title: "Tabs that tidy themselves",
+      text: "Tabs you haven’t used in 12 hours move to the Archive, so this list never piles up. Pinned tabs and favorites stay. Closed something by mistake? ⇧⌘T brings it back.",
+      keys: ["⌘W", "⇧⌘T"],
+    },
+    {
+      target: () => pick("#favorites", "#strip-tabs"),
+      title: "Favorites and pins",
+      text: "Drag a tab here to keep it for good. Right-click any tab to pin it, rename it or put it in a folder. Favorites belong to the Space’s profile.",
+    },
+    {
+      target: () => pick(top ? "#toolbar-spaces" : "#spaces", "#spaces", "#toolbar-spaces"),
+      title: "Spaces for each part of your day",
+      text: "Keep work, personal and side projects apart. Each Space has its own tabs and color, and can use its own profile, so logins stay separate.",
+      keys: ["⌃1–9", "⌥⌘←", "⌥⌘→"],
+    },
+    {
+      target: () => pick("#show-sidebar", "#move-tabs-top"),
+      title: "Sidebar or top bar",
+      text: "⌘S hides the sidebar; point at the left edge and it slides back. Prefer tabs across the top? Choose “Move Tabs to Top Bar” from ⌘T.",
+      keys: ["⌘S"],
+    },
+    {
+      target: () => pick("#split-button"),
+      title: "Pages side by side",
+      text: "Split View puts two or three pages next to each other, each with its own place in the sidebar.",
+      keys: ["⇧⌘2"],
+    },
+    {
+      target: () => pick("#extension-actions .extension-overflow", "#extension-actions", "#downloads-button"),
+      title: "Your Chrome extensions",
+      text: "Install them from the Chrome Web Store. The puzzle button lists them all; pin the ones you use most to the toolbar. Downloads live in the arrow beside them.",
+    },
+    {
+      target: () => null,
+      title: "Small things that add up",
+      list: [
+        ["sparkle", "Peek", "Shift-click a link to preview it without leaving your page."],
+        ["split", "Mini Wing", "Links from other apps open in a small window. Keep it or move it into Wing. ⌥⌘N opens one."],
+        ["volume", "Mini player", "A playing video floats in a corner when you switch tabs or leave Wing."],
+        ["globe", "Reader and private windows", "⌥⌘R strips a page down to the article. ⇧⌘N opens a private window."],
+      ],
+    },
+    {
+      target: () => null,
+      title: "That’s the tour",
+      text: "Everything else is one ⌘T away. You can take this tour again any time: press ⌘T and type “tour”.",
+      done: true,
+    },
+  ];
+}
+function placeTour(step) {
+  const spot = $("#tour-spot"),
+    card = $("#tour-card");
+  if (!spot || !card) return;
+  const el = step.target(),
+    r = el?.getBoundingClientRect(),
+    pad = 6,
+    gap = 14,
+    cw = card.offsetWidth,
+    ch = card.offsetHeight;
+  if (!r) {
+    spot.classList.add("none");
+    card.style.left = `${Math.round((innerWidth - cw) / 2)}px`;
+    card.style.top = `${Math.round(Math.max(24, (innerHeight - ch) / 2.4))}px`;
+    return;
+  }
+  spot.classList.remove("none");
+  spot.style.left = `${r.left - pad}px`;
+  spot.style.top = `${r.top - pad}px`;
+  spot.style.width = `${r.width + pad * 2}px`;
+  spot.style.height = `${r.height + pad * 2}px`;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  let left, top;
+  if (r.right < innerWidth * 0.42 && r.height > 80) {
+    // A sidebar region: the card sits to its right.
+    left = r.right + pad + gap;
+    top = clamp(r.top + Math.min(r.height / 2, 120) - ch / 2, 16, innerHeight - ch - 16);
+  } else if (r.top + r.height / 2 > innerHeight * 0.6) {
+    left = clamp(r.left + r.width / 2 - cw / 2, 16, innerWidth - cw - 16);
+    top = r.top - pad - gap - ch;
+  } else {
+    left = clamp(r.left + r.width / 2 - cw / 2, 16, innerWidth - cw - 16);
+    top = r.bottom + pad + gap;
+  }
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+}
+function openTour(index = 0) {
+  // Steps whose part of the window isn't showing (say, the sidebar is hidden) are skipped.
+  const live = tourSteps().filter((s) => s.done || s.list || s.target());
+  const step = live[Math.max(0, Math.min(index, live.length - 1))],
+    at = live.indexOf(step);
+  const body = `<div class="tour-count">${at + 1} of ${live.length}</div><h3>${esc(step.title)}</h3>${step.text ? `<p>${esc(step.text)}</p>` : ""}${step.list ? `<div class="tour-list">${step.list.map(([g, t, d]) => `<div>${icon(g)}<span><strong>${esc(t)}</strong>${esc(d)}</span></div>`).join("")}</div>` : ""}${step.keys ? `<div class="tour-keys">${step.keys.map((k) => `<kbd>${esc(k)}</kbd>`).join("")}</div>` : ""}<div class="tour-actions">${step.done ? "" : `<button class="tour-skip" id="tour-skip">Skip tour</button>`}${at ? `<button class="secondary" id="tour-back">Back</button>` : ""}<button class="primary" id="tour-next" autofocus>${step.done ? "Start Browsing" : at === live.length - 2 ? "Finish" : "Next"}</button></div>`;
+  if (modalType === "tour" && $("#tour-card")) {
+    // Stay in the same overlay so the spotlight glides to the next target.
+    $("#tour-card").classList.remove("tour-in");
+    void $("#tour-card").offsetWidth;
+    $("#tour-card").innerHTML = body;
+    $("#tour-card").classList.add("tour-in");
+    $("#tour-next").focus();
+  } else {
+    showModal(
+      "tour",
+      `<div id="tour-spot" class="none" aria-hidden="true"></div><div id="tour-card" class="tour-in" role="dialog" aria-live="polite" aria-label="Wing tour">${body}</div>`,
+    );
+    $("#modal").classList.add("tour-modal");
+    $("#overlay").classList.add("touring");
+  }
+  placeTour(step);
+  $("#tour-next").onclick = () =>
+    step.done ? closeModal() : openTour(at + 1);
+  if ($("#tour-back")) $("#tour-back").onclick = () => openTour(at - 1);
+  if ($("#tour-skip")) $("#tour-skip").onclick = () => closeModal();
+  $("#tour-card").onkeydown = (e) => {
+    if (e.key === "ArrowRight" && !step.done) openTour(at + 1);
+    else if (e.key === "ArrowLeft" && at) openTour(at - 1);
+  };
+}
+addEventListener("resize", () => {
+  if (modalType !== "tour") return;
+  const n = Number(($(".tour-count")?.textContent || "1").split(" ")[0]) - 1;
+  const live = tourSteps().filter((s) => s.done || s.list || s.target());
+  if (live[n]) placeTour(live[n]);
+});
 function openHelp() {
   showModal(
     "help",
@@ -3126,8 +3280,9 @@ function openHelp() {
       )
       .join(
         "",
-      )}</div><div class="shortcuts"><span>Search, switch tabs, or run a command</span><kbd>⌘ T</kbd><span>Previous / next profile</span><kbd>⌘ ⌥ ← / →</kbd><span>Edit the current address</span><kbd>⌘ L</kbd><span>Hide sidebar; hover the left edge to reveal</span><kbd>⌘ S</kbd><span>Archive / restore a tab</span><kbd>⌘ W / ⌘ ⇧ T</kbd><span>Find in page</span><kbd>⌘ F</kbd><span>Settings</span><kbd>⌘ ,</kbd></div></div>`,
+      )}</div><div class="shortcuts"><span>Search, switch tabs, or run a command</span><kbd>⌘ T</kbd><span>Previous / next profile</span><kbd>⌘ ⌥ ← / →</kbd><span>Edit the current address</span><kbd>⌘ L</kbd><span>Hide sidebar; hover the left edge to reveal</span><kbd>⌘ S</kbd><span>Archive / restore a tab</span><kbd>⌘ W / ⌘ ⇧ T</kbd><span>Find in page</span><kbd>⌘ F</kbd><span>Settings</span><kbd>⌘ ,</kbd></div><div class="dialog-actions"><button class="primary" id="help-tour">Take the Tour</button></div></div>`,
   );
+  $("#help-tour").onclick = () => openTour();
 }
 // Native views sit above the shell. Opening a dialog temporarily hides them.
 // The main process remains the source of truth for every browser mutation.
