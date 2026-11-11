@@ -15,7 +15,31 @@ function installBrowserActions(wing) {
           const result = await wing.invoke("extension-actions");
           if (!this.isConnected) return;
           const present = new Set();
-          for (const action of result.extensions) {
+          // Only pinned extensions sit in the toolbar (the first three until
+          // the person picks); every extension is under the puzzle button.
+          let pins = null;
+          try {
+            pins = JSON.parse(localStorage.getItem("wing.extensionPins"));
+          } catch {}
+          if (!Array.isArray(pins)) pins = null;
+          const all = result.extensions,
+            shown = all.filter((a, i) => (pins ? pins.includes(a.id) : i < 3));
+          if (!this.overflow) {
+            this.overflow = document.createElement("button");
+            this.overflow.className = "icon-button extension-overflow";
+            this.overflow.title = "Extensions";
+            this.overflow.setAttribute("aria-label", "Extensions");
+            this.overflow.innerHTML =
+              '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.5a2 2 0 1 1 4 0V6h4a1 1 0 0 1 1 1v4h-1.5a2 2 0 1 0 0 4H18v4a1 1 0 0 1-1 1h-4v-1.5a2 2 0 1 0-4 0V20H5a1 1 0 0 1-1-1v-4h1.5a2 2 0 1 0 0-4H4V7a1 1 0 0 1 1-1h4z"/></svg><span class="extension-dot" hidden></span>';
+            this.overflow.onclick = () =>
+              this.dispatchEvent(new Event("open-menu"));
+          }
+          // A badge on a hidden extension still deserves a glance.
+          this.overflow.querySelector(".extension-dot").hidden = !all.some(
+            (a) => a.badgeText && !shown.includes(a),
+          );
+          this.overflow.hidden = all.length === 0;
+          for (const action of shown) {
             present.add(action.id);
             let button = this.buttons.get(action.id);
             if (!button) {
@@ -67,10 +91,14 @@ function installBrowserActions(wing) {
               this.buttons.delete(id);
             }
           }
+          // Keep pinned buttons in list order, the puzzle button last.
+          for (const action of shown) this.append(this.buttons.get(action.id));
+          this.append(this.overflow);
         } finally {
           this.busy = false;
         }
       };
+      this.addEventListener("pins-changed", () => this.refresh().catch(() => {}));
       this.unsubscribe = wing.onState(() => this.refresh().catch(() => {}));
       this.timer = setInterval(() => this.refresh().catch(() => {}), 2000);
       this.refresh().catch(() => {});

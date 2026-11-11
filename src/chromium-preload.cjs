@@ -128,7 +128,11 @@ window.addEventListener("wing-native", (event) => {
   else if (workspace && kind === "created")
     enqueue(async () => {
       const state = workspace.state;
+      // A page carried over from a mini window names the Space it was in.
       const space =
+        state.spaces.find(
+          (s) => s.id === data.spaceId && s.profileId === data.profileId,
+        ) ||
         state.spaces.find(
           (s) => s.id === state.activeSpaceId && s.profileId === data.profileId,
         ) || state.spaces.find((s) => s.profileId === data.profileId);

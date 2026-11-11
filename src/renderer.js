@@ -32,6 +32,9 @@ const icons = {
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   pin: '<path d="m8 3 8 0-1 7 4 4H5l4-4zM12 14v7"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
+  puzzle:
+    '<path d="M9 4.5a2 2 0 1 1 4 0V6h4a1 1 0 0 1 1 1v4h-1.5a2 2 0 1 0 0 4H18v4a1 1 0 0 1-1 1h-4v-1.5a2 2 0 1 0-4 0V20H5a1 1 0 0 1-1-1v-4h1.5a2 2 0 1 0 0-4H4V7a1 1 0 0 1 1-1h4z"/>',
+  pin: '<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>',
   home: '<path d="m3 10 9-7 9 7M5 9v12h14V9M10 21v-7h4v7"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   play: '<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>',
@@ -309,8 +312,30 @@ function applySidebarReveal(frame) {
   $("#sidebar-edge").hidden = !frame.hidden || sidebarFrameProgress > 0.98;
   positionSplitDivider();
 }
+// A switch between the top bar, the sidebar and the auto-hidden sidebar
+// animates the shell for as long as the native page glides (main.mm).
+let layoutMode = null,
+  layoutGlideTimer = 0;
+function noteLayoutMode() {
+  const mode = `${state.settings.tabLayout}|${!!state.sidebarHidden}|${!!state.settings.toolbarHidden}`;
+  if (layoutMode !== null && mode !== layoutMode && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const [wasTop] = layoutMode.split("|");
+    document.body.classList.add("layout-gliding");
+    document.body.classList.toggle(
+      "layout-entering",
+      wasTop !== state.settings.tabLayout,
+    );
+    clearTimeout(layoutGlideTimer);
+    layoutGlideTimer = setTimeout(
+      () => document.body.classList.remove("layout-gliding", "layout-entering"),
+      320,
+    );
+  }
+  layoutMode = mode;
+}
 function render() {
   if (!state) return;
+  noteLayoutMode();
   document.body.classList.toggle(
     "toolbar-hidden",
     !!state.settings.toolbarHidden,
@@ -616,6 +641,87 @@ $("#downloads-button").addEventListener("click", () => {
   );
   $("#all-downloads").addEventListener("click", () => openLibrary("downloads"));
 });
+// Every extension, in a small panel under the toolbar's puzzle button. Pinned
+// extensions also get their own toolbar button; the toolbar keeps only those.
+const EXTENSION_PINS = "wing.extensionPins";
+function extensionPins() {
+  try {
+    const pins = JSON.parse(localStorage.getItem(EXTENSION_PINS));
+    return Array.isArray(pins) ? pins : null;
+  } catch {
+    return null;
+  }
+}
+function extensionIcon(e) {
+  return /^data:image\/(png|jpeg|gif|webp|svg\+xml);/.test(e.icon || "")
+    ? `<img src="${esc(e.icon)}" alt="" draggable="false">`
+    : `<span class="ext-initial">${esc((e.name || "?").slice(0, 1))}</span>`;
+}
+async function openExtensionsMenu(anchor) {
+  if (modalType === "extensions-menu") return closeModal();
+  let result;
+  try {
+    result = await window.wing.invoke("extension-actions");
+  } catch {
+    result = { extensions: [] };
+  }
+  const list = result?.extensions || [];
+  const rect = anchor.getBoundingClientRect();
+  const render = () => {
+    const pins = extensionPins(),
+      pinned = (e, i) => (pins ? pins.includes(e.id) : i < 3);
+    return list.length
+      ? list
+          .map(
+            (e, i) =>
+              `<div class="ext-row${e.enabled ? "" : " disabled"}"><button class="ext-open" data-ext-open="${esc(e.id)}" ${e.enabled ? "" : "disabled"} title="${esc(e.title || e.name)}"><span class="ext-icon">${extensionIcon(e)}${e.badgeText ? `<span class="extension-badge">${esc(e.badgeText)}</span>` : ""}</span><span class="ext-name">${esc(e.name)}</span></button><button class="ext-pin${pinned(e, i) ? " on" : ""}" data-ext-pin="${esc(e.id)}" title="${pinned(e, i) ? "Unpin from toolbar" : "Pin to toolbar"}" aria-pressed="${pinned(e, i)}">${icon("pin")}</button></div>`,
+          )
+          .join("")
+      : '<div class="ext-empty">No extensions yet.</div>';
+  };
+  showModal(
+    "extensions-menu",
+    `<div class="ext-pop"><div class="dl-head"><span>Extensions</span><span class="ext-count">${list.length || ""}</span></div><div class="ext-list" id="ext-list">${render()}</div><button class="ext-manage" id="ext-manage">${icon("puzzle")}Manage extensions</button></div>`,
+  );
+  $("#modal").classList.add("extensions-modal");
+  const overlay = $("#overlay");
+  overlay.classList.add("anchored");
+  overlay.style.setProperty("--anchor-top", `${Math.round(rect.bottom + 6)}px`);
+  overlay.style.setProperty(
+    "--anchor-right",
+    `${Math.max(8, Math.round(innerWidth - rect.right - 6))}px`,
+  );
+  $("#ext-list").addEventListener("click", (e) => {
+    const open = e.target.closest("[data-ext-open]");
+    if (open) {
+      closeModal();
+      window.wing
+        .invoke("extension-action", { extensionId: open.dataset.extOpen })
+        .catch(() => {});
+      return;
+    }
+    const pin = e.target.closest("[data-ext-pin]");
+    if (!pin) return;
+    const current =
+      extensionPins() || list.slice(0, 3).map((x) => x.id),
+      id = pin.dataset.extPin,
+      next = current.includes(id)
+        ? current.filter((x) => x !== id)
+        : [...current, id];
+    try {
+      localStorage.setItem(EXTENSION_PINS, JSON.stringify(next));
+    } catch {}
+    $("#ext-list").innerHTML = render();
+    $("#extension-actions").dispatchEvent(new Event("pins-changed"));
+  });
+  $("#ext-manage").addEventListener("click", () => {
+    closeModal();
+    act("new-tab", { url: "chrome://extensions" });
+  });
+}
+$("#extension-actions").addEventListener("open-menu", (e) =>
+  openExtensionsMenu(e.target.querySelector(".extension-overflow") || e.target),
+);
 // Labels local and pre-production hosts, so they aren't mistaken for the real site.
 function environmentOf(url) {
   let parsed;
@@ -1123,8 +1229,9 @@ function openPalette(mode = "new", value = "") {
   });
   showModal(
     "palette",
-    `<div class="palette-input-wrap">${icon("search")}<input id="palette-input" placeholder="Search or enter website name" aria-label="Search or enter URL" autocomplete="off" spellcheck="false"><kbd>esc</kbd></div><div class="results" id="palette-results"></div><div class="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> to navigate <kbd>↵</kbd> to open</span><span><kbd>⇥</kbd> to search a site</span></div>`,
+    `<div class="palette-input-wrap">${icon("search")}<input id="palette-input" placeholder="Search or enter website name" aria-label="Search or enter URL" autocomplete="off" spellcheck="false"><span class="palette-mode">${mode === "navigate" ? "This tab" : "New tab"}</span></div><div class="results" id="palette-results" role="listbox"></div><div class="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Select</span><span><kbd>↵</kbd> Open</span><span><kbd>⇥</kbd> Search a site</span><span class="palette-footer-end"><kbd>esc</kbd> Close</span></div>`,
   );
+  $("#modal").classList.add("palette-modal");
   $("#palette-input").value = value || "";
   $("#palette-input").addEventListener("input", () => {
     paletteIndex = 0;
@@ -1142,6 +1249,15 @@ function openPalette(mode = "new", value = "") {
     } else if (e.key === "Enter") {
       e.preventDefault();
       runResult(paletteIndex);
+    }
+  });
+  $("#palette-results").addEventListener("mousemove", (e) => {
+    const row = e.target.closest("[data-result]");
+    if (!row || Number(row.dataset.result) === paletteIndex) return;
+    paletteIndex = Number(row.dataset.result);
+    for (const other of $("#palette-results").querySelectorAll(".result")) {
+      other.classList.toggle("selected", other === row);
+      other.setAttribute("aria-selected", other === row);
     }
   });
   renderPalette();
@@ -1514,7 +1630,7 @@ function renderPalette(rebuild = true) {
         ? "Go to address"
         : `Search ${state.settings.search === "duckduckgo" ? "DuckDuckGo" : "Google"}`,
       glyph: "search",
-      hint: "↵",
+      hint: /^(https?:|localhost|[\w-]+\.)/i.test(q) && !/\s/.test(q) ? "Go" : "Search",
       run: () => {
         const action = paletteMode === "navigate" ? "navigate" : "new-tab";
         closeModal();
@@ -1552,12 +1668,34 @@ function renderPalette(rebuild = true) {
       } else paletteResults.unshift(nav);
     }
   }
+  // Results read as sections: what ↵ does first, then open tabs, websites,
+  // Spaces and commands, each under a quiet heading.
+  const section = (r, i) =>
+    i === 0 && !r.topHit && !r.siteTab?.id
+      ? ""
+      : r.siteTab?.id
+        ? "Open Tabs"
+        : r.siteTab
+          ? "Websites"
+          : r.symbol
+            ? "Spaces"
+            : r.glyph === "search" || r.glyph === "sparkle"
+              ? ""
+              : "Commands";
+  let last = null;
   $("#palette-results").innerHTML = paletteResults
-    .map(
-      (r, i) =>
-        `<button class="result ${i === paletteIndex ? "selected" : ""}" data-result="${i}"><span class="result-icon">${r.siteTab ? tabIcon(r.siteTab) : r.symbol ? esc(r.symbol) : icon(r.glyph)}</span><span class="result-label"><strong>${esc(r.label)}</strong><small>${esc(r.detail)}</small></span><kbd>${esc(r.hint || "Command")}</kbd></button>`,
-    )
+    .map((r, i) => {
+      const name = section(r, i),
+        head =
+          name && name !== last
+            ? `<div class="palette-section">${name}</div>`
+            : "";
+      last = name || last;
+      const kind = r.siteTab ? "site" : r.symbol ? "space" : "command";
+      return `${head}<button class="result ${i === paletteIndex ? "selected" : ""}" data-result="${i}" data-kind="${kind}" role="option" aria-selected="${i === paletteIndex}"><span class="result-icon">${r.siteTab ? tabIcon(r.siteTab) : r.symbol ? esc(r.symbol) : icon(r.glyph)}</span><span class="result-label"><strong>${esc(r.label)}</strong><small>${esc(r.detail)}</small></span><span class="result-hint">${esc(r.hint || "Run")}<kbd>↵</kbd></span></button>`;
+    })
     .join("");
+  $("#palette-results .selected")?.scrollIntoView({ block: "nearest" });
 }
 function runResult(i) {
   paletteResults[i]?.run();

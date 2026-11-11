@@ -10,6 +10,7 @@
 #import "CastPicker.h"
 #import "WebKitPage.h"
 #import "CrashReports.h"
+#import <QuartzCore/QuartzCore.h>
 #import <Sparkle/Sparkle.h>
 #import <AppKit/AppKit.h>
 #include <cmath>
@@ -366,6 +367,9 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   // macOS crash reports waiting for the person's say on sending them.
   NSArray<NSString *> *_pendingCrashes;
   BOOL _cloudStarted;
+  NSString *_layoutModeKey;
+  CFTimeInterval _glideUntil;
+  NSMapTable<NSView *, NSValue *> *_glideTargets;
   BOOL _quitting;
   BOOL _qualificationStarted;
   BOOL _shellRaised;
@@ -1548,6 +1552,18 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                 usingBlock:^(NSNotification *note) {
                   [weakSelf applicationActiveChanged:[note.name isEqual:NSApplicationDidBecomeActiveNotification]];
                 }]];
+  // Leaving for another desktop, or covering Wing with another window while
+  // it stays the active app, also floats playing video into the mini player.
+  [_observers addObject:[NSNotificationCenter.defaultCenter
+      addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                  object:_window.window
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *note) {
+                WingChromiumHost *host = weakSelf;
+                if (!host) return;
+                BOOL shown = (host->_window.window.occlusionState & NSWindowOcclusionStateVisible) != 0;
+                [host windowShownChanged:shown];
+              }]];
   // The shell asks for a window drag after mousedown on empty chrome; keep
   // the originating event so AppKit can run its native move loop.
   _mouseDownMonitor = [NSEvent
@@ -2650,8 +2666,32 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                 ready(profile);
               }];
        }
-       expand:^(NSString *target, NSString *space) {
+       expand:^(NSString *target, NSString *space, ArdiaCoreTab *page) {
          [self showMainWindow:nil];
+         NSString *profileId;
+         for (NSString *candidate in self->_profiles)
+           if (self->_profiles[candidate] == page.profile) profileId = candidate;
+         if (page && !page.closed && profileId) {
+           [self->_window prepareProfile:page.profile];
+           [self->_window adoptTab:page];
+           NSString *identity = NSUUID.UUID.UUIDString;
+           self->_tabs[identity] = page;
+           self->_modelURLs[identity] = page.url.length ? page.url : target;
+           page.delegate = self;
+           [page executeJavaScript:kTrackEditsScript frame:nil];
+           [self->_pendingCreatedTabs addObject:identity];
+           [self send:@"created"
+                 data:@{
+                   @"id" : identity,
+                   @"profileId" : profileId,
+                   @"spaceId" : space,
+                   @"url" : self->_modelURLs[identity],
+                   @"foreground" : @YES,
+                   @"peek" : @NO
+                 }];
+           [self pageChanged:page];
+           return;
+         }
          [self send:@"action"
                data:@{@"name" : @"mini-expand", @"args" : @{@"url" : target, @"spaceId" : space}}];
        }
@@ -3233,6 +3273,40 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     } else if (![visible containsObject:identity])
       [webkit.view removeFromSuperview];
   }
+  // Switching between the top bar, the sidebar and the auto-hidden sidebar
+  // glides the page to its new place in step with the shell's CSS, instead of
+  // jumping. Resizes from the window itself stay immediate.
+  NSDictionary *layoutSettings = state[@"settings"];
+  // Only a mode switch glides: a sidebar-width drag sends many small changes.
+  NSString *layoutKey = [NSString stringWithFormat:@"%@|%d|%d",
+      layoutSettings[@"tabLayout"], [state[@"sidebarHidden"] boolValue],
+      [layoutSettings[@"toolbarHidden"] boolValue]];
+  BOOL glide = _layoutModeKey && ![_layoutModeKey isEqual:layoutKey] &&
+               _window.window.isVisible &&
+               !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+  _layoutModeKey = layoutKey;
+  if (glide) {
+    _glideUntil = CACurrentMediaTime() + (getenv("WING_CHROMIUM_TEST_SLOW_GLIDE") ? 2.6 : 0.26);
+    _glideTargets = [NSMapTable weakToStrongObjectsMapTable];
+  }
+  void (^place)(NSView *, NSRect) = ^(NSView *view, NSRect frame) {
+    if (glide && view.superview && !NSIsEmptyRect(view.frame) && !NSEqualRects(view.frame, frame)) {
+      [self->_glideTargets setObject:[NSValue valueWithRect:frame] forKey:view];
+      [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        // Qualification can slow the glide down enough to photograph it.
+        context.duration = getenv("WING_CHROMIUM_TEST_SLOW_GLIDE") ? 2.6 : 0.26;
+        context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.2:0.8:0.2:1];
+        context.allowsImplicitAnimation = YES;
+        view.animator.frame = frame;
+      }];
+      return;
+    }
+    // A sync that lands mid-glide with the same destination lets it finish.
+    NSValue *target = [self->_glideTargets objectForKey:view];
+    if (target && CACurrentMediaTime() < self->_glideUntil && NSEqualRects(target.rectValue, frame))
+      return;
+    view.frame = frame;
+  };
   CGFloat contentLeft = _window.hostView.bounds.size.width;
   for (NSDictionary *pane in _lastSync[@"panes"])
     contentLeft = MIN(contentLeft, [pane[@"x"] doubleValue]);
@@ -3392,19 +3466,19 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         [_window.hostView addSubview:tab.view
                           positioned:NSWindowAbove
                           relativeTo:toolsView];
-      toolsView.frame = NSMakeRect(
+      place(toolsView, NSMakeRect(
           x + toolsFrame.origin.x,
           _window.hostView.isFlipped
               ? y + toolsFrame.origin.y
               : height - y - toolsFrame.origin.y - toolsFrame.size.height,
-          toolsFrame.size.width, toolsFrame.size.height);
+          toolsFrame.size.width, toolsFrame.size.height));
     }
-    tab.view.frame = NSMakeRect(x + pageFrame.origin.x,
+    place(tab.view, NSMakeRect(x + pageFrame.origin.x,
                                 _window.hostView.isFlipped
                                     ? y + pageFrame.origin.y
                                     : height - y - pageFrame.origin.y -
                                           pageFrame.size.height,
-                                pageFrame.size.width, pageFrame.size.height);
+                                pageFrame.size.width, pageFrame.size.height));
     // Pages sit in a rounded card like Arc's, matching the shell's radius.
     tab.view.wantsLayer = YES;
     tab.view.layer.cornerRadius = 10;
@@ -3536,8 +3610,12 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [_pictureInPictureTabs containsObject:identity])
     return;
   NSTimeInterval asked = NSProcessInfo.processInfo.systemUptime;
-  [page evaluate:@"post('result',JSON.stringify([...document.querySelectorAll('video')].some(v=>"
-                 @"!v.paused&&!v.ended&&v.readyState>2&&v.videoWidth>0&&!v.muted&&v.volume>0)))"
+  // A video with sound floats; so does a muted one that fills much of the
+  // page (a player, not a feed's autoplay preview).
+  [page evaluate:@"post('result',JSON.stringify([...document.querySelectorAll('video')].some(v=>{"
+                 @"if(v.paused||v.ended||v.readyState<=2||!v.videoWidth)return false;"
+                 @"if(!v.muted&&v.volume>0)return true;const r=v.getBoundingClientRect();"
+                 @"return r.width*r.height>=0.3*innerWidth*innerHeight})))"
       completion:^(NSString *json) {
         if (![json isEqual:@"true"] || page.closed || self->_quitting)
           return;
@@ -3563,6 +3641,18 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if (active)
       [self closeMiniPlayer:identity];
     else if (page != _fullscreenTab && _window.window.isVisible && !_window.window.isMiniaturized)
+      [self openMiniPlayer:page identity:identity];
+  }
+}
+- (void)windowShownChanged:(BOOL)shown {
+  for (NSDictionary *pane in _lastSync[@"panes"]) {
+    NSString *identity = pane[@"id"];
+    ArdiaCoreTab *page = Identifier(identity) ? _tabs[identity] : nil;
+    if (!page || page.view.superview != _window.hostView || page.view.hidden)
+      continue;
+    if (shown && NSApp.isActive)
+      [self closeMiniPlayer:identity];
+    else if (!shown && page != _fullscreenTab && !_window.window.isMiniaturized)
       [self openMiniPlayer:page identity:identity];
   }
 }
@@ -3691,6 +3781,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     fprintf(stderr, "Qualification request: %s\n", action.UTF8String);
   if ([action isEqual:@"test-minis"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
     if ([data[@"close"] boolValue]) [WingMiniWindow closeAll];
+    if ([data[@"expand"] boolValue]) [WingMiniWindow expandFirst];
     [self reply:rid result:@{@"windows" : WingMiniWindow.diagnostics} error:nil];
     return;
   }

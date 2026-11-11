@@ -148,7 +148,7 @@ def main():
         # Wing is not sandboxed, so Sparkle installs without its XPC services.
         shutil.rmtree(sparkle / 'Versions/B/XPCServices')
         run('xcrun', 'clang++', '-std=c++20', '-O2', '-arch', {'arm64': 'arm64', 'x64': 'x86_64'}[args.arch], '-mmacosx-version-min=14.0', '-fobjc-arc',
-            '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(ROOT / 'native/chromium/CastPicker.mm'), str(ROOT / 'native/chromium/WebKitPage.mm'), str(ROOT / 'native/chromium/CrashReports.mm'), str(binary), '-framework', 'AppKit', '-framework', 'WebKit',
+            '-I'+str(header.parent), str(ROOT / 'native/chromium/main.mm'), str(ROOT / 'native/chromium/ImportProcess.mm'), str(ROOT / 'native/chromium/MiniWindow.mm'), str(ROOT / 'native/chromium/ExtensionPanel.mm'), str(ROOT / 'native/chromium/ExtensionSidebar.mm'), str(ROOT / 'native/chromium/DeviceChooser.mm'), str(ROOT / 'native/chromium/PromptPopover.mm'), str(ROOT / 'native/chromium/CastPicker.mm'), str(ROOT / 'native/chromium/WebKitPage.mm'), str(ROOT / 'native/chromium/CrashReports.mm'), str(binary), '-framework', 'AppKit', '-framework', 'WebKit', '-framework', 'QuartzCore',
             '-F', str(frameworks), '-framework', 'Sparkle', '-Wl,-rpath,@executable_path/../Frameworks',
             '-o', str(macos / product))
         # Page summaries use Apple's on-device model; the host only runs this on macOS 26.

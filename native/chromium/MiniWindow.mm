@@ -270,10 +270,20 @@ static NSMutableArray *gMinis;
 - (void)expand:(id)sender {
   NSString *url = [self visibleURL];
   if (!url.length) return;
-  _expandHandler(url, _spaceId);
+  // The page itself moves into Wing, so video, scroll and form state stay put.
+  ArdiaCoreTab *page = _tab.closed ? nil : _tab;
+  if (page) {
+    page.delegate = nil;
+    [page.view removeFromSuperview];
+    _tab = nil;
+  }
+  _expandHandler(url, _spaceId, page);
   [_core.window performClose:nil];
 }
 
++ (void)expandFirst {
+  [gMinis.firstObject expand:nil];
+}
 + (BOOL)performMenuAction:(NSString *)name args:(NSDictionary *)args {
   if (!NSApp.keyWindow) return NO;
   for (WingMiniWindow *mini in gMinis)
