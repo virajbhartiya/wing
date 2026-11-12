@@ -38,7 +38,8 @@
     "prepare:chromium": "python3 scripts/prepare-chromium.py --sync",
     "start:chromium-preview": "python3 scripts/run-chromium-preview.py",
     "migrate:chromium": "python3 scripts/migrate-chromium.py",
-    "build:chromium-production": "python3 scripts/build-chromium-preview.py --production --source-receipt ${WING_CHROMIUM_BUILD:-../wing-chromium-build-156}/wing-build-receipt.json"
+    "build:chromium-production": "python3 scripts/build-chromium-preview.py --production --source-receipt ${WING_CHROMIUM_BUILD:-../wing-chromium-build-156}/wing-build-receipt.json",
+    "package:windows": "node scripts/package-windows.cjs"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

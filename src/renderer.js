@@ -1,4 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
+if (window.wing?.platform)
+  document.documentElement.classList.add(`platform-${window.wing.platform}`);
 const icons = {
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
   pull: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4m2-2.5L10.5 6 13 8.5"/>',

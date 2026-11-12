@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 const theme = require("./themes.cjs");
 const swipe = require("./interactions.cjs").createSwipeTracker();
 contextBridge.exposeInMainWorld("wing", {
+  platform: process.platform,
   navigation: {
     calculate: (input) => require("./navigation.cjs").calculate(input),
     rankResults: (query, items) =>

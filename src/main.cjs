@@ -199,7 +199,17 @@ const publisher = coalescer(() => {
     win.webContents.send("wing:state", snapshot());
   }
 }, 16);
+function windowsCaption() {
+  const dark = state?.settings?.dark ?? nativeTheme.shouldUseDarkColors;
+  return { color: "#00000000", symbolColor: dark ? "#f2f0f7" : "#2a2733", height: 52 };
+}
+let captionDark;
 function publish(persist = true) {
+  if (process.platform === "win32" && win && !win.isDestroyed()) {
+    const caption = windowsCaption();
+    if (caption.symbolColor !== captionDark) win.setTitleBarOverlay(caption);
+    captionDark = caption.symbolColor;
+  }
   publisher.schedule();
   if (persist) save();
 }
@@ -2193,8 +2203,10 @@ app.whenReady().then(async () => {
     minHeight: 560,
     title: "Wing",
     backgroundColor: "#d6d0e5",
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 17 },
+    // macOS insets its traffic lights; Windows draws its caption buttons over the toolbar.
+    ...(process.platform === "win32"
+      ? { titleBarStyle: "hidden", titleBarOverlay: windowsCaption() }
+      : { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 18, y: 17 } }),
     webPreferences: {
       preload: path.join(__dirname, "preload.bundle.cjs"),
       backgroundThrottling: false,

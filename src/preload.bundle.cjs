@@ -336,7 +336,8 @@ var require_interactions = __commonJS({
       if (!profile) return null;
       const active = state.spaces.find((s) => s.id === state.activeSpaceId);
       if (active?.profileId === profile.id) return active;
-      return state.spaces.find((s) => s.profileId === profile.id) || null;
+      const owned = state.spaces.filter((s) => s.profileId === profile.id);
+      return owned.find((s) => s.id === profile.lastSpaceId) || owned[0] || null;
     }
     function tabForShortcut(tabs, splits, index) {
       const rank = { favorite: 0, pinned: 1, today: 2 };
@@ -347,10 +348,12 @@ var require_interactions = __commonJS({
       ).map((t, i) => [t, i]).sort((a, b) => rank[a[0].kind] - rank[b[0].kind] || a[1] - b[1]).map(([t]) => t);
       return index === 8 ? ordered.at(-1) : ordered[index];
     }
+    var APP_ICONS = ["violet", "midnight", "paper", "coral", "ocean", "forest", "gold"];
     function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
       return !!packaged && !isDefault && settings.onboarded !== false && !settings.defaultBrowserPromptOff;
     }
     module2.exports = {
+      APP_ICONS,
       shouldAskDefaultBrowser,
       spaceForProfile,
       tabForShortcut,
@@ -1008,6 +1011,7 @@ var { contextBridge, ipcRenderer } = require("electron");
 var theme = require_themes();
 var swipe = require_interactions().createSwipeTracker();
 contextBridge.exposeInMainWorld("wing", {
+  platform: process.platform,
   navigation: {
     calculate: (input) => require_navigation().calculate(input),
     rankResults: (query, items) => require_navigation().rankResults(query, items)

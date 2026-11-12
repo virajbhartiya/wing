@@ -4108,3 +4108,18 @@ body.layout-entering.tabs-top #toolbar-spaces {
     animation: none;
   }
 }
+
+/* Windows draws minimize, maximize and close over the top-right corner. */
+.platform-win32 #toolbar {
+  padding-right: 150px;
+}
+.platform-win32 body.sidebar-auto-hidden #toolbar {
+  padding-left: 3px;
+}
+.platform-win32 body.tabs-top #toolbar,
+.platform-win32 body.tabs-top.sidebar-auto-hidden #toolbar {
+  padding: 0 150px 0 11px;
+}
+.platform-win32 body.tabs-top.toolbar-hidden #tab-strip {
+  padding: 8px 150px 8px 8px;
+}
