@@ -195,6 +195,41 @@ function activate(state, tabId) {
   for (const member of splits.members(state, tab.id)) delete member.closed;
   tab.lastActive = Date.now();
 }
+// Each profile keeps its own copy of a Favorite or pinned tab. One still on its
+// saved link picks up the page its twin (same saved link) last showed in another Space;
+// only the address carries over, never the other profile's session.
+function resumeElsewhere(state, tabId) {
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab || tab.kind === "today" || tab.url !== tab.homeURL) return;
+  let origin;
+  try {
+    origin = new URL(tab.homeURL).origin;
+  } catch {
+    return;
+  }
+  if (!/^https?:/.test(origin)) return;
+  const sameSite = (value) => {
+    try {
+      return new URL(value).origin === origin;
+    } catch {
+      return false;
+    }
+  };
+  const source = state.tabs
+    .filter(
+      (t) =>
+        t.id !== tab.id &&
+        t.kind !== "today" &&
+        !t.closed &&
+        spaceOf(state, t)?.profileId !== spaceOf(state, tab)?.profileId &&
+        t.homeURL === tab.homeURL &&
+        sameSite(t.url) &&
+        t.url !== tab.url &&
+        (t.lastActive || 0) > (tab.lastActive || 0),
+    )
+    .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
+  if (source) tab.url = source.url;
+}
 function selectSpace(state, spaceId) {
   const target = state.spaces.find((s) => s.id === spaceId);
   if (!target) return;
@@ -633,6 +668,7 @@ module.exports = {
   internalPage,
   spaceOf,
   activate,
+  resumeElsewhere,
   selectSpace,
   archiveTab,
   closePage,

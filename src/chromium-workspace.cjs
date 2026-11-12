@@ -481,6 +481,7 @@ class ChromiumWorkspace {
         delete tab.closed;
         break;
       case "select-tab":
+        M.resumeElsewhere(s, data.id);
         M.activate(s, data.id);
         break;
       case "tab-index":
