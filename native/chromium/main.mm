@@ -2779,6 +2779,18 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [self pageChanged:tab];
   });
 }
+// Clicking into the other half of a split makes it the active tab, so Find,
+// reload and the address bar act on the page being used.
+- (void)tabDidGainFocus:(ArdiaCoreTab *)tab {
+  NSString *identity = [self identityForTab:tab];
+  if (!identity || [identity isEqual:_lastSync[@"workspace"][@"activeTabId"]]) return;
+  for (NSDictionary *pane in _lastSync[@"panes"])
+    if ([pane[@"id"] isEqual:identity]) {
+      [self send:@"action"
+            data:@{@"name" : @"select-tab", @"args" : @{@"id" : identity}}];
+      return;
+    }
+}
 - (void)tab:(ArdiaCoreTab *)tab requestsActivation:(NSString *)reason {
   NSString *identity = [self identityForTab:tab];
   if (identity)
@@ -5095,7 +5107,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   if (modifiers & NSEventModifierFlagShift)
     return [@[ @"t", @"r", @"2", @"=", @"+", @"j" ] containsObject:plain];
   return [@[
-    @"t", @"l", @"w", @"r", @"f", @"s", @"[", @"]", @",", @"y", @"d",
+    @"t", @"l", @"w", @"r", @"s", @"[", @"]", @",", @"y", @"d",
     @"=", @"+", @"-", @"0"
   ] containsObject:plain];
 }
@@ -5176,9 +5188,6 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
             @"type" : @"palette",
             @"mode" : [key isEqual:@"t"] ? @"new" : @"navigate"
           }];
-    [_shell focus];
-  } else if ([key isEqual:@"f"]) {
-    [self send:@"command" data:@{@"type" : @"find"}];
     [_shell focus];
   } else {
     NSDictionary *actions = @{

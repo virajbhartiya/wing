@@ -1027,6 +1027,7 @@ async function invoke(action, data = {}) {
         "forward",
         "reload",
         "stop",
+        "focus",
         "devtools",
         "find",
         "zoom",
