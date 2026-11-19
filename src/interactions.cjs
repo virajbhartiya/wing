@@ -253,6 +253,20 @@ function tabForShortcut(tabs, splits, index) {
   return index === 8 ? ordered.at(-1) : ordered[index];
 }
 
+// A pinned tab's icon is its reset control, as in Arc. Only a pinned row that is
+// already showing and has left its address resets: the first click on a tab
+// always just selects it, and favorites and compact top-bar tabs, which are
+// nearly all icon, never reset on a click (their menu still offers it).
+function iconClickResets({ tab, activeTabId, compact }) {
+  return (
+    !!tab &&
+    tab.kind === "pinned" &&
+    !compact &&
+    tab.id === activeTabId &&
+    !!tab.homeURL &&
+    tab.url !== tab.homeURL
+  );
+}
 const APP_ICONS = ["midnight", "violet", "paper", "coral", "ocean", "forest", "gold"];
 // New workspaces get this choice in onboarding instead.
 function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
@@ -265,6 +279,7 @@ function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
 }
 module.exports = {
   APP_ICONS,
+  iconClickResets,
   shouldAskDefaultBrowser,
   spaceForProfile,
   tabForShortcut,

@@ -511,3 +511,17 @@ test("pull request parsers normalize status from GitHub and GitLab", () => {
   assert.equal(mr.ci, "pending");
   assert.equal(parseGitLab({ message: "401" }, "mine").length, 0);
 });
+test("clicking a pinned tab's icon resets it only when it is already showing and has moved on", () => {
+  const { iconClickResets } = require("../src/interactions.cjs");
+  const drifted = { id: "a", kind: "pinned", url: "https://github.com/x/actions", homeURL: "https://github.com/x" };
+  // The first click selects the tab, wherever it was left.
+  assert.equal(iconClickResets({ tab: drifted, activeTabId: "b", compact: false }), false);
+  // Once it is showing, the icon takes it back to its pinned address.
+  assert.equal(iconClickResets({ tab: drifted, activeTabId: "a", compact: false }), true);
+  // A tab still on its pinned address has nothing to reset.
+  assert.equal(iconClickResets({ tab: { ...drifted, url: drifted.homeURL }, activeTabId: "a", compact: false }), false);
+  // Favorites and compact top-bar tabs are almost all icon: a click there only selects.
+  assert.equal(iconClickResets({ tab: { ...drifted, kind: "favorite" }, activeTabId: "a", compact: false }), false);
+  assert.equal(iconClickResets({ tab: drifted, activeTabId: "a", compact: true }), false);
+  assert.equal(iconClickResets({ tab: { ...drifted, kind: "today" }, activeTabId: "a", compact: false }), false);
+});

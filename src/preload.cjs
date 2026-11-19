@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("wing", {
     fields: theme.COLOR_FIELDS,
     resolve: (space, dark) => theme.resolveColors(space, dark),
   },
+  iconClickResets: require("./interactions.cjs").iconClickResets,
   swipeGesture: (deltaX, deltaY, time) => swipe.push({ deltaX, deltaY, time }),
   swipeUpdate: (deltaX, deltaY, time) => swipe.update({ deltaX, deltaY, time }),
   swipeReset: () => swipe.reset(),
