@@ -23,6 +23,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)focus;
 - (void)evaluate:(NSString *)script completion:(void (^)(id _Nullable value))completion;
 - (void)close;
+// Called when the last private window closes, so the next one starts signed out.
++ (void)releaseEphemeralStores;
 @end
 // https pages of streaming sites whose video needs DRM.
 BOOL WingStreamingURL(NSString *_Nullable url);

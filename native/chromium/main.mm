@@ -8,6 +8,7 @@
 #import "PromptPopover.h"
 #import "MiniWindow.h"
 #import "CastPicker.h"
+#import "SharePicker.h"
 #import "WebKitPage.h"
 #import "CrashReports.h"
 #import <QuartzCore/QuartzCore.h>
@@ -351,6 +352,12 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   NSMutableDictionary<NSString *, NSDictionary *> *_externalAppAlerts;
   NSMutableDictionary<NSNumber *, WingDeviceChooser *> *_deviceChoosers;
   WingCastPicker *_castPicker;
+  WingSharePicker *_sharePicker;
+  // Pages Wing opens for itself (link previews, blocking helpers): never tabs.
+  NSHashTable<ArdiaCoreTab *> *_ownedTabs;
+  // Pages that said they hold unsaved input or a call, and until when to
+  // leave them alone instead of waking them every minute to ask again.
+  NSMutableDictionary<NSString *, NSNumber *> *_busyUntil;
   NSView *_hoverCard;
   ArdiaCoreTab *_hoverTab;
   NSString *_hoverURL;
@@ -1439,6 +1446,8 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _closing = [NSMutableDictionary new];
   _freezeGenerations = [NSMutableDictionary new];
   _loadingProfiles = [NSMutableSet new];
+  _ownedTabs = [NSHashTable weakObjectsHashTable];
+  _busyUntil = [NSMutableDictionary new];
   _capturingTabs = [NSMutableSet new];
   _pictureInPictureTabs = [NSMutableSet new];
   _miniPlayerTabs = [NSMutableSet new];
@@ -1596,10 +1605,40 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                   .absoluteString;
   engine.pageScript = [NSString
       stringWithFormat:
-          @"(post)=>{if(window!==top)return()=>{};if(location.protocol==='"
+          // Screen sharing goes through Wing's own picker (WingSharePicker):
+          // the page asks, the person picks a tab, window or screen, and the
+          // engine lets exactly that source through one getUserMedia call.
+          @"(post)=>{let dm=()=>{};try{const D=navigator.mediaDevices,pr=D&&"
+          @"Object.getPrototypeOf(D),gum=pr&&pr.getUserMedia,ua=navigator.userActivation,"
+          @"fp=document.featurePolicy;if(pr&&pr.getDisplayMedia&&/^https?:$/.test("
+          @"location.protocol)){const q=new Map();let n=0;const g=function getDisplayMedia(c){"
+          @"c=c||{};if(fp&&!fp.allowsFeature('display-capture'))return Promise.reject(new "
+          @"DOMException('Access to the feature \"display-capture\" is disallowed by "
+          @"permissions policy.','NotAllowedError'));if(ua&&!ua.isActive)return "
+          @"Promise.reject(new DOMException('getDisplayMedia() requires transient activation "
+          @"(user gesture).','InvalidStateError'));const self=this;return new Promise((res,"
+          @"rej)=>{const id=++n;q.set(id,{self,res,rej,c});post('displayMedia',"
+          @"JSON.stringify({id,audio:!!c.audio}));});};Object.defineProperty(pr,"
+          @"'getDisplayMedia',{value:g,writable:true,configurable:true});dm=(kind,json)=>{"
+          @"if(kind!=='displayMedia')return;const m=JSON.parse(json),r=q.get(m.id);if(!r)"
+          @"return;q.delete(m.id);if(!m.sourceId)return r.rej(new DOMException('Permission "
+          @"denied','NotAllowedError'));const v=r.c.video,f=(v&&v.frameRate&&(v.frameRate.max"
+          @"||v.frameRate.ideal||v.frameRate))||30;gum.call(r.self,{audio:m.audio?{mandatory:"
+          @"{chromeMediaSource:'desktop'}}:false,video:{mandatory:{chromeMediaSource:'desktop',"
+          @"chromeMediaSourceId:m.sourceId,maxWidth:3840,maxHeight:2160,maxFrameRate:+f||30}}})"
+          @".then(r.res,r.rej);};}}catch(e){}"
+          // Pages keep their own peer connections; Wing only remembers them
+          // (weakly) so it never pauses or discards a tab in the middle of a
+          // call. See WING_LIVE_CALL_EXPR.
+          @"if(window!==top)return dm;try{const k=Symbol.for('wing.rtc'),"
+          @"O=window.RTCPeerConnection;if(O&&!window[k]){const s=new Set();"
+          @"Object.defineProperty(window,k,{value:s});const P=new Proxy(O,{construct(t,a,n)"
+          @"{const p=Reflect.construct(t,a,n);s.add(new WeakRef(p));return p;}});"
+          @"window.RTCPeerConnection=P;if(window.webkitRTCPeerConnection===O)"
+          @"window.webkitRTCPeerConnection=P;}}catch(e){}if(location.protocol==='"
           @"chrome-extension:'&&location.pathname==='/"
           @"control.html'){Object.defineProperty(window,'__wingServicePost',{"
-          @"value:post});return()=>{};}if(location.href!==%@)return()=>{};"
+          @"value:post});return dm;}if(location.href!==%@)return dm;"
           @"Object."
           @"defineProperty(window,'__wingNativePost',{value:post});return(kind,"
           @"json)=>{if(kind==='wing-native')window.dispatchEvent(new "
@@ -1724,6 +1763,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   [clip addSubview:label];
   [card addSubview:clip];
   ArdiaCoreTab *preview = [_window openTab:url profile:profile foreground:NO];
+  if (preview) [_ownedTabs addObject:preview];
   preview.view.frame = clip.bounds;
   preview.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   [clip addSubview:preview.view];
@@ -1813,6 +1853,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
 // Closing a private window drops its pages; the last one takes the profile with it.
 - (void)closePrivateWindow {
   _quitting = YES;
+  [_sharePicker close];
   for (ArdiaCoreTab *page in [_tabs.allValues arrayByAddingObjectsFromArray:_protectionTabs.allValues]) {
     page.delegate = nil;
     if (!page.closed) [page closeNow];
@@ -1836,6 +1877,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   BOOL shared = NO;
   for (WingChromiumHost *host in gPrivateHosts)
     shared = shared || host->_profiles[@"private"] == profile;
+  if (!gPrivateHosts.count) [WingWebKitPage releaseEphemeralStores];
   if (profile && !shared)
     dispatch_async(dispatch_get_main_queue(), ^{
       [ArdiaCoreEngine.sharedEngine releaseProfile:profile];
@@ -1848,8 +1890,24 @@ static NSString *const kTrackEditsScript =
     @"(()=>{const key=Symbol.for('wing.edited');if(window[key])return;"
     @"const edited=window[key]=new Set();addEventListener('input',e=>{"
     @"if(e.target&&e.target.isContentEditable)edited.add(e.target);},true);})()";
+// A call is live while a peer connection the page script saw is connected, or
+// while any media element plays a live camera, microphone or remote stream.
+// Calls run with the camera and microphone off too, so capture alone misses
+// listen-only participants.
+#define WING_LIVE_CALL_EXPR                                                                \
+  @"((()=>{const s=window[Symbol.for('wing.rtc')];let on=false;if(s)for(const r of [...s])" \
+  @"{const p=r.deref();if(!p||p.connectionState==='closed'){s.delete(r);continue;}"          \
+  @"if(['connected','connecting','disconnected'].includes(p.connectionState))on=true;}"      \
+  @"return on||[...document.querySelectorAll('video,audio')].some(m=>m.srcObject&&"          \
+  @"typeof m.srcObject.getTracks==='function'&&m.srcObject.getTracks().some(t=>"             \
+  @"t.readyState==='live'))})())"
+static NSString *const kLiveCallScript =
+    @"post('result',JSON.stringify(" WING_LIVE_CALL_EXPR @"))";
+// "Unsaved" also covers a live call: archiving or discarding the page would
+// hang up on everyone in it.
 static NSString *const kHasUnsavedInputScript =
-    @"post('result',JSON.stringify([...(window[Symbol.for('wing.edited')]||[])]."
+    @"post('result',JSON.stringify(" WING_LIVE_CALL_EXPR @"||"
+    @"[...(window[Symbol.for('wing.edited')]||[])]."
     @"some(e=>e.isConnected&&e.textContent.trim())||[...document."
     @"querySelectorAll('input,textarea')].some(e=>e.value!==e.defaultValue||"
     @"e.checked!==e.defaultChecked)))";
@@ -1858,6 +1916,10 @@ static NSString *const kHasUnsavedInputScript =
   if (_quitting || !identity || page.closed || page.loading ||
       page.audible || (page.view.superview && !_departures[identity]) || page.devToolsView ||
       [_capturingTabs containsObject:identity] || [_pictureInPictureTabs containsObject:identity])
+    return NO;
+  // While anything shares the screen, the shared tab may be any hidden tab:
+  // Chromium does not say which, and a paused one would send a frozen picture.
+  if (_screenSharingTabs.count)
     return NO;
   NSDictionary *state = _lastSync[@"workspace"];
   NSString *active = state[@"activeTabId"];
@@ -1878,7 +1940,9 @@ static NSString *const kHasUnsavedInputScript =
 static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   @"mail.google.com", @"calendar.google.com", @"app.slack.com", @"web.whatsapp.com",
   @"discord.com", @"teams.microsoft.com", @"teams.live.com", @"outlook.office.com",
-  @"outlook.live.com", @"web.telegram.org", @"messages.google.com"
+  @"outlook.live.com", @"web.telegram.org", @"messages.google.com",
+  @"meet.google.com", @"zoom.us", @"whereby.com", @"meet.jit.si", @"webex.com",
+  @"app.gather.town", @"around.co", @"riverside.fm", @"streamyard.com", @"ping.gg"
 ];
 - (BOOL)mayFreezePage:(ArdiaCoreTab *)page {
   NSString *host = [NSURL URLWithString:page.url].host.lowercaseString ?: @"";
@@ -1895,11 +1959,26 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
     WingChromiumHost *host = weakSelf;
     ArdiaCoreTab *page = host ? host->_tabs[identity] : nil;
-    if (page && [host->_freezeGenerations[identity] isEqual:generation] &&
-        [host mayFreezePage:page]) {
-      page.frozen = YES;
-      [host pageChanged:page];
-    }
+    if (!page || ![host->_freezeGenerations[identity] isEqual:generation] ||
+        ![host mayFreezePage:page])
+      return;
+    // A call keeps running with its tab out of sight; check again later.
+    [page evaluate:kLiveCallScript
+        completion:^(NSString *raw) {
+          WingChromiumHost *host = weakSelf;
+          if (!host || ![host->_freezeGenerations[identity] isEqual:generation] ||
+              ![host mayFreezePage:page])
+            return;
+          id value = raw ? Parse(raw) : nil;
+          if ([value isKindOfClass:NSString.class])
+            value = Parse(value);
+          if ([value isKindOfClass:NSNumber.class] && ![value boolValue]) {
+            page.frozen = YES;
+            [host pageChanged:page];
+          } else {
+            [host scheduleFreeze:identity];
+          }
+        }];
   });
 }
 // Anything that runs script in, shows or closes a page wakes it first; a hidden
@@ -1971,6 +2050,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       closeIfEligible();
       continue;
     }
+    if ([_busyUntil[identity] doubleValue] > now)
+      continue;
     dispatch_group_enter(group);
     [self thaw:page];
     [page evaluate:kHasUnsavedInputScript
@@ -1980,6 +2061,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
             value = Parse(value);
           if ([value isKindOfClass:NSNumber.class] && ![value boolValue])
             closeIfEligible();
+          else
+            self->_busyUntil[identity] = @(now + 15 * 60000);
           dispatch_group_leave(group);
         }];
   }
@@ -2436,6 +2519,79 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   return YES;
 }
 // Site prompts attach below the address field the shell last reported.
+// getDisplayMedia from a page: nothing is shared until the person picks.
+- (void)requestDisplayMedia:(ArdiaCoreTab *)tab
+                       json:(NSString *)json
+                      frame:(NSString *)frameId
+                     origin:(NSString *)origin {
+  NSDictionary *request = Parse(json);
+  if (![request isKindOfClass:NSDictionary.class] || ![request[@"id"] isKindOfClass:NSNumber.class])
+    return;
+  NSNumber *requestId = request[@"id"];
+  void (^answer)(NSString *, NSString *) = ^(NSString *sourceId, NSString *audio) {
+    if (tab.closed) return;
+    [tab callFrame:frameId
+              kind:@"displayMedia"
+              json:JSON(@{@"id" : requestId, @"sourceId" : sourceId ?: NSNull.null,
+                          @"audio" : @(audio.length > 0)})];
+  };
+  if (_quitting || tab.closed || !_window) {
+    answer(nil, nil);
+    return;
+  }
+  [_sharePicker close];
+  NSMutableArray *sources = [NSMutableArray new];
+  NSMutableArray *order = [NSMutableArray new];
+  for (NSDictionary *record in _lastSync[@"workspace"][@"tabs"])
+    if ([record[@"id"] isKindOfClass:NSString.class]) [order addObject:record[@"id"]];
+  for (NSString *identity in _tabs)
+    if (![order containsObject:identity]) [order addObject:identity];
+  for (NSString *identity in order) {
+    ArdiaCoreTab *page = _tabs[identity];
+    if (!page || page == tab || page.closed || page.discarded) continue;
+    NSString *sourceId = page.mediaCaptureSourceId;
+    if (!sourceId.length) continue;
+    NSMutableDictionary *source = [@{
+      @"id" : sourceId,
+      @"kind" : @"tab",
+      @"name" : page.title.length ? page.title : (page.url ?: @"Tab"),
+      @"detail" : [NSURL URLWithString:page.url].host ?: @"",
+    } mutableCopy];
+    if (page.favicon) source[@"icon"] = page.favicon;
+    [sources addObject:source];
+  }
+  [sources addObjectsFromArray:WingSharePicker.screenAndWindowSources];
+  NSString *site = [NSURL URLWithString:origin].host ?: [NSURL URLWithString:tab.url].host ?: @"";
+  __weak WingChromiumHost *weakSelf = self;
+  __block __weak WingSharePicker *weakPicker = nil;
+  WingSharePicker *picker = [[WingSharePicker alloc]
+      initWithSite:site
+           sources:sources
+          askAudio:[request[@"audio"] boolValue]
+        completion:^(NSString *sourceId, NSString *audio) {
+          WingChromiumHost *host = weakSelf;
+          if (host && host->_sharePicker == weakPicker) host->_sharePicker = nil;
+          if (sourceId && !tab.closed && !(host && host->_quitting))
+            [ArdiaCoreEngine allowDesktopCapture:sourceId tab:tab frame:frameId origin:origin audio:audio];
+          else
+            sourceId = nil;
+          answer(sourceId, audio);
+        }];
+  weakPicker = picker;
+  _sharePicker = picker;
+  // A page in a mini window asks from that window, not the main one.
+  NSView *page = tab.view;
+  if (page.window && page.window != _window.window) {
+    NSRect bounds = page.bounds;
+    CGFloat top = page.isFlipped ? NSMinY(bounds) : NSMaxY(bounds) - 1;
+    [picker showInView:page
+                anchor:NSMakeRect(NSMidX(bounds) - 1, top, 2, 1)
+                  edge:page.isFlipped ? NSRectEdgeMaxY : NSRectEdgeMinY];
+  } else {
+    // The same place as the other site prompts (see the cast picker).
+    [picker showInView:_window.hostView anchor:[self promptAnchor] edge:NSRectEdgeMaxY];
+  }
+}
 - (NSRect)promptAnchor {
   NSDictionary *anchor = _lastSync[@"anchor"];
   NSView *view = _window.hostView;
@@ -2748,7 +2904,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   // Owned opens are registered by their caller before this deferred check.
   dispatch_async(dispatch_get_main_queue(), ^{
     if (self->_quitting || tab.closed || tab == self->_shell ||
-        [self identityForTab:tab] ||
+        [self identityForTab:tab] || [self->_ownedTabs containsObject:tab] ||
         [self->_protectionTabs.allValues containsObject:tab] ||
         [self->_serviceTabs.allValues containsObject:tab] ||
         [self->_extensionManagers.allValues containsObject:tab])
@@ -2950,8 +3106,19 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   NSString *identity = [self identityForTab:tab];
   if (!identity)
     return;
+  BOOL wasSharing = _screenSharingTabs.count > 0;
   if ([access[@"screen"] boolValue]) [_screenSharingTabs addObject:identity];
   else [_screenSharingTabs removeObject:identity];
+  BOOL sharing = _screenSharingTabs.count > 0;
+  if (sharing != wasSharing) {
+    // The tab being shared may be asleep; wake every paused page while a
+    // share runs, and let hidden ones sleep again a minute after it ends.
+    for (NSString *other in _tabs.allKeys) {
+      ArdiaCoreTab *page = _tabs[other];
+      if (sharing) [self thaw:page];
+      else if (!page.view.superview && !page.discarded && !page.closed) [self scheduleFreeze:other];
+    }
+  }
   if ([access[@"camera"] boolValue] || [access[@"microphone"] boolValue] ||
       [access[@"screen"] boolValue])
     [_capturingTabs addObject:identity];
@@ -3131,6 +3298,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [_pendingCreatedTabs removeObject:identity];
   [_pictureInPictureTabs removeObject:identity];
   [_screenSharingTabs removeObject:identity];
+  [_busyUntil removeObjectForKey:identity];
   if (!_quitting)
     [self send:@"closed" data:@{@"id" : identity, @"archive" : archive}];
 }
@@ -3364,7 +3532,9 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         [ArdiaCoreEngine.sharedEngine
             loadProfile:[@"Wing-" stringByAppendingString:profileId]
              completion:^(ArdiaCoreProfile *loaded) {
-               [self->_loadingProfiles removeObject:profileId];
+               // A profile that failed stays marked until relaunch: retrying
+               // on every sync would only repeat the failure and its message.
+               if (loaded) [self->_loadingProfiles removeObject:profileId];
                if (loaded) {
                  self->_profiles[profileId] = loaded;
                  [self applyLayout];
@@ -3406,8 +3576,16 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                      [NSBundle.mainBundle.resourcePath
                          stringByAppendingPathComponent:@"WingServices"]];
         NSString *extensionId = [profile loadComponentExtension:path];
-        if (!extensionId)
+        if (!extensionId) {
+          // Show the pages unprotected rather than leaving them blank.
+          [_protectedProfiles addObject:profileId];
+          [self send:@"command"
+                data:@{
+                  @"type" : @"toast",
+                  @"message" : @"Ad and tracker blocking could not start for this profile."
+                }];
           continue;
+        }
         // Pages wait (up to 10 s, in the engine) until the blocking rules are
         // in force, so the first page is filtered without a startup document.
         [profile holdNavigationsUntilRulesetsOf:extensionId];
@@ -3618,14 +3796,16 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 // The mini player: a video playing with sound floats into picture in picture
 // when its tab leaves the screen or Wing goes to the background.
 - (void)openMiniPlayer:(ArdiaCoreTab *)page identity:(NSString *)identity {
+  // A call page manages its own video tiles and swaps them as people speak;
+  // floating one would freeze on the first speaker change.
   if (!_automaticPictureInPicture || _quitting || page.closed || page.discarded || page.frozen ||
-      [_pictureInPictureTabs containsObject:identity])
+      [_pictureInPictureTabs containsObject:identity] || [_capturingTabs containsObject:identity])
     return;
   NSTimeInterval asked = NSProcessInfo.processInfo.systemUptime;
   // A video with sound floats; so does a muted one that fills much of the
   // page (a player, not a feed's autoplay preview).
   [page evaluate:@"post('result',JSON.stringify([...document.querySelectorAll('video')].some(v=>{"
-                 @"if(v.paused||v.ended||v.readyState<=2||!v.videoWidth)return false;"
+                 @"if(v.srcObject||v.paused||v.ended||v.readyState<=2||!v.videoWidth)return false;"
                  @"if(!v.muted&&v.volume>0)return true;const r=v.getBoundingClientRect();"
                  @"return r.width*r.height>=0.3*innerWidth*innerHeight})))"
       completion:^(NSString *json) {
@@ -3695,6 +3875,12 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                     frame:(NSString *)frameId
                      main:(BOOL)main
                    origin:(NSString *)origin {
+  // The engine only delivers this with a user gesture and display-capture
+  // allowed by the frame's permissions policy.
+  if ([kind isEqual:@"displayMedia"] && json.length < 1000) {
+    [[WingChromiumHost hostForTab:tab] requestDisplayMedia:tab json:json frame:frameId origin:origin];
+    return;
+  }
   if ([kind isEqual:@"wing-service-event"] && main && json.length < 10000) {
     for (NSString *profileId in _serviceTabs) {
       if (_serviceTabs[profileId] == tab &&
@@ -3950,7 +4136,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   }
   if ([action isEqual:@"protection-url"]) {
     NSString *profile = data[@"profile"];
-    if (!Identifier(profile) || ![_protectedProfiles containsObject:profile]) {
+    if (!Identifier(profile) || ![_protectedProfiles containsObject:profile] ||
+        !_protectionURLs[profile]) {
       [self reply:rid
            result:nil
             error:
@@ -4683,6 +4870,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     }
     id allow = [data[@"allow"] isKindOfClass:NSNumber.class] ? data[@"allow"] : NSNull.null;
     ArdiaCoreTab *helper = [_window openTab:_protectionURLs[profileId] profile:page.profile foreground:NO];
+    if (helper) [_ownedTabs addObject:helper];
     [self allowlist:helper host:host allow:allow reply:rid attempts:400];
     return;
   }

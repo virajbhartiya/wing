@@ -335,8 +335,32 @@ function noteLayoutMode() {
   }
   layoutMode = mode;
 }
+// Mirrors SEARCH_ENGINES in model.cjs, which validates the saved choice.
+const SEARCH_ENGINE_NAMES = [
+  ["google", "Google"],
+  ["duckduckgo", "DuckDuckGo"],
+  ["bing", "Bing"],
+  ["brave", "Brave Search"],
+  ["ecosia", "Ecosia"],
+  ["kagi", "Kagi"],
+  ["startpage", "Startpage"],
+];
+const searchEngineName = (key) =>
+  (SEARCH_ENGINE_NAMES.find(([k]) => k === key) || SEARCH_ENGINE_NAMES[0])[1];
+let renderedActiveTab = null;
 function render() {
   if (!state) return;
+  const activeChanged = state.activeTabId !== renderedActiveTab;
+  const previousActive = renderedActiveTab;
+  renderedActiveTab = state.activeTabId;
+  // Find belongs to the page it searched; clear its highlights there and
+  // start the new page without it.
+  if (activeChanged && previousActive && !$("#find-bar").hidden)
+    closeFind({ keepFocus: true, id: previousActive });
+  if (activeChanged)
+    requestAnimationFrame(() =>
+      $("#sidebar .tab.active")?.scrollIntoView({ block: "nearest" }),
+    );
   noteLayoutMode();
   document.body.classList.toggle(
     "toolbar-hidden",
@@ -514,10 +538,13 @@ function render() {
         )
         .join('<span class="strip-separator" aria-hidden="true"></span>'),
     );
-    $("#strip-tabs .tab.active")?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-    });
+    // Only follow the active tab when it changes, so a strip scrolled by
+    // hand stays put while pages load.
+    if (activeChanged)
+      $("#strip-tabs .tab.active")?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
   }
   $("#address-text").textContent =
     t?.url === "wing://pulls"
@@ -1639,7 +1666,7 @@ function renderPalette(rebuild = true) {
       label: q,
       detail: /^(https?:\/\/\S+|localhost(:\d+)?(\/\S*)?|[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?([/?#]\S*)?)$/i.test(q)
         ? "Go to address"
-        : `Search ${state.settings.search === "duckduckgo" ? "DuckDuckGo" : "Google"}`,
+        : `Search ${searchEngineName(state.settings.search)}`,
       glyph: "search",
       hint: /^(https?:|localhost|[\w-]+\.)/i.test(q) && !/\s/.test(q) ? "Go" : "Search",
       run: () => {
@@ -2042,7 +2069,6 @@ const SHORTCUTS = [
   ["Go to tab 1–8 / last tab", "⌘1–8 / ⌘9"],
   ["Recent tabs", "⌃Tab"],
   ["Switch profile 1–9", "⌃1–9"],
-  ["Go to tab 1–8 / last tab", "⌘1–8 / ⌘9"],
   ["Previous / next Space", "⌥⌘← / ⌥⌘→"],
   ["Pin / unpin tab", "⌘D"],
   ["Toggle sidebar", "⌘S"],
@@ -2314,10 +2340,7 @@ function settingsPanes() {
           "search-engine",
           "Search engine",
           "Used for searches from the command bar.",
-          [
-            ["google", "Google"],
-            ["duckduckgo", "DuckDuckGo"],
-          ],
+          SEARCH_ENGINE_NAMES,
           s.search,
         ) +
         (settingToggle(
@@ -3052,7 +3075,7 @@ function openOnboarding(step = 0) {
         )
         .join(
           "",
-        )}</div><label class="setting-row"><span>Search engine</span><select id="onboarding-search"><option value="google" ${s.search !== "duckduckgo" ? "selected" : ""}>Google</option><option value="duckduckgo" ${s.search === "duckduckgo" ? "selected" : ""}>DuckDuckGo</option></select></label>`,
+        )}</div><label class="setting-row"><span>Search engine</span><select id="onboarding-search">${SEARCH_ENGINE_NAMES.map(([key, name]) => `<option value="${key}" ${(s.search || "google") === key ? "selected" : ""}>${name}</option>`).join("")}</select></label>`,
       primary: "Continue",
     },
     {
@@ -3462,20 +3485,25 @@ $("#favorite-button").onclick = () =>
   act("favorite", { id: state.activeTabId });
 $("#boost-button").onclick = openBoost;
 $("#summarize-button").onclick = () => summarizePage();
-$("#copy-url").onclick = () => {
-  act("copy-url");
-  toast("Address copied.");
+$("#copy-url").onclick = async () => {
+  const r = await act("copy-url");
+  if (r && !r.error) toast("Address copied.");
 };
 $("#clear-today").onclick = () => act("clear-today");
 $("#guide-button").onclick = openHelp;
 $("#promote-peek").onclick = () => act("promote-peek");
-function closeFind() {
+function closeFind({ keepFocus = false, id } = {}) {
+  const focused = $("#find-bar").contains(document.activeElement);
   $("#find-bar").hidden = true;
   $("#find-count").textContent = "";
   $("#find-bar").classList.remove("no-match");
-  act("find", { text: "" });
+  // The previous page may have closed; that needs no message.
+  if (id) window.wing.invoke("find", { text: "", id }).catch(() => {});
+  else act("find", { text: "" });
+  // Typing should go back to the page, not into a hidden field.
+  if (focused && !keepFocus) window.wing.invoke("recent-tabs-focus").catch(() => {});
 }
-$("#find-close").onclick = closeFind;
+$("#find-close").onclick = () => closeFind();
 $("#find-input").oninput = (e) => {
   if (!e.target.value) {
     $("#find-count").textContent = "";
@@ -4038,9 +4066,6 @@ window.wing.onCommand((c) => {
       input.select();
       break;
     }
-    case "toast":
-      toast(c.message);
-      break;
     case "find-result": {
       if (c.id !== state.activeTabId) break;
       const query = $("#find-input").value;

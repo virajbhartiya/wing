@@ -21,8 +21,8 @@ BOOL WingStreamingURL(NSString *url) {
 
 // One persistent store per Wing profile, named by a UUID derived from its id so
 // it survives restarts; private windows share one store that dies with them.
+static NSMutableDictionary<NSString *, WKWebsiteDataStore *> *ephemeralStores;
 static WKWebsiteDataStore *StoreFor(NSString *profileId, BOOL ephemeral) {
-  static NSMutableDictionary<NSString *, WKWebsiteDataStore *> *ephemeralStores;
   if (ephemeral) {
     if (!ephemeralStores)
       ephemeralStores = [NSMutableDictionary new];
@@ -55,6 +55,10 @@ static NSArray<NSString *> *const kObserved =
   WKWebView *_web;
   NSString *_favicon;
   BOOL _closed;
+}
++ (void)releaseEphemeralStores {
+  // Pages still open keep their own reference; new ones get a fresh store.
+  [ephemeralStores removeAllObjects];
 }
 
 - (instancetype)initWithProfile:(NSString *)profileId ephemeral:(BOOL)ephemeral {

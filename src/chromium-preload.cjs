@@ -160,7 +160,18 @@ window.addEventListener("wing-native", (event) => {
     });
   else if (workspace && kind === "page")
     enqueue(async () => {
-      await publish(workspace.pageChanged(data));
+      const urlOf = () => workspace.state.tabs.find((t) => t.id === data.id)?.url;
+      const before = urlOf();
+      // Progress, audio and zoom ticks change nothing native keeps; only the
+      // interface needs them, at most once a frame.
+      if (!workspace.pageChanged(data)) return notifyRuntime();
+      // A new address is saved at once. Titles and icons change constantly
+      // (unread counters), so they are saved a few seconds later in one write.
+      if (urlOf() !== before) await publish(true);
+      else {
+        await publish(false);
+        persistSoon();
+      }
     });
   else if (workspace && kind === "closed")
     enqueue(async () => {
@@ -287,7 +298,30 @@ function updateShellRaise(lowerDelay = 0) {
   if (wanted || !lowerDelay) return apply();
   shellLowerTimer = setTimeout(apply, lowerDelay);
 }
+let runtimeFrame = 0;
+function notifyRuntime() {
+  if (runtimeFrame) return;
+  const flush = () => {
+    runtimeFrame = 0;
+    const snapshot = workspace.snapshot(version);
+    states.forEach((callback) => callback(snapshot));
+  };
+  // A hidden shell gets no frames; a short timer still delivers the update.
+  runtimeFrame = document.hidden ? setTimeout(flush, 100) : requestAnimationFrame(flush);
+}
+let persistTimer = null;
+function persistSoon() {
+  if (persistTimer || privateMode) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    enqueue(() => publish(true));
+  }, 3000);
+}
 async function publish(persist = true, sync = true) {
+  if (persist && persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
   updateShellRaise(260);
   const snapshot = workspace.snapshot(version);
   const address = document.querySelector("#address")?.getBoundingClientRect();
@@ -363,10 +397,7 @@ function openMini(url, spaceId) {
   return native("mini-open", {
     url: url || "",
     spaceId: spaceId || s.activeSpaceId,
-    search:
-      s.settings.search === "duckduckgo"
-        ? "https://duckduckgo.com/?q="
-        : "https://www.google.com/search?q=",
+    search: M.searchURL(s.settings),
     spaces: s.spaces.map(({ id, name, icon, profileId }) => ({ id, name, icon, profileId })),
   });
 }
