@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/brand/readme-banner.png" alt="Wing, an open-source browser for Mac" width="100%"></p>
+
 # Wing
 
 An independent, open-source desktop browser for Apple Silicon Macs, with Safari's layout and Arc's design: Spaces, a command palette, split view and Peek. It runs on a native Chromium engine, so Chrome extensions install directly from the Chrome Web Store.

@@ -253,7 +253,7 @@ function tabForShortcut(tabs, splits, index) {
   return index === 8 ? ordered.at(-1) : ordered[index];
 }
 
-const APP_ICONS = ["violet", "midnight", "paper", "coral", "ocean", "forest", "gold"];
+const APP_ICONS = ["midnight", "violet", "paper", "coral", "ocean", "forest", "gold"];
 // New workspaces get this choice in onboarding instead.
 function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
   return (
