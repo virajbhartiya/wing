@@ -611,7 +611,8 @@ function render() {
   $("#pulls").hidden = !showingPulls;
   $("#page-error").hidden = !failed;
   if (failed) $("#page-error").innerHTML = errorPage(t);
-  $("#peek-frame").hidden = !state.peek;
+  // The native engine draws Peek's card and header itself.
+  $("#peek-frame").hidden = !state.peek || window.wing.engine === "chromium";
   if (state.peek)
     $("#peek-title").textContent =
       state.peek.title + " · " + host(state.peek.url);

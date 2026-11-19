@@ -113,7 +113,14 @@ test("native Peek is transient, promotes the same tab, and leaves the original s
     workspace.snapshot().tabs.some((t) => t.id === peek),
     false,
   );
-  assert.equal(workspace.layout(1200, 800)[0].id, peek);
+  const panes = workspace.layout(1200, 800);
+  assert.equal(panes.at(-1).id, peek);
+  assert.equal(panes.at(-1).peek, true);
+  // The page behind stays where it was; the Peek floats inside it.
+  for (const pane of panes.slice(0, -1)) {
+    assert.ok(panes.at(-1).x > pane.x && panes.at(-1).y > pane.y);
+    assert.ok(panes.at(-1).x + panes.at(-1).width < pane.x + pane.width);
+  }
   workspace.action("promote-peek");
   assert.equal(workspace.state.activeTabId, peek);
   assert.equal(
