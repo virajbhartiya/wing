@@ -392,13 +392,31 @@ async function library() {
     archive: workspace.state.archive.filter((row) => spaces.has(row.spaceId)),
   };
 }
+// The mini window draws its own toolbar, so it gets the Space's colors to match.
+function miniChrome(space, dark) {
+  const c = theme.resolveColors(space, dark);
+  return {
+    dark,
+    base: c["--base"],
+    text: c["--ink"],
+    muted: c["--muted"],
+    hover: c["--hover"],
+    selected: c["--selected"],
+  };
+}
 function openMini(url, spaceId) {
   const s = workspace.state;
   return native("mini-open", {
     url: url || "",
     spaceId: spaceId || s.activeSpaceId,
     search: M.searchURL(s.settings),
-    spaces: s.spaces.map(({ id, name, icon, profileId }) => ({ id, name, icon, profileId })),
+    spaces: s.spaces.map((space) => ({
+      id: space.id,
+      name: space.name,
+      icon: space.icon,
+      profileId: space.profileId,
+      chrome: miniChrome(space, !!s.settings.dark),
+    })),
   });
 }
 async function developerAction(action, data) {

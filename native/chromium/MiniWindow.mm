@@ -3,6 +3,90 @@
 
 static NSMutableArray *gMinis;
 
+// Space colors arrive as the shell's CSS hex strings: #rgb, #rrggbb or #rrggbbaa.
+static NSColor *WingHexColor(id value, NSColor *fallback) {
+  if (![value isKindOfClass:NSString.class] || ![value hasPrefix:@"#"]) return fallback;
+  NSString *hex = [value substringFromIndex:1];
+  if (hex.length == 3)
+    hex = [NSString stringWithFormat:@"%1$@%1$@%2$@%2$@%3$@%3$@", [hex substringWithRange:NSMakeRange(0, 1)],
+                                     [hex substringWithRange:NSMakeRange(1, 1)], [hex substringWithRange:NSMakeRange(2, 1)]];
+  if (hex.length == 6) hex = [hex stringByAppendingString:@"ff"];
+  unsigned rgba = 0;
+  if (hex.length != 8 || ![[NSScanner scannerWithString:hex] scanHexInt:&rgba]) return fallback;
+  return [NSColor colorWithSRGBRed:((rgba >> 24) & 0xff) / 255.0
+                             green:((rgba >> 16) & 0xff) / 255.0
+                              blue:((rgba >> 8) & 0xff) / 255.0
+                             alpha:(rgba & 0xff) / 255.0];
+}
+
+// The shell's toolbar controls: no bezel, a rounded fill on hover and press.
+@interface WingChromeControl : NSView
+@property(nonatomic) NSColor *hoverColor, *pressColor;
+@property(nonatomic) BOOL pressed;
+@end
+@implementation WingChromeControl {
+  NSTrackingArea *_area;
+  BOOL _hover;
+}
+- (instancetype)initWithFrame:(NSRect)frame {
+  if ((self = [super initWithFrame:frame])) {
+    self.wantsLayer = YES;
+    self.layer.cornerRadius = 8;
+    self.layer.cornerCurve = @"continuous";
+  }
+  return self;
+}
+- (void)updateTrackingAreas {
+  [super updateTrackingAreas];
+  if (_area) [self removeTrackingArea:_area];
+  _area = [[NSTrackingArea alloc]
+      initWithRect:NSZeroRect
+           options:NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect
+             owner:self
+          userInfo:nil];
+  [self addTrackingArea:_area];
+}
+- (BOOL)active {
+  for (NSView *view in self.subviews)
+    if ([view isKindOfClass:NSControl.class] && !((NSControl *)view).enabled) return NO;
+  return YES;
+}
+- (void)paint {
+  NSColor *fill = !self.active ? nil : self.pressed ? self.pressColor : _hover ? self.hoverColor : self.restColor;
+  self.layer.backgroundColor = fill.CGColor;
+}
+- (NSColor *)restColor { return nil; }
+- (void)setPressed:(BOOL)pressed { _pressed = pressed; [self paint]; }
+- (void)setHoverColor:(NSColor *)color { _hoverColor = color; [self paint]; }
+- (void)mouseEntered:(NSEvent *)event { _hover = YES; [self paint]; }
+- (void)mouseExited:(NSEvent *)event { _hover = NO; [self paint]; }
+@end
+
+@interface WingChromeButton : NSButton
+@end
+@implementation WingChromeButton
+- (void)mouseDown:(NSEvent *)event {
+  WingChromeControl *backing = (WingChromeControl *)self.superview;
+  backing.pressed = YES;
+  [super mouseDown:event];
+  backing.pressed = NO;
+}
+- (void)setEnabled:(BOOL)enabled {
+  super.enabled = enabled;
+  self.alphaValue = enabled ? 1 : 0.4;
+  [(WingChromeControl *)self.superview paint];
+}
+@end
+
+// The address field sits in a pill filled with the Space's hover color.
+@interface WingAddressPill : WingChromeControl
+@property(nonatomic) NSColor *restFill;
+@end
+@implementation WingAddressPill
+- (NSColor *)restColor { return self.restFill; }
+- (void)setRestFill:(NSColor *)color { _restFill = color; [self paint]; }
+@end
+
 @interface WingMiniWindow () <ArdiaCoreWindowDelegate, ArdiaCoreTabDelegate, NSToolbarDelegate,
                               NSTextFieldDelegate>
 @end
@@ -12,15 +96,14 @@ static NSMutableArray *gMinis;
   ArdiaCoreTab *_tab;
   NSTextField *_address;
   NSPopUpButton *_profile;
-  NSToolbarItem *_back, *_forward, *_expand;
+  WingChromeControl *_back, *_forward, *_reload, *_expand;
+  WingAddressPill *_pill;
   NSArray<NSDictionary *> *_spaces;
   NSString *_spaceId, *_search, *_lastVisit;
   WingMiniProfileLoader _loader;
   WingMiniExpand _expandHandler;
   WingMiniVisit _visit;
   BOOL _closing, _opening;
-  NSLayoutConstraint *_addressWidth;
-  id _resizeObserver;
 }
 
 + (NSUInteger)openCount {
@@ -102,8 +185,16 @@ static NSMutableArray *gMinis;
   _opening = NO;
   _tab.delegate = self;
   NSView *host = _core.hostView;
-  _tab.view.frame = host.bounds;
+  // A rounded card on the Space's color, like pages in the main window.
+  NSRect card = NSInsetRect(host.bounds, 6, 0);
+  card.size.height -= 6;
+  if (!host.isFlipped) card.origin.y += 6;
+  _tab.view.frame = card;
   _tab.view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  _tab.view.wantsLayer = YES;
+  _tab.view.layer.cornerRadius = 10;
+  _tab.view.layer.cornerCurve = @"continuous";
+  _tab.view.layer.masksToBounds = YES;
   [host addSubview:_tab.view];
   [_tab noteShownByHost:YES];
   [_core activateTab:_tab];
@@ -116,99 +207,155 @@ static NSMutableArray *gMinis;
     NSWindow *window = _core.window;
     window.title = @"Mini Wing";
     window.minSize = NSMakeSize(520, 300);
-    window.toolbarStyle = NSWindowToolbarStyleUnifiedCompact;
+    window.toolbarStyle = NSWindowToolbarStyleUnified;
     window.titleVisibility = NSWindowTitleHidden;
+    window.titlebarAppearsTransparent = YES;
+    window.titlebarSeparatorStyle = NSTitlebarSeparatorStyleNone;
     NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"WingMiniToolbar"];
     toolbar.delegate = self;
     toolbar.displayMode = NSToolbarDisplayModeIconOnly;
     window.toolbar = toolbar;
-    __weak WingMiniWindow *weakSelf = self;
-    _resizeObserver = [NSNotificationCenter.defaultCenter
-        addObserverForName:NSWindowDidResizeNotification
-                    object:window
-                     queue:NSOperationQueue.mainQueue
-                usingBlock:^(NSNotification *note) {
-                  [weakSelf fitAddress];
-                }];
-    [self fitAddress];
+    [self buildBar];
     [window center];
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
     if (!url.length && !adopted) [window makeFirstResponder:_address];
   }
+  [self applyTheme];
   [self refresh];
+}
+
+// The window takes the chosen Space's frame color and light or dark look.
+- (void)applyTheme {
+  NSDictionary *chrome = nil;
+  for (NSDictionary *space in _spaces)
+    if ([space[@"id"] isEqual:_spaceId] && [space[@"chrome"] isKindOfClass:NSDictionary.class])
+      chrome = space[@"chrome"];
+  BOOL dark = chrome ? [chrome[@"dark"] boolValue]
+                     : [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[
+                         NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+                       ]] == NSAppearanceNameDarkAqua;
+  NSWindow *window = _core.window;
+  window.appearance = [NSAppearance appearanceNamed:dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua];
+  NSColor *base = WingHexColor(chrome[@"base"], NSColor.windowBackgroundColor);
+  NSColor *ink = WingHexColor(chrome[@"text"], NSColor.labelColor);
+  NSColor *muted = WingHexColor(chrome[@"muted"], NSColor.secondaryLabelColor);
+  NSColor *hover = WingHexColor(chrome[@"hover"], [NSColor.labelColor colorWithAlphaComponent:0.08]);
+  NSColor *selected = WingHexColor(chrome[@"selected"], [NSColor.labelColor colorWithAlphaComponent:0.14]);
+  window.backgroundColor = base;
+  _core.hostView.wantsLayer = YES;
+  _core.hostView.layer.backgroundColor = base.CGColor;
+  for (WingChromeControl *backing in @[ _back ?: NSNull.null, _forward ?: NSNull.null, _reload ?: NSNull.null,
+                                        _expand ?: NSNull.null ]) {
+    if (![backing isKindOfClass:WingChromeControl.class]) continue;
+    backing.hoverColor = hover;
+    backing.pressColor = selected;
+    ((NSButton *)backing.subviews.firstObject).contentTintColor = muted;
+  }
+  _pill.restFill = hover;
+  _pill.hoverColor = selected;
+  _pill.pressColor = selected;
+  _address.textColor = ink;
+  _address.placeholderAttributedString = [[NSAttributedString alloc]
+      initWithString:@"Search or enter website"
+          attributes:@{NSForegroundColorAttributeName : muted, NSFontAttributeName : _address.font ?: [NSFont systemFontOfSize:13]}];
+  _profile.contentTintColor = muted;
 }
 
 #pragma mark Toolbar
 
+// macOS 26 wraps toolbar items in glass capsules that look nothing like the
+// main window. The toolbar stays empty, only to give the title bar its height,
+// and Wing's own controls sit in the title bar instead.
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
-  return @[ @"back", @"forward", @"address", @"profile", @"expand" ];
+  return @[];
 }
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
-  return [self toolbarDefaultItemIdentifiers:toolbar];
+  return @[];
 }
-- (NSToolbarItem *)button:(NSString *)identifier
-                   symbol:(NSString *)symbol
-                    label:(NSString *)label
-                   action:(SEL)action {
-  NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-  item.image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:label];
-  item.label = label;
-  item.toolTip = label;
-  item.bordered = YES;
-  item.target = self;
-  item.action = action;
-  return item;
+- (WingChromeControl *)button:(NSString *)symbol label:(NSString *)label action:(SEL)action {
+  NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:label];
+  image = [image imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14
+                                                                                             weight:NSFontWeightMedium]];
+  WingChromeButton *button = [WingChromeButton buttonWithImage:image target:self action:action];
+  button.bordered = NO;
+  button.imageScaling = NSImageScaleNone;
+  button.toolTip = label;
+  button.frame = NSMakeRect(0, 0, 30, 28);
+  button.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  WingChromeControl *backing = [[WingChromeControl alloc] initWithFrame:button.frame];
+  [backing addSubview:button];
+  [backing.widthAnchor constraintEqualToConstant:30].active = YES;
+  [backing.heightAnchor constraintEqualToConstant:28].active = YES;
+  return backing;
 }
-- (NSToolbarItem *)toolbar:(NSToolbar *)toolbar
-        itemForItemIdentifier:(NSToolbarItemIdentifier)identifier
-    willBeInsertedIntoToolbar:(BOOL)flag {
-  if ([identifier isEqual:@"back"])
-    return _back = [self button:identifier symbol:@"chevron.left" label:@"Back" action:@selector(goBack:)];
-  if ([identifier isEqual:@"forward"])
-    return _forward = [self button:identifier symbol:@"chevron.right" label:@"Forward" action:@selector(goForward:)];
-  if ([identifier isEqual:@"expand"])
-    return _expand = [self button:identifier
-                           symbol:@"arrow.up.left.and.arrow.down.right"
-                            label:@"Open in Wing"
-                           action:@selector(expand:)];
-  NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
-  if ([identifier isEqual:@"profile"]) {
-    _profile = [NSPopUpButton new];
-    _profile.bezelStyle = NSBezelStyleToolbar;
-    for (NSDictionary *space in _spaces) {
-      NSString *title = [NSString stringWithFormat:@"%@ %@", space[@"icon"] ?: @"", space[@"name"] ?: @""];
-      [_profile addItemWithTitle:[title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
-      _profile.lastItem.representedObject = space[@"id"];
-      if ([space[@"id"] isEqual:_spaceId]) [_profile selectItem:_profile.lastItem];
-    }
-    _profile.target = self;
-    _profile.action = @selector(chooseProfile:);
-    [_profile.widthAnchor constraintLessThanOrEqualToConstant:120].active = YES;
-    _profile.toolTip = @"Open in profile";
-    item.view = _profile;
-    item.label = @"Profile";
-    return item;
+- (void)buildBar {
+  NSWindow *window = _core.window;
+  NSView *titlebar = [window standardWindowButton:NSWindowCloseButton].superview;
+  if (!titlebar) return;
+  _back = [self button:@"arrow.left" label:@"Back" action:@selector(goBack:)];
+  _forward = [self button:@"arrow.right" label:@"Forward" action:@selector(goForward:)];
+  _reload = [self button:@"arrow.clockwise" label:@"Reload" action:@selector(reloadOrStop:)];
+  _expand = [self button:@"arrow.up.left.and.arrow.down.right" label:@"Open in Wing" action:@selector(expand:)];
+
+  _profile = [NSPopUpButton new];
+  _profile.bordered = NO;
+  _profile.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+  for (NSDictionary *space in _spaces) {
+    NSString *title = [NSString stringWithFormat:@"%@ %@", space[@"icon"] ?: @"", space[@"name"] ?: @""];
+    [_profile addItemWithTitle:[title stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet]];
+    _profile.lastItem.representedObject = space[@"id"];
+    if ([space[@"id"] isEqual:_spaceId]) [_profile selectItem:_profile.lastItem];
   }
+  _profile.target = self;
+  _profile.action = @selector(chooseProfile:);
+  [_profile.widthAnchor constraintLessThanOrEqualToConstant:140].active = YES;
+  [_profile setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+  _profile.toolTip = @"Open in profile";
+
   _address = [NSTextField new];
   _address.placeholderString = @"Search or enter website";
-  _address.bezelStyle = NSTextFieldRoundedBezel;
+  _address.bezeled = NO;
+  _address.bordered = NO;
+  _address.drawsBackground = NO;
+  _address.focusRingType = NSFocusRingTypeNone;
   _address.alignment = NSTextAlignmentCenter;
-  _address.font = [NSFont systemFontOfSize:12];
+  _address.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
   _address.lineBreakMode = NSLineBreakByTruncatingTail;
   _address.cell.scrollable = YES;
   _address.cell.usesSingleLineMode = YES;
   _address.target = self;
   _address.action = @selector(go:);
   _address.delegate = self;
-  // The field takes whatever the toolbar has left, pushing Profile and Open in
-  // Wing to the trailing edge.
-  _addressWidth = [_address.widthAnchor constraintEqualToConstant:280];
-  _addressWidth.active = YES;
-  [self fitAddress];
-  item.view = _address;
-  item.label = @"Address";
-  return item;
+  _address.translatesAutoresizingMaskIntoConstraints = NO;
+  _pill = [WingAddressPill new];
+  _pill.layer.cornerRadius = 10;
+  [_pill addSubview:_address];
+  [_pill setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+  [_pill setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+  NSStackView *bar = [NSStackView stackViewWithViews:@[ _back, _forward, _reload, _pill, _profile, _expand ]];
+  bar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+  bar.alignment = NSLayoutAttributeCenterY;
+  bar.spacing = 2;
+  [bar setCustomSpacing:10 afterView:_reload];
+  [bar setCustomSpacing:8 afterView:_pill];
+  [bar setCustomSpacing:4 afterView:_profile];
+  bar.translatesAutoresizingMaskIntoConstraints = NO;
+  [titlebar addSubview:bar];
+  // Past the traffic lights, like the main window's toolbar.
+  NSView *zoom = [window standardWindowButton:NSWindowZoomButton];
+  [NSLayoutConstraint activateConstraints:@[
+    [_pill.heightAnchor constraintEqualToConstant:31],
+    [_address.leadingAnchor constraintEqualToAnchor:_pill.leadingAnchor constant:12],
+    [_address.trailingAnchor constraintEqualToAnchor:_pill.trailingAnchor constant:-12],
+    [_address.centerYAnchor constraintEqualToAnchor:_pill.centerYAnchor],
+    [bar.leadingAnchor constraintEqualToAnchor:zoom ? zoom.trailingAnchor : titlebar.leadingAnchor
+                                      constant:zoom ? 14 : 84],
+    [bar.trailingAnchor constraintEqualToAnchor:titlebar.trailingAnchor constant:-10],
+    [bar.centerYAnchor constraintEqualToAnchor:zoom ? zoom.centerYAnchor : titlebar.centerYAnchor],
+  ]];
 }
 
 // Like Safari's compact bar: the site name at rest, the full address to edit.
@@ -219,17 +366,6 @@ static NSMutableArray *gMinis;
 - (void)controlTextDidEndEditing:(NSNotification *)notification {
   _address.alignment = NSTextAlignmentCenter;
   [self refresh];
-}
-
-// NSToolbar never stretches a view item on its own, so size the field to
-// what the window has left after the fixed controls.
-- (void)fitAddress {
-  CGFloat width = NSWidth(_core.window.frame);
-  if (!_addressWidth || width <= 0) return;
-  // Traffic lights, back/forward, the profile menu (capped at 120) and Open in Wing.
-  CGFloat profile = _profile ? MIN(120, _profile.fittingSize.width) : 110;
-  CGFloat reserved = 92 + 76 + profile + 64;
-  _addressWidth.constant = MAX(140, width - reserved);
 }
 
 #pragma mark Actions
@@ -264,6 +400,10 @@ static NSMutableArray *gMinis;
 }
 - (void)goBack:(id)sender { [_tab goBack]; }
 - (void)goForward:(id)sender { [_tab goForward]; }
+- (void)reloadOrStop:(id)sender {
+  if (_tab.loading) [_tab stop];
+  else [_tab reload];
+}
 - (void)chooseProfile:(id)sender {
   NSString *chosen = _profile.selectedItem.representedObject;
   if (!chosen || [chosen isEqual:_spaceId]) return;
@@ -320,9 +460,17 @@ static NSMutableArray *gMinis;
   if (_closing) return;
   NSString *url = [self visibleURL];
   _core.window.title = _tab.title.length && url.length ? _tab.title : @"Mini Wing";
-  _back.enabled = _tab.canGoBack;
-  _forward.enabled = _tab.canGoForward;
-  _expand.enabled = url.length > 0;
+  ((NSButton *)_back.subviews.firstObject).enabled = _tab.canGoBack;
+  ((NSButton *)_forward.subviews.firstObject).enabled = _tab.canGoForward;
+  ((NSButton *)_expand.subviews.firstObject).enabled = url.length > 0;
+  NSButton *reload = _reload.subviews.firstObject;
+  NSString *symbol = _tab.loading ? @"xmark" : @"arrow.clockwise";
+  if (![reload.image.accessibilityDescription isEqual:symbol]) {
+    reload.image = [[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:symbol]
+        imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14
+                                                                                    weight:NSFontWeightMedium]];
+    reload.toolTip = _tab.loading ? @"Stop" : @"Reload";
+  }
   if (_address.currentEditor) return;
   NSString *host = [NSURL URLWithString:url].host;
   if ([host hasPrefix:@"www."]) host = [host substringFromIndex:4];
@@ -397,7 +545,6 @@ static NSMutableArray *gMinis;
 - (BOOL)windowShouldClose:(ArdiaCoreWindow *)window {
   if (_closing) return YES;
   _closing = YES;
-  [NSNotificationCenter.defaultCenter removeObserver:_resizeObserver];
   _tab.delegate = nil;
   [_tab closeNow];
   [gMinis removeObject:self];
