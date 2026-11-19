@@ -348,7 +348,8 @@ footer > .icon {
 #spaces {
   display: flex;
   align-items: center;
-  justify-content: center;
+  /* Overflowing dots stay reachable instead of clipping off the left. */
+  justify-content: safe center;
   gap: 5px;
   flex: 1;
   overflow: auto;
@@ -2863,6 +2864,9 @@ body.tabs-top #show-sidebar {
 body.tabs-top #toolbar-spaces {
   display: flex;
   gap: 2px;
+  max-width: 40vw;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
 #toolbar-spaces .space-dot {
   width: 26px;

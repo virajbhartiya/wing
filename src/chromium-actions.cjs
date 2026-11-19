@@ -99,7 +99,15 @@ function installBrowserActions(wing) {
         }
       };
       this.addEventListener("pins-changed", () => this.refresh().catch(() => {}));
-      this.unsubscribe = wing.onState(() => this.refresh().catch(() => {}));
+      // Action badges depend on the page shown, not on every page event.
+      let shown = null;
+      this.unsubscribe = wing.onState((state) => {
+        const active = state?.tabs?.find((t) => t.id === state.activeTabId);
+        const key = `${state?.activeTabId}\n${active?.url}`;
+        if (key === shown) return;
+        shown = key;
+        this.refresh().catch(() => {});
+      });
       this.timer = setInterval(() => this.refresh().catch(() => {}), 2000);
       this.refresh().catch(() => {});
     }

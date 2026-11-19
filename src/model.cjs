@@ -18,6 +18,19 @@ const INTERNAL_PATTERN =
 function internalPage(url) {
   return INTERNAL_PATTERN.test(String(url || ""));
 }
+// Search engines offered in Settings, keyed by the saved setting.
+const SEARCH_ENGINES = {
+  google: { name: "Google", url: "https://www.google.com/search?q=" },
+  duckduckgo: { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
+  bing: { name: "Bing", url: "https://www.bing.com/search?q=" },
+  brave: { name: "Brave Search", url: "https://search.brave.com/search?q=" },
+  ecosia: { name: "Ecosia", url: "https://www.ecosia.org/search?q=" },
+  kagi: { name: "Kagi", url: "https://kagi.com/search?q=" },
+  startpage: { name: "Startpage", url: "https://www.startpage.com/do/search?q=" },
+};
+function searchURL(settings) {
+  return (SEARCH_ENGINES[settings?.search] || SEARCH_ENGINES.google).url;
+}
 function normalizeURL(input, search = "https://www.google.com/search?q=") {
   const value = String(input || "").trim();
   if (!value || value === "wing://home") return "wing://home";
@@ -510,7 +523,7 @@ function validateState(value) {
   );
   if (![0, 12, 24, 168].includes(settings.archiveHours))
     settings.archiveHours = 12;
-  if (!["google", "duckduckgo"].includes(settings.search))
+  if (!Object.hasOwn(SEARCH_ENGINES, settings.search))
     settings.search = "google";
   if (!["top", "sidebar"].includes(settings.tabLayout))
     settings.tabLayout = "top";
@@ -648,6 +661,8 @@ function removeEmptyProfiles(state) {
   return [...removed];
 }
 module.exports = {
+  SEARCH_ENGINES,
+  searchURL,
   BUILT_IN_PROFILES,
   removeEmptyProfiles,
   removeThrowawaySpaces,

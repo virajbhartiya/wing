@@ -136,9 +136,7 @@ class ChromiumWorkspace {
     const normalize = (input) =>
       M.normalizeURL(
         N.resolveInput(input, s.settings),
-        s.settings.search === "duckduckgo"
-          ? "https://duckduckgo.com/?q="
-          : undefined,
+        M.searchURL(s.settings),
       );
     switch (name) {
       case "settings":
@@ -148,7 +146,7 @@ class ChromiumWorkspace {
           s.settings.maxLiveTabs = data.maxLiveTabs;
         if ([0, 12, 24, 168].includes(data.archiveHours))
           s.settings.archiveHours = data.archiveHours;
-        if (["google", "duckduckgo"].includes(data.search))
+        if (Object.hasOwn(M.SEARCH_ENGINES, data.search))
           s.settings.search = data.search;
         break;
       case "features-settings": {
