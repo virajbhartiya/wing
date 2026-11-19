@@ -516,6 +516,28 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
           [self reply:rid result:result[@"value"] error:result[@"error"]];
       }];
 }
+// Where a site prompt for this page goes: under the address field for a tab,
+// or at the top of the page for one in a mini window. NO for anything else.
+- (BOOL)promptPlaceFor:(ArdiaCoreTab *)tab
+                  view:(NSView *__strong *)view
+                anchor:(NSRect *)anchor
+                window:(NSWindow *__strong *)window {
+  if (!tab || tab.closed) return NO;
+  if ([self identityForTab:tab]) {
+    *view = _window.hostView;
+    *anchor = [self promptAnchor];
+    *window = _window.window;
+    return YES;
+  }
+  NSWindow *mini = self == gMainHost ? [WingMiniWindow windowForTab:tab] : nil;
+  NSView *page = tab.view;
+  if (!mini || page.window != mini) return NO;
+  NSRect bounds = page.bounds;
+  *view = page;
+  *anchor = NSMakeRect(NSMidX(bounds) - 1, page.isFlipped ? NSMinY(bounds) : NSMaxY(bounds) - 2, 2, 2);
+  *window = mini;
+  return YES;
+}
 - (void)engine:(ArdiaCoreEngine *)engine
     permissionRequest:(NSDictionary *)request
                   tab:(ArdiaCoreTab *)tab {
@@ -527,7 +549,10 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
     [owner engine:engine permissionRequest:request tab:tab];
     return;
   }
-  if (![self identityForTab:tab] || tab.closed) {
+  NSView *promptView;
+  NSRect promptAnchor;
+  NSWindow *promptWindow;
+  if (![self promptPlaceFor:tab view:&promptView anchor:&promptAnchor window:&promptWindow]) {
     [ArdiaCoreEngine resolvePermission:requestId result:@"deny" remember:NO];
     return;
   }
@@ -536,8 +561,8 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   NSArray *kinds = request[@"permissions"];
   NSString *wants = PermissionPhrase(kinds);
   _permissionAlerts[requestId] = [WingPromptPopover
-      showInView:_window.hostView
-          anchor:[self promptAnchor]
+      showInView:promptView
+          anchor:promptAnchor
           symbol:PermissionSymbol(kinds)
            title:[NSString stringWithFormat:@"Allow “%@” to %@?", site, wants]
          message:@"You can change this anytime in Site Controls."
@@ -578,11 +603,14 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   if (![identity isKindOfClass:NSNumber.class]) return;
   WingDeviceChooser *chooser = _deviceChoosers[identity];
   if (!chooser && [state[@"open"] boolValue]) {
-    if (_quitting || ![self identityForTab:tab] || tab.closed) {
+    NSView *promptView;
+    NSRect promptAnchor;
+    NSWindow *promptWindow;
+    if (_quitting || ![self promptPlaceFor:tab view:&promptView anchor:&promptAnchor window:&promptWindow]) {
       [ArdiaCoreEngine cancelDeviceChooser:identity.intValue];
       return;
     }
-    chooser = [[WingDeviceChooser alloc] initWithTab:tab window:_window.window];
+    chooser = [[WingDeviceChooser alloc] initWithTab:tab window:promptWindow];
     __weak WingChromiumHost *host = self;
     chooser.onClose = ^{
       WingChromiumHost *owner = host;

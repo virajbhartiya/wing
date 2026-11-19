@@ -19,6 +19,8 @@ typedef void (^WingMiniVisit)(NSString *url, NSString *title, NSString *spaceId)
 // Keeps app menu actions from reaching the main window behind a key mini window.
 + (BOOL)performMenuAction:(NSString *)name args:(NSDictionary *)args;
 + (NSUInteger)openCount;
+// The mini window showing this page, if any; site prompts for it appear there.
++ (nullable NSWindow *)windowForTab:(ArdiaCoreTab *)tab;
 + (NSArray<NSDictionary *> *)diagnostics;
 + (void)closeAll;
 // Qualification only: presses Open in Wing on the first mini window.
