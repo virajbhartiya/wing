@@ -2286,8 +2286,8 @@ document.addEventListener("click", (e) => {
   }
 }, true);
 const APP_ICONS = [
-  ["violet", "Violet"],
   ["midnight", "Midnight"],
+  ["violet", "Violet"],
   ["paper", "Paper"],
   ["coral", "Coral"],
   ["ocean", "Ocean"],
@@ -2332,7 +2332,7 @@ function settingsPanes() {
               "Shown in the Dock while Wing is open.",
               `<div class="app-icons" role="radiogroup" aria-label="App icon">${APP_ICONS.map(
                 ([id, label], i) =>
-                  `<button type="button" data-app-icon="${id}" title="${label}" aria-label="${label}" class="${(APP_ICONS.some(([x]) => x === s.appIcon) ? s.appIcon : "violet") === id ? "selected" : ""}"><img src="../assets/icons/${id}.png" alt=""></button>`,
+                  `<button type="button" data-app-icon="${id}" title="${label}" aria-label="${label}" class="${(APP_ICONS.some(([x]) => x === s.appIcon) ? s.appIcon : "midnight") === id ? "selected" : ""}"><img src="../assets/icons/${id}.png" alt=""></button>`,
               ).join("")}</div>`,
               "logo dock icon variant",
             )) +

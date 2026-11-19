@@ -2652,14 +2652,14 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 }
 // The Dock icon set above lasts only while Wing runs. Finder, Launchpad and a
 // quit Dock read the bundle, which every reinstall replaces, so the chosen icon
-// is written onto the bundle again whenever it is missing. Violet is the default.
+// is written onto the bundle again whenever it is missing. Midnight is the default.
 - (void)stampBundleIcon:(NSString *)name image:(NSImage *)image {
   NSBundle *bundle = NSBundle.mainBundle;
   if ([bundle.infoDictionary[@"WingQualificationOnly"] boolValue]) return;
   NSString *marker = [bundle.bundlePath stringByAppendingPathComponent:@"Icon\r"];
   BOOL stamped = [NSFileManager.defaultManager fileExistsAtPath:marker];
   NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  BOOL wanted = ![name isEqual:@"violet"];
+  BOOL wanted = ![name isEqual:@"midnight"];
   if (wanted ? stamped && [[defaults stringForKey:@"WingBundleIcon"] isEqual:name] : !stamped) return;
   if ([NSWorkspace.sharedWorkspace setIcon:wanted ? image : nil forFile:bundle.bundlePath options:0])
     [defaults setObject:wanted ? name : nil forKey:@"WingBundleIcon"];
@@ -4289,7 +4289,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     return;
   }
   if ([action isEqual:@"app-icon"]) {
-    NSSet *known = [NSSet setWithArray:@[ @"violet", @"midnight", @"paper", @"coral", @"ocean", @"forest", @"gold" ]];
+    NSSet *known = [NSSet setWithArray:@[ @"midnight", @"violet", @"paper", @"coral", @"ocean", @"forest", @"gold" ]];
     if (![known containsObject:data[@"icon"]]) {
       [self reply:rid result:nil error:@"Unknown app icon."];
       return;

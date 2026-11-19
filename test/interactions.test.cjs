@@ -476,7 +476,7 @@ test("every app icon variant is built and offered in Settings", () => {
     assert.ok(require("node:fs").existsSync(iconFile(id)), id);
     assert.ok(renderer.includes(`["${id}",`), id);
   }
-  assert.ok(iconFile("nope").endsWith("violet.png"));
+  assert.ok(iconFile("nope").endsWith("midnight.png"));
 });
 test("mini window keeps menu shortcuts from reaching the main window", () => {
   const { miniKeyAction: key } = require("../src/mini-window.cjs");
