@@ -329,6 +329,11 @@ async function publish(persist = true, sync = true) {
   await native("sync", {
     workspace: workspace.state,
     panes: workspace.layout(innerWidth, innerHeight),
+    // Native overlays (Peek's card) match the active Space's colors.
+    chrome: miniChrome(
+      workspace.state.spaces.find((space) => space.id === workspace.state.activeSpaceId),
+      !!workspace.state.settings.dark,
+    ),
     persist,
     // Native site prompts attach below the address field.
     anchor: address?.width
@@ -402,6 +407,8 @@ function miniChrome(space, dark) {
     muted: c["--muted"],
     hover: c["--hover"],
     selected: c["--selected"],
+    modal: c["--wing-modal"],
+    border: c["--wing-line"],
   };
 }
 function openMini(url, spaceId) {

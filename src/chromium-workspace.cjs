@@ -62,26 +62,34 @@ class ChromiumWorkspace {
       this.state.sidebarHidden ? 8 : this.state.settings.sidebarWidth,
     );
     const left = frame.left;
-    if (this.peekId)
-      return [
-        {
-          id: this.peekId,
-          x: left + 32,
-          y: this.state.settings.tabLayout === "top" ? 136 : 100,
-          width: Math.max(1, width - left - 72),
-          height: Math.max(1, height - 140),
-        },
-      ];
-    const bounds = M.splits.bounds({
+    const area = {
       width,
       height,
       left,
       top: frame.top,
       margin: frame.margin,
-      weights: snapshot.splitWeights,
       orientation: snapshot.splitOrientation,
-    });
-    return ids.map((id, index) => ({ id, ...bounds[index] }));
+    };
+    const bounds = M.splits.bounds({ ...area, weights: snapshot.splitWeights });
+    const panes = ids
+      .map((id, index) => ({ id, ...bounds[index] }))
+      .filter((pane) => pane.id !== this.peekId);
+    if (!this.peekId) return panes;
+    // Peek floats over the page it came from, which stays in place and dims.
+    // The native host draws the card around it, with a 40-point header.
+    const [content] = M.splits.bounds({ ...area, weights: [1] });
+    const inset = Math.min(56, Math.max(12, content.width * 0.06));
+    return [
+      ...panes.slice(0, 2),
+      {
+        id: this.peekId,
+        peek: true,
+        x: content.x + inset,
+        y: content.y + 16 + 40,
+        width: Math.max(1, content.width - 2 * inset),
+        height: Math.max(1, content.height - 16 - 40 - 22),
+      },
+    ];
   }
   pageChanged(event) {
     const tab = this.state.tabs.find((tab) => tab.id === event.id);

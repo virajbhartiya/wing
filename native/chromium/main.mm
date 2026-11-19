@@ -7,6 +7,7 @@
 #import "DeviceChooser.h"
 #import "PromptPopover.h"
 #import "MiniWindow.h"
+#import "ChromeControls.h"
 #import "CastPicker.h"
 #import "SharePicker.h"
 #import "WebKitPage.h"
@@ -234,6 +235,17 @@ static BOOL ValidSync(NSDictionary *data) {
   return YES;
 }
 
+// Clicking the dimmed page behind a Peek closes it, as in Arc.
+@interface WingPeekDim : NSView
+@property(nonatomic, copy) void (^onClick)(void);
+@end
+@implementation WingPeekDim
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
+- (void)mouseDown:(NSEvent *)event {
+  if (self.onClick) self.onClick();
+}
+@end
+
 @interface WingChromiumHost
     : NSObject <ArdiaCoreEngineDelegate, ArdiaCoreWindowDelegate,
                 ArdiaCoreTabDelegate>
@@ -366,6 +378,10 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
   // Pages Wing floated into picture in picture itself (a tab switch or leaving
   // the app); they come back into the window when they're shown again.
   NSMutableSet<NSString *> *_miniPlayerTabs;
+  // Peek: a card floating over the page it came from, which dims behind it.
+  NSView *_peekDim, *_peekCard;
+  NSTextField *_peekTitle;
+  WingChromeControl *_peekPromote, *_peekClose;
   // Tabs shown by WebKit instead of Chromium (streaming sites, for DRM video).
   NSMutableDictionary<NSString *, WingWebKitPage *> *_webkitPages;
   NSMutableSet<NSString *> *_screenSharingTabs;
@@ -3708,6 +3724,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [_window activateTab:tab];
     }
   }
+  [self layoutPeek:state];
   CGFloat sidebarTop = [state[@"settings"][@"toolbarHidden"] boolValue] ? 8 : 52;
   CGFloat sidebarHeight = MAX(1, _window.hostView.bounds.size.height - sidebarTop - 8);
   [_extensionSidebar layoutIn:_window.hostView
@@ -3743,6 +3760,134 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     full.view.layer.cornerRadius = 0;
     full.view.hidden = NO;
   }
+}
+- (WingChromeControl *)peekButton:(NSString *)symbol label:(NSString *)label action:(SEL)action {
+  NSImage *image = [[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:label]
+      imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:12
+                                                                                 weight:NSFontWeightMedium]];
+  WingChromeButton *button = [WingChromeButton buttonWithImage:image target:self action:action];
+  button.bordered = NO;
+  button.imageScaling = NSImageScaleNone;
+  button.toolTip = label;
+  button.frame = NSMakeRect(0, 0, 28, 26);
+  button.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  WingChromeControl *backing = [[WingChromeControl alloc] initWithFrame:button.frame];
+  backing.translatesAutoresizingMaskIntoConstraints = NO;
+  [backing addSubview:button];
+  [backing.widthAnchor constraintEqualToConstant:28].active = YES;
+  [backing.heightAnchor constraintEqualToConstant:26].active = YES;
+  return backing;
+}
+- (void)promotePeek:(id)sender {
+  [self send:@"action" data:@{@"name" : @"promote-peek", @"args" : @{}}];
+}
+- (void)closePeek:(id)sender {
+  [self send:@"action" data:@{@"name" : @"close-peek", @"args" : @{}}];
+}
+// The shell can't draw over native pages, so Peek's frame lives here: the page
+// behind dims, and the Peek sits in a card with its own small header.
+- (void)layoutPeek:(NSDictionary *)state {
+  NSView *host = _window.hostView, *page = nil, *under = nil;
+  NSDictionary *record;
+  for (NSDictionary *pane in _lastSync[@"panes"]) {
+    NSString *identity = pane[@"id"];
+    NSView *view = _tabs[identity].view ?: _webkitPages[identity].view;
+    if (view.superview != host || view.hidden) continue;
+    if ([pane[@"peek"] boolValue]) {
+      page = view;
+      for (NSDictionary *candidate in state[@"tabs"])
+        if ([candidate[@"id"] isEqual:identity]) record = candidate;
+    } else if (!under)
+      under = view;
+  }
+  if (!page) {
+    [_peekDim removeFromSuperview];
+    [_peekCard removeFromSuperview];
+    return;
+  }
+  NSDictionary *chrome = [_lastSync[@"chrome"] isKindOfClass:NSDictionary.class] ? _lastSync[@"chrome"] : @{};
+  BOOL dark = [chrome[@"dark"] boolValue];
+  if (!_peekCard) {
+    __weak __typeof(self) weak = self;
+    WingPeekDim *dim = [WingPeekDim new];
+    dim.wantsLayer = YES;
+    dim.layer.cornerRadius = 10;
+    dim.layer.cornerCurve = @"continuous";
+    dim.onClick = ^{
+      [weak closePeek:nil];
+    };
+    _peekDim = dim;
+    _peekCard = [NSView new];
+    _peekCard.wantsLayer = YES;
+    _peekCard.layer.cornerRadius = 14;
+    _peekCard.layer.cornerCurve = @"continuous";
+    _peekCard.layer.shadowColor = NSColor.blackColor.CGColor;
+    _peekCard.layer.shadowOffset = CGSizeMake(0, -10);
+    _peekCard.layer.shadowRadius = 30;
+    _peekTitle = [NSTextField labelWithString:@""];
+    _peekTitle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+    _peekTitle.lineBreakMode = NSLineBreakByTruncatingTail;
+    _peekTitle.translatesAutoresizingMaskIntoConstraints = NO;
+    [_peekTitle setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    _peekPromote = [self peekButton:@"arrow.up.left.and.arrow.down.right" label:@"Open as Tab"
+                             action:@selector(promotePeek:)];
+    _peekClose = [self peekButton:@"xmark" label:@"Close Peek (Esc)" action:@selector(closePeek:)];
+    for (NSView *view in @[ _peekTitle, _peekPromote, _peekClose ]) [_peekCard addSubview:view];
+    // The header is the top 40 points of the card; the page fills the rest.
+    NSLayoutYAxisAnchor *top = _peekCard.topAnchor;
+    [NSLayoutConstraint activateConstraints:@[
+      [_peekTitle.leadingAnchor constraintEqualToAnchor:_peekCard.leadingAnchor constant:16],
+      [_peekTitle.trailingAnchor constraintLessThanOrEqualToAnchor:_peekPromote.leadingAnchor constant:-8],
+      [_peekTitle.centerYAnchor constraintEqualToAnchor:top constant:20],
+      [_peekClose.trailingAnchor constraintEqualToAnchor:_peekCard.trailingAnchor constant:-8],
+      [_peekClose.centerYAnchor constraintEqualToAnchor:top constant:20],
+      [_peekPromote.trailingAnchor constraintEqualToAnchor:_peekClose.leadingAnchor constant:-2],
+      [_peekPromote.centerYAnchor constraintEqualToAnchor:top constant:20],
+    ]];
+  }
+  NSColor *muted = WingHexColor(chrome[@"muted"], NSColor.secondaryLabelColor);
+  _peekCard.layer.backgroundColor = WingHexColor(chrome[@"modal"], NSColor.windowBackgroundColor).CGColor;
+  _peekCard.layer.borderColor = WingHexColor(chrome[@"border"], NSColor.separatorColor).CGColor;
+  _peekCard.layer.borderWidth = 1;
+  _peekCard.layer.shadowOpacity = dark ? 0.5 : 0.22;
+  _peekDim.layer.backgroundColor = [NSColor colorWithWhite:0 alpha:dark ? 0.45 : 0.22].CGColor;
+  _peekTitle.textColor = muted;
+  for (WingChromeControl *button in @[ _peekPromote, _peekClose ]) {
+    button.hoverColor = WingHexColor(chrome[@"hover"], [NSColor.labelColor colorWithAlphaComponent:0.08]);
+    button.pressColor = WingHexColor(chrome[@"selected"], [NSColor.labelColor colorWithAlphaComponent:0.14]);
+    ((NSButton *)button.subviews.firstObject).contentTintColor = muted;
+  }
+  NSString *title = [record[@"title"] isKindOfClass:NSString.class] ? record[@"title"] : @"";
+  NSString *site = [NSURL URLWithString:record[@"url"] ?: @""].host ?: @"";
+  if ([site hasPrefix:@"www."]) site = [site substringFromIndex:4];
+  _peekTitle.stringValue = title.length && site.length ? [NSString stringWithFormat:@"%@  ·  %@", title, site]
+                                                       : title.length ? title : site;
+  _peekTitle.toolTip = record[@"url"];
+
+  NSRect frame = page.frame;
+  const CGFloat header = 40, edge = 6;
+  NSRect card = NSMakeRect(frame.origin.x - edge, host.isFlipped ? frame.origin.y - header : frame.origin.y - edge,
+                           frame.size.width + 2 * edge, frame.size.height + header + edge);
+  _peekCard.frame = card;
+  CGPathRef shadow = CGPathCreateWithRoundedRect(NSMakeRect(0, 0, card.size.width, card.size.height), 14, 14, NULL);
+  _peekCard.layer.shadowPath = shadow;
+  CGPathRelease(shadow);
+  page.layer.cornerRadius = 9;
+  // The page behind stays put and dims; the Peek and its card sit above it.
+  if (under && [host.subviews indexOfObject:under] > [host.subviews indexOfObject:page])
+    [host addSubview:page positioned:NSWindowAbove relativeTo:under];
+  if (under) {
+    _peekDim.frame = under.frame;
+    _peekDim.hidden = NO;
+  } else
+    _peekDim.hidden = YES;
+  NSUInteger pageIndex = [host.subviews indexOfObject:page];
+  if (_peekCard.superview != host || [host.subviews indexOfObject:_peekCard] != pageIndex - 1)
+    [host addSubview:_peekCard positioned:NSWindowBelow relativeTo:page];
+  pageIndex = [host.subviews indexOfObject:page];
+  if (_peekDim.superview != host || [host.subviews indexOfObject:_peekDim] != pageIndex - 2)
+    [host addSubview:_peekDim positioned:NSWindowBelow relativeTo:_peekCard];
 }
 - (void)showWebKitPage:(NSString *)identity
                 record:(NSDictionary *)record
