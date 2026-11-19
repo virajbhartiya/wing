@@ -27,6 +27,12 @@ static NSMutableArray *gMinis;
   return gMinis.count;
 }
 
++ (NSWindow *)windowForTab:(ArdiaCoreTab *)tab {
+  for (WingMiniWindow *mini in gMinis)
+    if (tab && mini->_tab == tab && !tab.closed) return mini->_core.window;
+  return nil;
+}
+
 + (NSArray<NSDictionary *> *)diagnostics {
   NSMutableArray *windows = [NSMutableArray new];
   for (WingMiniWindow *mini in gMinis)
