@@ -1158,6 +1158,7 @@ window.wing = {
     rankResults: navigation.rankResults,
   },
   theme: { fields: theme.COLOR_FIELDS, resolve: theme.resolveColors },
+  iconClickResets: require("./interactions.cjs").iconClickResets,
   swipeGesture: (deltaX, deltaY, time) => swipe.push({ deltaX, deltaY, time }),
   swipeUpdate: (deltaX, deltaY, time) => swipe.update({ deltaX, deltaY, time }),
   swipeReset: () => swipe.reset(),

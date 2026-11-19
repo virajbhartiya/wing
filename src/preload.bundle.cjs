@@ -348,12 +348,16 @@ var require_interactions = __commonJS({
       ).map((t, i) => [t, i]).sort((a, b) => rank[a[0].kind] - rank[b[0].kind] || a[1] - b[1]).map(([t]) => t);
       return index === 8 ? ordered.at(-1) : ordered[index];
     }
+    function iconClickResets({ tab, activeTabId, compact }) {
+      return !!tab && tab.kind === "pinned" && !compact && tab.id === activeTabId && !!tab.homeURL && tab.url !== tab.homeURL;
+    }
     var APP_ICONS = ["midnight", "violet", "paper", "coral", "ocean", "forest", "gold"];
     function shouldAskDefaultBrowser({ packaged, isDefault, settings }) {
       return !!packaged && !isDefault && settings.onboarded !== false && !settings.defaultBrowserPromptOff;
     }
     module2.exports = {
       APP_ICONS,
+      iconClickResets,
       shouldAskDefaultBrowser,
       spaceForProfile,
       tabForShortcut,
@@ -1020,6 +1024,7 @@ contextBridge.exposeInMainWorld("wing", {
     fields: theme.COLOR_FIELDS,
     resolve: (space, dark) => theme.resolveColors(space, dark)
   },
+  iconClickResets: require_interactions().iconClickResets,
   swipeGesture: (deltaX, deltaY, time) => swipe.push({ deltaX, deltaY, time }),
   swipeUpdate: (deltaX, deltaY, time) => swipe.update({ deltaX, deltaY, time }),
   swipeReset: () => swipe.reset(),

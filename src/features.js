@@ -392,7 +392,13 @@
         selectionUI();
       } else if (e.target.closest(".tab-icon")) {
         const t = state.tabs.find((t) => t.id === tab.dataset.tab);
-        if (t?.kind !== "today") {
+        if (
+          window.wing.iconClickResets({
+            tab: t,
+            activeTabId: state.activeTabId,
+            compact: tab.classList.contains("tab-compact"),
+          })
+        ) {
           e.preventDefault();
           e.stopImmediatePropagation();
           act("reset-pin-id", { id: t.id });
