@@ -13,6 +13,7 @@
 #import "WebKitPage.h"
 #import "CrashReports.h"
 #import <QuartzCore/QuartzCore.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <Sparkle/Sparkle.h>
 #import <AppKit/AppKit.h>
 #include <cmath>
@@ -245,6 +246,106 @@ static BOOL ValidSync(NSDictionary *data) {
   if (self.onClick) self.onClick();
 }
 @end
+
+// A download's file icon pops up over the page and swoops into the Downloads
+// button, as in Arc. It floats above the web views, so it can't be shell DOM.
+@interface WingFlightLayerView : NSView
+@end
+@implementation WingFlightLayerView
+- (NSView *)hitTest:(NSPoint)point { return nil; }
+@end
+
+static CGFloat WingEaseOutBack(CGFloat p) {
+  const CGFloat c1 = 1.9, c3 = c1 + 1;
+  return 1 + c3 * pow(p - 1, 3) + c1 * pow(p - 1, 2);
+}
+static CGFloat WingEaseInOut(CGFloat p) {
+  return p < 0.5 ? 4 * p * p * p : 1 - pow(-2 * p + 2, 3) / 2;
+}
+
+static void WingPlayDownloadFlight(NSView *host, NSString *name, NSPoint start, NSPoint end,
+                                   void (^done)(void)) {
+  NSString *ext = name.pathExtension.length ? name.pathExtension : @"";
+  UTType *type = ext.length ? [UTType typeWithFilenameExtension:ext] : nil;
+  NSImage *icon = [NSWorkspace.sharedWorkspace iconForContentType:type ?: UTTypeData];
+  const CGFloat size = 76;
+  NSRect proposed = NSMakeRect(0, 0, size * 2, size * 2);
+  CGImageRef image = [icon CGImageForProposedRect:&proposed context:nil hints:nil];
+
+  WingFlightLayerView *overlay = [[WingFlightLayerView alloc] initWithFrame:host.bounds];
+  overlay.wantsLayer = YES;
+  overlay.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  [host addSubview:overlay positioned:NSWindowAbove relativeTo:nil];
+
+  CALayer *file = [CALayer layer];
+  file.bounds = CGRectMake(0, 0, size, size);
+  file.position = start;
+  file.contents = (__bridge id)image;
+  file.contentsGravity = kCAGravityResizeAspect;
+  file.contentsScale = host.window.backingScaleFactor ?: 2;
+  file.shadowColor = NSColor.blackColor.CGColor;
+  file.shadowOpacity = 0.28;
+  file.shadowRadius = 14;
+  file.shadowOffset = CGSizeMake(0, -6);
+  file.opacity = 0;
+  [overlay.layer addSublayer:file];
+
+  // One timeline: pop in (0–0.3), rest (0.3–0.4), swoop into the button (0.4–1).
+  const CFTimeInterval duration = 1.05;
+  const CGFloat popEnd = 0.3, flyStart = 0.4;
+  // The swoop bows out sideways first, then rises into the button.
+  NSPoint control = NSMakePoint(start.x + (end.x - start.x) * 0.85,
+                                start.y + (end.y - start.y) * 0.15);
+  NSMutableArray *positions = [NSMutableArray new], *transforms = [NSMutableArray new],
+                 *opacities = [NSMutableArray new], *times = [NSMutableArray new];
+  const int samples = 72;
+  for (int i = 0; i <= samples; i++) {
+    CGFloat t = (CGFloat)i / samples, scale, angle = 0, alpha = 1;
+    NSPoint point = start;
+    if (t <= popEnd) {
+      CGFloat p = t / popEnd;
+      scale = 0.35 + 0.65 * WingEaseOutBack(p);
+      angle = 0.14 * (1 - p);
+      alpha = MIN(1, p * 2.5);
+      point.y = start.y - 18 * (1 - WingEaseOutBack(p));
+    } else if (t <= flyStart) {
+      scale = 1;
+    } else {
+      CGFloat p = WingEaseInOut((t - flyStart) / (1 - flyStart)), q = 1 - p;
+      point = NSMakePoint(q * q * start.x + 2 * q * p * control.x + p * p * end.x,
+                          q * q * start.y + 2 * q * p * control.y + p * p * end.y);
+      scale = 1 - 0.78 * p;
+      angle = -0.2 * sin(M_PI * p);
+      alpha = p < 0.82 ? 1 : MAX(0, 1 - (p - 0.82) / 0.18);
+    }
+    CATransform3D transform = CATransform3DMakeRotation(angle, 0, 0, 1);
+    transform = CATransform3DScale(transform, scale, scale, 1);
+    [positions addObject:[NSValue valueWithPoint:point]];
+    [transforms addObject:[NSValue valueWithCATransform3D:transform]];
+    [opacities addObject:@(alpha)];
+    [times addObject:@(t)];
+  }
+  CAKeyframeAnimation *(^track)(NSString *, NSArray *) = ^(NSString *key, NSArray *values) {
+    CAKeyframeAnimation *animation = [CAKeyframeAnimation animationWithKeyPath:key];
+    animation.values = values;
+    animation.keyTimes = times;
+    return animation;
+  };
+  CAAnimationGroup *group = [CAAnimationGroup animation];
+  group.animations = @[
+    track(@"position", positions), track(@"transform", transforms), track(@"opacity", opacities)
+  ];
+  group.duration = duration;
+  group.fillMode = kCAFillModeForwards;
+  group.removedOnCompletion = NO;
+  [CATransaction begin];
+  [CATransaction setCompletionBlock:^{
+    [overlay removeFromSuperview];
+    if (done) done();
+  }];
+  [file addAnimation:group forKey:@"flight"];
+  [CATransaction commit];
+}
 
 @interface WingChromiumHost
     : NSObject <ArdiaCoreEngineDelegate, ArdiaCoreWindowDelegate,
@@ -4384,6 +4485,27 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     _shellRaised = [data[@"raised"] boolValue];
     [self orderShell];
     [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
+  if ([action isEqual:@"download-flight"]) {
+    // Shell rects are top-left CSS pixels; the host may not be flipped.
+    NSView *host = _window.hostView;
+    CGFloat height = NSHeight(host.bounds);
+    NSPoint (^centre)(NSDictionary *, CGFloat) = ^NSPoint(NSDictionary *rect, CGFloat lift) {
+      CGFloat x = [rect[@"x"] doubleValue] + [rect[@"width"] doubleValue] / 2,
+              y = [rect[@"y"] doubleValue] + [rect[@"height"] doubleValue] / 2 - lift;
+      return NSMakePoint(x, host.isFlipped ? y : height - y);
+    };
+    NSDictionary *from = data[@"from"], *to = data[@"to"];
+    if (![from isKindOfClass:NSDictionary.class] || ![to isKindOfClass:NSDictionary.class]) {
+      [self reply:rid result:nil error:@"download-flight needs from and to"];
+      return;
+    }
+    NSString *name = [data[@"name"] isKindOfClass:NSString.class] ? data[@"name"] : @"";
+    WingPlayDownloadFlight(host, name, centre(from, [from[@"height"] doubleValue] * 0.08),
+                           centre(to, 0), ^{
+                             [self reply:rid result:@{@"ok" : @YES} error:nil];
+                           });
     return;
   }
   if ([action isEqual:@"metrics"]) {
