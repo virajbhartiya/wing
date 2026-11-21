@@ -4127,3 +4127,113 @@ body.layout-entering.tabs-top #toolbar-spaces {
 .platform-win32 body.tabs-top.toolbar-hidden #tab-strip {
   padding: 8px 150px 8px 8px;
 }
+
+/* Full screen hides the macOS traffic lights, so their reserved corner goes too. */
+.full-screen body.sidebar-auto-hidden #toolbar {
+  padding-left: 3px;
+}
+.full-screen body.tabs-top #toolbar,
+.full-screen body.tabs-top.sidebar-auto-hidden #toolbar {
+  padding-left: 11px;
+}
+.full-screen body.tabs-top.toolbar-hidden #tab-strip {
+  padding-left: 8px;
+}
+
+/* Dialogs speak the chrome's language: quiet surfaces, no outlined boxes,
+   and monochrome buttons that match the black-and-white mark. */
+.primary,
+.secondary,
+.onboarding-footer .primary,
+.onboarding-footer .secondary {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+}
+.primary {
+  background: var(--ink);
+  color: var(--modal);
+}
+.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 84%, var(--modal));
+}
+.secondary {
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink);
+}
+.secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 11%, transparent);
+}
+[data-quiet-focus]:focus-visible {
+  outline: none;
+}
+#modal :focus-visible {
+  outline-width: 2px;
+  outline-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.dialog-actions {
+  margin-top: 22px;
+}
+.guide-grid {
+  gap: 8px;
+  margin-top: 18px;
+}
+.guide-card {
+  border: 0;
+  padding: 14px 16px 16px;
+  border-radius: var(--wing-radius-lg);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.guide-card > svg {
+  box-sizing: content-box;
+  width: 15px;
+  height: 15px;
+  padding: 6px;
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--modal);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.guide-card h3 {
+  margin: 12px 0 4px;
+}
+.guide-card p {
+  line-height: 1.55;
+}
+.shortcuts {
+  gap: 4px 16px;
+  margin-top: 22px;
+  font-size: 12.5px;
+  color: var(--ink);
+  align-items: center;
+}
+.shortcuts > span {
+  padding: 5px 0;
+}
+.shortcuts > kbd,
+.tour-keys kbd,
+.onboarding-keys kbd {
+  justify-self: end;
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: color-mix(in srgb, var(--ink) 75%, transparent);
+  font:
+    500 11.5px -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  letter-spacing: 0.4px;
+}
+.onboarding-dots span.active {
+  width: 16px;
+  border-radius: 3px;
+}
+.onboarding-dots span {
+  transition:
+    background var(--wing-fast),
+    width var(--wing-normal) var(--wing-ease);
+}

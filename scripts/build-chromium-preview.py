@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import base64
 import json
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -41,6 +42,26 @@ def run(*args):
     subprocess.run(args, cwd=ROOT, check=True)
 
 
+# macOS remembers Screen Recording, camera and other grants against an app's
+# signing identity. Ad-hoc signatures change with every build, so each update
+# would lose them; releases sign with one long-lived certificate instead.
+RELEASE_IDENTITY = 'Wing Release Signing'
+
+
+def signing_identity(production):
+    chosen = os.environ.get('WING_SIGN_IDENTITY')
+    if chosen:
+        return chosen
+    if not production:
+        return '-'
+    found = subprocess.run(['security', 'find-identity', '-p', 'codesigning'], capture_output=True, text=True).stdout
+    if f'"{RELEASE_IDENTITY}"' not in found:
+        raise SystemExit(f'Production builds sign with the "{RELEASE_IDENTITY}" keychain identity, which is missing. '
+                         'Restore it from its backup, or set WING_SIGN_IDENTITY=- to ship an ad-hoc build '
+                         '(people would lose their Screen Recording permission again).')
+    return RELEASE_IDENTITY
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-receipt', type=Path, help='Use a completed Wing source framework build')
@@ -52,6 +73,7 @@ def main():
     args = parser.parse_args()
     if args.untested_intel and not (args.production and args.arch == 'x64'):
         raise SystemExit('--untested-intel only applies to an x64 production build.')
+    sign = signing_identity(args.production)
     inputs = host_inputs()
     if not args.source_receipt:
         # The vendored prebuilt engine is Chromium 155; the host is written against the pinned source engine.
@@ -205,15 +227,15 @@ def main():
         shutil.copy2(ROOT / 'scripts/wing-cli.sh', resources / 'bin/wing')
         plist['CFBundleIconFile'] = 'wing'
         (contents / 'Info.plist').write_bytes(plistlib.dumps(plist))
-        run('codesign', '--force', '--sign', '-', str(helper / 'node'))
+        run('codesign', '--force', '--sign', sign, str(helper / 'node'))
         entitlements = stage / 'entitlements.plist'
         entitlements.write_bytes(plistlib.dumps({'com.apple.security.cs.allow-jit':True, 'com.apple.security.cs.disable-library-validation':True}))
         for item in (framework / 'Versions/Current/Libraries').glob('*.dylib'):
-            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', str(item))
+            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, str(item))
         for item in (framework / 'Versions/Current/Helpers').iterdir():
             if item.is_file() or item.suffix == '.app':
-                run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(entitlements), str(item))
-        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(entitlements), str(framework))
+                run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, '--entitlements', str(entitlements), str(item))
+        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, '--entitlements', str(entitlements), str(framework))
         # The hardened runtime silently denies devices the app does not declare,
         # so websites could never reach the camera, microphone or location.
         app_entitlements = stage / 'app-entitlements.plist'
@@ -222,10 +244,10 @@ def main():
             'com.apple.security.device.audio-input':True, 'com.apple.security.device.camera':True,
             'com.apple.security.device.bluetooth':True, 'com.apple.security.device.usb':True,
             'com.apple.security.personal-information.location':True, 'com.apple.security.print':True}))
-        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', str(macos / 'wing-summarize'))
+        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, str(macos / 'wing-summarize'))
         for item in [sparkle / 'Versions/B/Autoupdate', sparkle / 'Versions/B/Updater.app', sparkle]:
-            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', str(item))
-        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', '-', '--entitlements', str(app_entitlements), str(app))
+            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, str(item))
+        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, '--entitlements', str(app_entitlements), str(app))
         run('codesign', '--verify', '--deep', '--strict', str(app))
         if host_inputs() != inputs:
             raise RuntimeError('Host inputs changed during packaging; rebuild from a stable source tree.')
