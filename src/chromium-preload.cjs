@@ -1112,6 +1112,7 @@ async function invoke(action, data = {}) {
         "test-cast",
         "test-fullscreen",
         "test-webkit",
+        "download-flight",
       ].includes(action)
     )
       return native(action, {

@@ -629,7 +629,9 @@ function renderDownloadsButton() {
     (d) => !d.profileId || d.profileId === profile,
   );
   const button = $("#downloads-button");
+  const appearing = button.hidden && records.length > 0;
   button.hidden = !records.length;
+  noticeNewDownloads(records, appearing);
   if (modalType === "downloads-summary" && $("#downloads-summary-list"))
     patchHTML("#downloads-summary-list", window.wingFeatures?.downloads(records.slice(0, 6)) || "");
   if (!records.length) return;
@@ -648,6 +650,47 @@ function renderDownloadsButton() {
   button.title = active.length
     ? `Downloading ${active.length} file${active.length > 1 ? "s" : ""}${total ? ` · ${Math.round(progress * 100)}%` : ""}`
     : "Downloads · ⇧⌘J";
+}
+// A new download's file icon pops up over the page and swoops into the
+// Downloads button, as in Arc. Downloads that existed at startup stay quiet.
+let seenDownloads = null;
+function noticeNewDownloads(records, appearing) {
+  const fresh = seenDownloads ? records.filter((d) => !seenDownloads.has(d.id)) : [];
+  seenDownloads ??= new Set();
+  for (const d of records) seenDownloads.add(d.id);
+  if (fresh.length) requestAnimationFrame(() => flyToDownloads(fresh[0], appearing));
+}
+async function flyToDownloads(download, appearing) {
+  const button = $("#downloads-button");
+  const page = $("#main").getBoundingClientRect();
+  const toolbar = $("#toolbar").getBoundingClientRect();
+  const to = button.getBoundingClientRect();
+  if (reducedMotion.matches || !to.width || !page.width) return;
+  if (appearing)
+    button.animate(
+      [{ transform: "scale(0.4)", opacity: 0 }, { transform: "scale(1)", opacity: 1 }],
+      { duration: 260, easing: "cubic-bezier(0.34, 1.32, 0.64, 1)" },
+    );
+  const top = Math.max(page.top, toolbar.bottom);
+  const rect = (r) => ({ x: r.left, y: r.top, width: r.width, height: r.height });
+  try {
+    await window.wing.invoke("download-flight", {
+      name: download.name || "",
+      from: { x: page.left, y: top, width: page.width, height: page.bottom - top },
+      to: rect(to),
+    });
+  } catch {
+    return;
+  }
+  button.animate(
+    [
+      { transform: "scale(1)" },
+      { transform: "scale(1.25)", offset: 0.3 },
+      { transform: "scale(0.92)", offset: 0.65 },
+      { transform: "scale(1)" },
+    ],
+    { duration: 420, easing: "ease-out" },
+  );
 }
 // Downloads open as a small panel hanging from the toolbar button.
 $("#downloads-button").addEventListener("click", () => {
