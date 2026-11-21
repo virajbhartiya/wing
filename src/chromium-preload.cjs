@@ -110,6 +110,9 @@ function native(action, data = {}) {
 document.documentElement.classList.add("native-material");
 window.addEventListener("wing-native", (event) => {
   const { kind, data } = event.detail;
+  // Full screen hides the traffic lights; the layout drops their corner.
+  if ((kind === "window-state" || kind === "resize") && typeof data?.fullScreen === "boolean")
+    document.documentElement.classList.toggle("full-screen", data.fullScreen);
   if (kind === "response") {
     const item = pending.get(data.id);
     if (!item) return;
@@ -189,6 +192,7 @@ window.addEventListener("wing-native", (event) => {
   else if (workspace && kind === "resize") enqueue(() => publish(false));
 });
 const ready = native("bootstrap").then(async (result) => {
+  document.documentElement.classList.toggle("full-screen", !!result.fullScreen);
   if (result.private) {
     privateMode = true;
     document.body.classList.add("private");

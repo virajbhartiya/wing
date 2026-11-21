@@ -1559,7 +1559,11 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                    queue:NSOperationQueue.mainQueue
               usingBlock:^(NSNotification *note) {
                 [weakSelf layoutTrafficLights];
-                [weakSelf send:@"resize" data:@{}];
+                // Entering and leaving full screen always resizes the window,
+                // so the shell learns the state here even when the full-screen
+                // notifications don't arrive.
+                BOOL full = (note.object && ([note.object styleMask] & NSWindowStyleMaskFullScreen));
+                [weakSelf send:@"resize" data:@{@"fullScreen" : @(full)}];
               }];
   _observers = [NSMutableArray new];
   for (NSNotificationName name in @[ NSWindowDidExitFullScreenNotification,
@@ -4262,6 +4266,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
          result:@{
            @"workspace" : NSNull.null,
            @"private" : @YES,
+           @"fullScreen" : @((_window.window.styleMask & NSWindowStyleMaskFullScreen) != 0),
            @"settings" : _privateSettings,
            @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion
          }
@@ -4296,7 +4301,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
            @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion,
            @"backup" : @(backup),
            @"recovered" : @(recovered),
-           @"uncleanExit" : @(gUncleanExit)
+           @"uncleanExit" : @(gUncleanExit),
+           @"fullScreen" : @((_window.window.styleMask & NSWindowStyleMaskFullScreen) != 0)
          }
           error:nil];
     return;

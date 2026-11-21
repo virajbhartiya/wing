@@ -1151,7 +1151,7 @@ function showModal(type, html) {
     .then((ready) => {
       if (generation !== modalGeneration) return;
       if (ready)
-        ($("#modal [autofocus]") || modalFocusable()[0] || $("#modal")).focus();
+        focusModalStart();
       else closeModal();
     })
     .catch((error) => {
@@ -1160,13 +1160,35 @@ function showModal(type, html) {
       toast(error.message || "The page preview could not be opened.");
     });
   $("#modal").setAttribute("tabindex", "-1");
-  ($("#modal [autofocus]") || modalFocusable()[0] || $("#modal")).focus();
+  focusModalStart();
+}
+// A dialog opened from the keyboard would otherwise draw a focus ring on its
+// first button straight away. The button still takes Enter; the ring returns
+// as soon as the keyboard moves focus.
+function focusModalStart() {
+  const target = $("#modal [autofocus]") || modalFocusable()[0] || $("#modal");
+  if (target.matches("button")) target.dataset.quietFocus = "";
+  target.focus();
 }
 let metricsTimer = null;
 function stopMetrics() {
   clearInterval(metricsTimer);
   metricsTimer = null;
 }
+addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key === "Tab")
+      for (const quiet of document.querySelectorAll("[data-quiet-focus]"))
+        delete quiet.dataset.quietFocus;
+  },
+  true,
+);
+addEventListener(
+  "focusout",
+  (event) => event.target?.dataset && delete event.target.dataset.quietFocus,
+  true,
+);
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 // Native page views stay detached until the backdrop is released, so a caller
 // returning focus to the page has to wait for that instead of using the opener.
