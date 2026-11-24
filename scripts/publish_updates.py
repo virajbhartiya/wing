@@ -7,7 +7,7 @@ Each zip is signed with the Sparkle key in the login Keychain (account "wing"),
 uploaded with its DMG beside it, and put at the top of its architecture's
 appcast. The DMG is also copied to /Wing-<arch>.dmg, a stable download link.
 """
-import email.utils, json, pathlib, plistlib, re, subprocess, sys, tempfile, time, zipfile
+import base64, email.utils, json, pathlib, plistlib, re, subprocess, sys, tempfile, time, zipfile
 import xml.etree.ElementTree as ET
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -42,6 +42,16 @@ def bundle_info(archive):
     with zipfile.ZipFile(archive) as z:
         name = next(n for n in z.namelist() if re.fullmatch(r'[^/]+\.app/Contents/Info\.plist', n))
         return plistlib.loads(z.read(name))
+
+
+def verify_signature(archive, signature, public_key):
+    checked = subprocess.run(
+        ['/usr/bin/swift', str(ROOT / 'scripts/verify-sparkle-signature.swift'),
+         str(archive), public_key, signature],
+        capture_output=True, text=True,
+    )
+    if checked.returncode:
+        raise SystemExit(f'{archive.name}: Sparkle signature verification failed. {checked.stderr.strip()}')
 
 
 def item(tag, arch, archive, signature, info, domain):
@@ -106,24 +116,50 @@ def store(bucket, key, size, command, skip_present=True):
     raise SystemExit(f'{key} did not upload whole after 3 attempts.')
 
 
-def publish(tag, archives):
+def prepare_uploads(tag, archives):
+    """Validate every artifact and build its appcast entry before publishing."""
     outputs = stack_outputs()
     bucket, domain = outputs['UpdatesBucket'], outputs['Domain']
     if CLOUD['domain'] != domain:
         raise SystemExit(f"native/chromium/cloud.json domain is {CLOUD['domain']!r}, the stack serves {domain}.")
-    invalidate = []
+    prepared = []
     for archive in map(pathlib.Path, archives):
-        arch = re.search(r'-(arm64|x64)\.zip$', archive.name).group(1)
+        match = re.search(r'-(arm64|x64)\.zip$', archive.name)
+        if not match:
+            raise SystemExit(f'{archive.name} must end in -arm64.zip or -x64.zip.')
+        arch = match.group(1)
         info = bundle_info(archive)
         if info.get('SUFeedURL') != f'https://{domain}/appcast-{arch}.xml':
             raise SystemExit(f'{archive.name} was not built with this update feed.')
-        signature = sign(archive)
+        public_key = CLOUD['publicEDKey']
+        if info.get('SUPublicEDKey') != public_key:
+            raise SystemExit(f'{archive.name} was not built with the configured update public key.')
         image = archive.with_suffix('.dmg')
-        for path in [archive, image]:
+        archive_size, image_size = archive.stat().st_size, image.stat().st_size
+        signature = sign(archive)
+        if signature.get('length') != str(archive_size):
+            raise SystemExit(f'{archive.name}: Sparkle signature length metadata does not match the archive.')
+        try:
+            raw_signature = base64.b64decode(signature.get('edSignature', ''), validate=True)
+        except ValueError:
+            raw_signature = b''
+        if len(raw_signature) != 64:
+            raise SystemExit(f'{archive.name}: Sparkle did not return a valid Ed25519 signature.')
+        verify_signature(archive, signature['edSignature'], public_key)
+        prepared.append((arch, archive, archive_size, image, image_size,
+                         item(tag, arch, archive, signature, info, domain)))
+    return tag, bucket, domain, outputs['DistributionId'], prepared
+
+
+def upload_prepared(uploads):
+    tag, bucket, domain, distribution, prepared = uploads
+    invalidate = []
+    for arch, archive, archive_size, image, image_size, update in prepared:
+        for path, size in [(archive, archive_size), (image, image_size)]:
             key = f'releases/{tag}/{path.name}'
-            store(bucket, key, path.stat().st_size, ['s3', 'cp', str(path), f's3://{bucket}/{key}'])
+            store(bucket, key, size, ['s3', 'cp', str(path), f's3://{bucket}/{key}'])
         # The stable link is a server-side copy, so a dropped connection costs little.
-        store(bucket, f'Wing-{arch}.dmg', image.stat().st_size,
+        store(bucket, f'Wing-{arch}.dmg', image_size,
               ['s3', 'cp', f's3://{bucket}/releases/{tag}/{image.name}', f's3://{bucket}/Wing-{arch}.dmg',
                '--metadata-directive', 'REPLACE', '--content-type', 'application/x-apple-diskimage',
                '--content-disposition', f'attachment; filename="Wing-{arch}.dmg"'], skip_present=False)
@@ -133,14 +169,18 @@ def publish(tag, archives):
         except subprocess.CalledProcessError:
             existing = ''
         with tempfile.NamedTemporaryFile(suffix='.xml') as feed:
-            feed.write(appcast(existing, item(tag, arch, archive, signature, info, domain)))
+            feed.write(appcast(existing, update))
             feed.flush()
             aws('s3', 'cp', feed.name, f's3://{bucket}/{key}', '--content-type', 'application/rss+xml',
                 '--cache-control', 'no-cache', '--only-show-errors', capture=False)
         invalidate.append(f'/Wing-{arch}.dmg')
         print(f'Published {archive.name} to https://{domain}/{key}')
-    aws('cloudfront', 'create-invalidation', '--distribution-id', outputs['DistributionId'],
+    aws('cloudfront', 'create-invalidation', '--distribution-id', distribution,
         '--paths', *invalidate)
+
+
+def publish(tag, archives):
+    upload_prepared(prepare_uploads(tag, archives))
 
 
 if __name__ == '__main__':

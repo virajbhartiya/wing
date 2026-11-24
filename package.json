@@ -9,7 +9,7 @@
   "scripts": {
     "start": "open release/Wing.app",
     "test": "node --test test/*.test.cjs",
-    "check": "node --check src/main.cjs && node --check src/model.cjs && node --check src/preload.cjs && node --check src/renderer.js",
+    "check": "node --check src/main.cjs && node --check src/model.cjs && node --check src/preload.cjs && node --check src/chromium-preload.cjs && node --check src/renderer.js && node --check native/chromium/services/control.js",
     "package": "node scripts/package-electron.cjs",
     "dmg": "npm run package && node scripts/make-dmg.cjs",
     "install:app": "npm run package && node scripts/make-dmg.cjs --install",

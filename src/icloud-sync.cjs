@@ -10,26 +10,28 @@ const KINDS = new Set(["pinned", "favorite"]);
 const itemKey = (tab) => `${tab.spaceId}|${tab.kind}|${tab.homeURL || tab.url}`;
 
 function layoutOf(state) {
+  const spaces = state.spaces.filter((space) => !space.throwaway);
+  const spaceIds = new Set(spaces.map((space) => space.id));
   return {
-    spaces: state.spaces
-      .filter((s) => !s.throwaway)
-      .map((s) => ({
-        id: s.id,
-        name: s.name,
-        icon: s.icon,
-        theme: s.theme,
-        ...(s.colors ? { colors: s.colors } : {}),
-        profile:
-          state.profiles.find((p) => p.id === s.profileId)?.name || "Personal",
-      })),
-    folders: state.folders.map((f) => ({
-      id: f.id,
-      name: f.name,
-      spaceId: f.spaceId,
-      parentId: f.parentId ?? null,
+    spaces: spaces.map((s) => ({
+      id: s.id,
+      name: s.name,
+      icon: s.icon,
+      theme: s.theme,
+      ...(s.colors ? { colors: s.colors } : {}),
+      profile:
+        state.profiles.find((p) => p.id === s.profileId)?.name || "Personal",
     })),
+    folders: state.folders
+      .filter((f) => spaceIds.has(f.spaceId))
+      .map((f) => ({
+        id: f.id,
+        name: f.name,
+        spaceId: f.spaceId,
+        parentId: f.parentId ?? null,
+      })),
     items: state.tabs
-      .filter((t) => KINDS.has(t.kind) && !t.transient)
+      .filter((t) => spaceIds.has(t.spaceId) && KINDS.has(t.kind) && !t.transient)
       .map((t) => ({
         key: itemKey(t),
         spaceId: t.spaceId,
@@ -136,11 +138,27 @@ function mergeList(local, remote, base, keyOf) {
   return out;
 }
 
+function mergeableLayout(layout, localOnlySpaces) {
+  // Older files can contain children of throwaway Spaces omitted from spaces.
+  const spaces = layout.spaces.filter((space) => !localOnlySpaces.has(space.id));
+  const spaceIds = new Set(spaces.map((space) => space.id));
+  return {
+    spaces,
+    folders: layout.folders.filter((folder) => spaceIds.has(folder.spaceId)),
+    items: layout.items.filter((item) => spaceIds.has(item.spaceId)),
+  };
+}
+
 // Applies the remote layout to state. Returns true when anything changed.
 function merge(state, remote, base) {
   if (!validLayout(remote)) return false;
+  const localOnlySpaces = new Set(
+    state.spaces.filter((space) => space.throwaway).map((space) => space.id),
+  );
+  remote = mergeableLayout(remote, localOnlySpaces);
+  base = validLayout(base) ? mergeableLayout(base, localOnlySpaces) : null;
   const before = fingerprint(layoutOf(state));
-  if (!base || !validLayout(base)) adopt(state, remote);
+  if (!base) adopt(state, remote);
   const local = layoutOf(state);
 
   // Spaces: added or renamed there show up here; removing a Space never syncs,
@@ -165,19 +183,26 @@ function merge(state, remote, base) {
       state.profiles[0];
     state.spaces.push({ id, ...fields, profileId: profile.id });
   }
-  const spaceIds = new Set(state.spaces.map((s) => s.id));
+  const spaceIds = new Set(
+    state.spaces.filter((space) => !space.throwaway).map((space) => space.id),
+  );
 
   const folders = mergeList(local.folders, remote.folders, base?.folders, (f) => f.id);
   const keptFolders = state.folders.filter((f) => folders.has(f.id) || !spaceIds.has(f.spaceId));
   for (const [id, f] of folders) {
     if (!spaceIds.has(f.spaceId)) continue;
     const existing = keptFolders.find((x) => x.id === id);
+    if (existing && !spaceIds.has(existing.spaceId)) continue;
     if (existing) Object.assign(existing, { name: f.name, parentId: f.parentId });
     else keptFolders.push({ id, name: f.name, spaceId: f.spaceId, parentId: f.parentId });
   }
-  const folderIds = new Set(keptFolders.map((f) => f.id));
+  const folderSpaces = new Map(keptFolders.map((f) => [f.id, f.spaceId]));
   for (const f of keptFolders)
-    if (f.parentId !== null && f.parentId !== undefined && !folderIds.has(f.parentId))
+    if (
+      spaceIds.has(f.spaceId) &&
+      f.parentId != null &&
+      folderSpaces.get(f.parentId) !== f.spaceId
+    )
       f.parentId = null;
   state.folders = keptFolders;
 
@@ -185,7 +210,7 @@ function merge(state, remote, base) {
   const order = new Map(remote.items.map((i, index) => [i.key, index]));
   const synced = [];
   for (const tab of [...state.tabs]) {
-    if (!KINDS.has(tab.kind) || tab.transient) continue;
+    if (!spaceIds.has(tab.spaceId) || !KINDS.has(tab.kind) || tab.transient) continue;
     const item = items.get(itemKey(tab));
     if (!item) {
       // Removed on the other Mac. The page in front stays as an ordinary tab,
@@ -197,7 +222,8 @@ function merge(state, remote, base) {
       continue;
     }
     tab.title = item.title;
-    tab.folderId = item.folderId && folderIds.has(item.folderId) ? item.folderId : null;
+    tab.folderId =
+      folderSpaces.get(item.folderId) === tab.spaceId ? item.folderId : null;
     items.delete(itemKey(tab));
     synced.push(tab);
   }
@@ -206,7 +232,7 @@ function merge(state, remote, base) {
     const tab = M.newTab(item.spaceId, item.url, {
       kind: item.kind,
       title: item.title,
-      folderId: item.folderId && folderIds.has(item.folderId) ? item.folderId : null,
+      folderId: folderSpaces.get(item.folderId) === item.spaceId ? item.folderId : null,
     });
     state.tabs.push(tab);
     synced.push(tab);

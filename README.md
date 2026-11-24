@@ -2,41 +2,56 @@
 
 # Wing
 
-An independent, open-source desktop browser for Apple Silicon Macs, with Safari's layout and Arc's design: Spaces, a command palette, split view and Peek. It runs on a native Chromium engine, so Chrome extensions install directly from the Chrome Web Store.
+An independent, open-source browser for Apple Silicon Macs, with Safari's layout and Arc's design: Spaces, a command palette, split view and Peek. It's a native AppKit app on Wing's own build of Chromium 156, with Chrome's extension system and built-in uBlock Origin Lite.
 
-Early build: releases are not yet signed with a Developer ID or notarized, and there are no automatic updates. Touch ID and iCloud passkeys need Apple signing.
+## Why Wing
+
+Arc showed what a browser could feel like, then went into maintenance mode. Wing keeps those ideas in an open-source browser anyone can pick up. Wing has no account or analytics. You can opt in to layout sync through iCloud Drive.
 
 ## Install
 
-Download the latest DMG from [Releases](https://github.com/virajbhartiya/wing/releases), drag Wing to Applications, then right-click it and choose Open.
+Download the latest DMG for your Mac from [Releases](https://github.com/virajbhartiya/wing/releases), then drag Wing to Applications. Wing updates through Sparkle. Use **Settings → About → Check Now** to check on demand.
 
-## Build
+Early releases use Wing's own signing certificate and await Apple notarization. macOS may block the first launch. See [Apple's instructions](https://support.apple.com/en-us/102445) and the [known limitations](#known-limitations).
 
-Building the engine needs a Chromium checkout, a large disk and several hours. See `docs/ARCHITECTURE.md`.
+## What works
 
-```sh
-npm ci
-npm test
-export WING_CHROMIUM_BUILD=../wing-chromium-build-156
-python3 scripts/build-chromium-preview.py --source-receipt $WING_CHROMIUM_BUILD/wing-build-receipt.json
-npm run test:chromium-preview
-npm run build:chromium-production
-```
+- Safari-style toolbar and top tab bar by default. Move tabs to an Arc-style sidebar in **Settings → Tabs** or with ⌥⌘S.
+- Spaces can share a browser profile or use separate profiles to isolate cookies and logins. Each Space has its own colors and light/dark appearance. ⌃1–9 switches profiles; horizontal sidebar swipes move between them.
+- Command palette (⌘T), horizontal/vertical resizable split panes, Peek and site styles. Drag onto the center of another sidebar tab to merge; drop at its top edge to reorder.
+- Vertical and pinned tabs, favorites and folders. Favorites follow profile boundaries.
+- Hide the sidebar with ⌘S and move to the left window edge to reveal it.
+- Edit a Space to customize 13 interface color roles independently for light and dark, with live preview.
+- Archive/restore, JSON workspace backup, downloads and a live process monitor.
+- Closed tabs come back with their scroll position and back/forward list, for the 25 most recently closed tabs (Chromium keeps no more).
+- Throwaway Spaces deleted at next launch, duplicate tab cleanup, grouping tabs by site into folders, a per-site ad-blocking switch, a Space picker for links from other apps, capture annotation, and an estimate of memory saved by sleeping tabs.
+- A background tab budget that protects active pages, splits, audio, capture and typed input.
+- **View → Translate Page Text…** opens an on-device translation into your preferred language on macOS 26. Install the source and target languages in macOS Language & Region settings. The original page stays open.
 
-## Release
+## Extensions and ad blocking
 
-`scripts/release-native.py` runs the tests and qualification, then builds a zip, a DMG and checksums in `dist/`. It refuses a dirty tree.
+Wing uses Chromium's own extension and profile services, not a compatibility shim. Install from a Chrome Web Store link or load an unpacked folder in **Settings → Extensions**; extensions belong to the profile they were installed in.
 
-```sh
-python3 scripts/release-native.py
-python3 scripts/release-native.py --publish --notes notes.md
-```
+uBlock Origin Lite ships with cookie-banner filtering enabled. Chromium gives its blocking rules up to ten seconds to initialize on a profile's first navigation. Open the protection dashboard from the command palette. Compatibility with other extensions is still being qualified, so verify the ones you rely on.
+
+## Import from another browser
+
+**Settings → Import browser** finds Arc, Chrome, Brave and Safari data. Choose a browser, then one or more of its profiles. Import bookmarks, history, Spaces and open tabs, supported session cookies and saved passwords into a new isolated Wing profile. Source browser data is read-only. Passwords are re-encrypted with Wing's OS-protected storage. Passkeys, device-bound/partitioned sessions and site database tokens are not transferred; some websites ask you to sign in again. Safari needs Full Disk Access, and its passwords come from a Passwords app CSV export. Extensions are listed for reinstalling. See `docs/PROFILE-IMPORT.md`.
 
 ## Your data
 
 - Wing keeps hourly workspace backups in `wing-workspace-backups` in its profile folder, and one before each import. If the workspace is damaged, Wing keeps the damaged file and restores the newest usable backup.
 - Deleting an imported profile's last Space removes that profile. Its cookies and site data are deleted the next time Wing starts; its history and archived tabs are kept.
 - Help → Report a Problem opens a prefilled issue. Nothing is sent automatically.
+- Optional iCloud Drive sync includes Spaces, folders, pinned tabs and Favorites. Optional crash-report sharing is configured separately in Settings.
+
+## Known limitations
+
+- Apple Silicon receives the current release. See each release's notes for the available Intel and Windows preview versions.
+- Touch ID and platform passkeys require Apple signing. Physical security keys work on the current build.
+- Import supports browser data and supported sessions. Some services require you to sign in again. See [profile import](docs/PROFILE-IMPORT.md).
+- Wing supports one regular workspace window, plus private and mini windows. Translation covers up to 8,000 characters of readable page text in a separate panel.
+- Extension and media compatibility vary by site and API. See [performance evidence](docs/PERFORMANCE.md) for the workloads used to evaluate the native build.
 
 ## Command line
 
@@ -49,34 +64,6 @@ wing --debug 9222
 
 `wing --debug` starts Wing with remote debugging, so Playwright, Puppeteer or a coding agent can drive it over the Chrome DevTools Protocol. It exposes every profile to local processes, so use it only when you need it.
 
-## What works
-
-Tabs come back with their scroll position and back/forward list, for the 25 most recently closed tabs. Chromium keeps no more than that. Also: throwaway Spaces deleted at next launch, duplicate tab cleanup, grouping tabs by site into folders, a per-site ad-blocking switch, a Space picker for links from other apps, capture annotation, and an estimate of memory saved by sleeping tabs.
-
-- Safari-style toolbar and top tab bar by default. Move tabs to an Arc-style sidebar in **Settings → Tabs** or with ⌥⌘S.
-- ⌃1–9 switches profiles.
-- Custom window chrome, vertical tabs, pinned tabs, favorites and folders.
-- Spaces with independent persistent profile partitions, colors and dark appearance.
-- Keyboard command palette, navigation, horizontal/vertical resizable split panes, Peek and site styles. Drag onto the center of another sidebar tab to merge; drop at its top edge to reorder. Choose split direction with the split control.
-- Favorite toolbar star and Favorites drop area; favorites follow profile boundaries.
-- Hide the sidebar with ⌘S and move to the left window edge to reveal it temporarily. Horizontal sidebar swipes switch to the next/previous profile.
-- Edit a Space to customize 13 interface color roles independently for light and dark appearance, with live preview, hexadecimal alpha values and preset reset.
-- Archive/restore, JSON workspace backup, downloads and a live process monitor.
-- Background tab lifecycle budget protecting active pages, splits, audio, capture and typed input.
-- Unpacked Chrome extensions through `electron-chrome-extensions`, registered against Wing's actual tab model. Manage them in **Settings → Extensions**; extension actions appear in the toolbar. Installations persist per profile and their source folders must remain available.
-
-## Profile import and login migration
-
-**Settings → Import browser** finds Arc, Chrome and Safari data. Choose a browser, then one or more of its profiles. Import bookmarks, history, Spaces and open tabs, supported session cookies, and saved passwords into a new isolated Wing profile. Source browser data is read-only. Passwords are re-encrypted using Wing’s OS-protected storage and can be filled explicitly on the exact HTTPS site from Settings. Passkeys, device-bound/partitioned sessions and site database tokens are not transferred; some websites require signing in again. Safari needs Full Disk Access, and its passwords come from a Passwords app CSV export. Extensions are listed for reinstalling. See `docs/PROFILE-IMPORT.md`.
-
-Command-T preserves a bounded, memory-only page backdrop behind the palette. Sidebar hover reveal animates HTML and native page bounds together; trackpad momentum switches profiles once per gesture.
-
-## Extension compatibility
-
-The real production-engine fixture verifies MV3 service workers, storage, messaging, content scripts, tab enumeration/create/remove, dynamic request blocking, and static blocking after the extension explicitly enables its ruleset. It also checks profile isolation. See `docs/extensions-electron-wing.json`.
-
-**This is not universal Chrome compatibility.** Web Store links can be installed from Settings → Extensions with CRX3 signature verification and a permission review; the store webpage’s own install button is not integrated. Some Chromium APIs remain unsupported, including complete native Chrome window/tab-group semantics. In the tested Electron engine, a static DNR ruleset marked `enabled: true` in its manifest was initially inactive; explicit activation from the extension worked. Verify an extension's behavior before relying on it. An unmodified official uBlock Origin Lite release starts after the namespace compatibility fix, but failed its blocking qualification; it is not currently supported reliably. See `docs/ubol-electron-qualification.json`. Native messaging, DRM, password-manager integration and arbitrary popular extensions have not been qualified.
-
 ## Developer tools
 
 From the command palette or Site Controls: view, delete and copy a site's cookies, view a page as a JSON tree, and reload unpacked extensions on demand or whenever their files change.
@@ -85,38 +72,17 @@ The **Develop** menu and the command palette hold the page tools: DevTools (⌥�
 
 The command palette also has Block Requests, Copy as curl, Decode JWT from Clipboard, Format JSON from Clipboard, and Open This Page on localhost for each running dev server. Local and staging hosts get a badge in the address bar.
 
-## Verify
+## How it's built
 
-```sh
-npm test                  # model, persistence, lifecycle and extension-manager tests
-npm run check
-npm run test:engine       # real sandboxed pages + production extension adapter
-npm run benchmark         # isolated view lifecycle benchmark; not a whole-browser energy test
-```
+- **Engine:** Chromium 156 built from source with Helium's patches (de-Googled, MV2 kept) and the ArdiaCore framework, which exposes Chromium's browser, profile and extension services to a native host. Sources and commits are pinned in `native/chromium-sources.json`.
+- **Host:** Objective-C++/AppKit in `native/chromium/`. It runs Wing's interface (`src/`) in a trusted internal tab and website tabs as separate unprivileged views. Privileged messages must come from that exact tab, frame and origin.
+- **Updates:** Sparkle, with EdDSA-signed appcasts.
 
-The engine suite covers navigation/history, cookie isolation, memory budget enforcement, sleeping-page recovery, split protection, extension-driven tab removal, and renderer-count return to baseline. It does not establish absence of memory leaks or long-session reliability.
+Wing started on Electron and then tried CEF; `docs/ARCHITECTURE.md` explains why neither shipped. The Electron app in `src/main.cjs` remains a development host (`npm run start:dev`).
 
-## Design and engine research
+## Build
 
-`src/design-system.css` defines semantic color, type, spacing, radius, focus and motion tokens. `docs/DESIGN-SYSTEM.md` describes interaction principles. The application does not load remote UI fonts or run perpetual decorative animations.
-
-The previous Objective-C++/CEF Chrome runtime host remains an **engine diagnostic**, built with `npm run build:native` into `release/Wing Native.app`. Its stock Chrome window supports more native APIs but is not Wing's intended interface. CEF's experimental custom window is opt-in (`--experimental-shell`); a second tab escapes into stock UI and split creation crashed inside CEF. See `docs/CEF-SHELL-LIMITATIONS.md`. It is not the primary app.
-
-The intended replacement is a native host around a patched Chromium **browser-service framework**, retaining Chrome's extension/profile services. A checksum-pinned ArdiaCore candidate is tested separately from Wing by `python3 scripts/qualify-ardiacore-ubo.py`. The existing Electron host fails the corresponding full-uBlock blocking test. See [engine evidence](docs/FULL-UBLOCK-ENGINE.md) and the [48-workstream implementation ledger](docs/IMPLEMENTATION-SCOPE.md); qualification is not a completed app migration.
-
-The isolated native migration preview now runs the existing Wing interface directly on this framework, with shared workspace persistence, profiles, pinned splits and full uBlock Origin. Build and run its integration qualification with:
-
-```sh
-python3 scripts/build-chromium-preview.py --source-receipt ../wing-chromium-build/wing-build-receipt.json
-npm run test:chromium-preview
-npm run start:chromium-preview
-```
-
-The runner uses a disposable profile and checks first-page blocking, bundled cookie filtering, uBlock settings, browser services, downloads, import isolation, navigation, split geometry, overlays and restart restoration. Results are recorded in `docs/chromium-preview-qualification.json`. The preview requires an explicit `WING_CHROMIUM_TEST_PROFILE` and mock keychain; it is not a daily-use replacement. Several native host operations remain unmigrated and report that explicitly.
-
-`npm run migrate:chromium` runs configuration, source compilation, packaging and native qualification in sequence, recording its current stage in `docs/chromium-migration-build-status.json`. It stops on a failed gate.
-
-Pinned source preparation and compilation use the dedicated sibling directory `../wing-chromium-build`, outside npm dependency resolution, with a disk reserve and conservative concurrency. Full Xcode and its Metal Toolchain component are required:
+Building the engine needs a Chromium checkout, full Xcode with its Metal toolchain, a large disk and several hours:
 
 ```sh
 python3 scripts/prepare-chromium.py --sync
@@ -125,25 +91,30 @@ python3 scripts/build-chromium.py configure
 python3 scripts/build-chromium.py compile --jobs 2
 ```
 
-Configuration applies Wing-owned bundle, keychain and CDM identities and the native profile APIs. Compilation writes `../wing-chromium-build/wing-build-receipt.json` only after the framework succeeds. Package that exact engine with:
+Compilation writes `wing-build-receipt.json` only after the framework succeeds. Then package and qualify the app against that exact engine:
 
 ```sh
-python3 scripts/build-chromium-preview.py --source-receipt ../wing-chromium-build/wing-build-receipt.json
+npm ci
+npm test
+export WING_CHROMIUM_BUILD=../wing-chromium-build-156
+python3 scripts/build-chromium-preview.py --source-receipt $WING_CHROMIUM_BUILD/wing-build-receipt.json
 npm run test:chromium-preview
+npm run build:chromium-production
 ```
 
-The receipt verifies the framework, API header and Wing patch inputs. Preview builds require this receipt, because the host is written against the pinned source engine rather than the older vendored upstream binary. Set `WING_CHROMIUM_BUILD` to use a source tree other than `../wing-chromium-build`. Source compilation, the source-engine integration qualification, privacy-network audit, current security baseline and release qualification must all pass before distributing a replacement. Existing profiles and installed apps are preserved.
+`npm run test:chromium-preview` drives the real app against loopback fixtures: first-page ad blocking, cookie-banner filtering, profile isolation, split geometry, downloads, import isolation and restart restoration. Results are in `docs/chromium-preview-qualification.json`.
 
-## Release status
+## Release
 
-Signing, notarization, and Electron automatic-update tooling are implemented, but this local build has no Developer ID release credentials or published update feed. Full extension compatibility and extended endurance qualification remain unfinished. Keep an established browser available. See `docs/RELEASING-ELECTRON.md`.
+`scripts/release-native.py` runs the tests and qualification, then builds a zip, a DMG and checksums in `dist/`. It refuses a dirty tree.
 
-The combined Electron distribution is GPL-3.0-only because its extension adapter is GPLv3. Original Wing sources' MIT notice is preserved in `LICENSE-MIT`; third-party terms are in `THIRD_PARTY_NOTICES.md`. No public repository or release has been published from this workspace.
+```sh
+python3 scripts/release-native.py
+python3 scripts/release-native.py --publish --notes notes.md
+```
 
-### Persistent-profile Chromium staging
+Add `--notarize` for Developer ID distribution. Set `WING_SIGN_IDENTITY` to the full installed **Developer ID Application** identity and `WING_NOTARY_PROFILE` to the name of a stored `notarytool` Keychain profile. The script verifies the stapled app, ZIP and disk image before replacing the previous build artifacts.
 
-`npm run build:chromium-production` stages a separate `Wing.app` under `native/build/chromium-production/`. It requires a completed Wing source-engine receipt and passing initial/restart qualification of the exact engine and host inputs. The prebuilt upstream framework cannot be packaged in this mode.
+## License
 
-The staged application uses `~/Library/Application Support/Wing/Chromium`, real Wing keychain storage, and registered HTTP/HTTPS handlers. It ignores test environments and does not enable the mock keychain. Choosing “Make default” in settings requests macOS registration; packaging does not change the default browser. Existing Electron profiles are not automatically converted; workspace import and Wing/Arc/Chrome profile import remain explicit actions. Legacy Wing import preserves nested folders, saved split layouts, archive entries and profile cookies; its encrypted password-vault path is supported for the v10 format and requires the source-built password-store API.
-
-This is staging, not a signed release: the source engine and production credential path still need qualification, and distribution requires a Developer ID identity, notarization, and a configured update channel. The isolated preview and its disposable profile remain available through `npm run start:chromium-preview`.
+GPL-3.0-only. Original Wing sources' MIT notice is in `LICENSE-MIT`; third-party terms, including Chromium, Helium, ArdiaCore, uBlock Origin and Sparkle, are in `THIRD_PARTY_NOTICES.md`.

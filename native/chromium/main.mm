@@ -404,6 +404,57 @@ static NSString *PermissionSymbol(NSArray *kinds) {
 static NSUInteger gHoverPeekGeneration;
 // uBlock Origin Lite: declarative rules the engine applies without a background page.
 static NSString *const kProtectionFolder = @"uBOLite.chromium";
+static NSString *gProtectionDirectory;
+
+static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
+  if (!profile) return nil;
+  static NSString *extensionPath;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    NSString *source = [NSBundle.mainBundle.resourcePath
+        stringByAppendingPathComponent:kProtectionFolder];
+    id manifest = Parse([NSString
+        stringWithContentsOfFile:[source stringByAppendingPathComponent:@"manifest.json"]
+                        encoding:NSUTF8StringEncoding
+                           error:nil]);
+    NSString *key = [manifest isKindOfClass:NSDictionary.class] ? manifest[@"key"] : nil;
+    // ComponentLoader crashes when its manifest is missing a usable key.
+    if (![key isKindOfClass:NSString.class] ||
+        ![[NSData alloc] initWithBase64EncodedString:key options:0].length) {
+      fprintf(stderr, "Wing: bundled protection extension has an invalid component key.\n");
+      return;
+    }
+
+    // Chromium writes the generated DNR indexes next to the extension files.
+    // Refresh from the signed bundle on each launch and leave its seal intact.
+    NSString *pattern = [NSTemporaryDirectory() stringByAppendingPathComponent:@"Wing-Protection.XXXXXX"];
+    std::string bytes(pattern.fileSystemRepresentation);
+    char *directory = mkdtemp(bytes.data());
+    if (!directory) {
+      perror("Wing: could not create protection directory");
+      return;
+    }
+    NSString *temporary = [@(directory) stringByResolvingSymlinksInPath];
+    NSString *destination = [temporary stringByAppendingPathComponent:kProtectionFolder];
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSError *error;
+    if (![files copyItemAtPath:source toPath:destination error:&error]) {
+      fprintf(stderr, "Wing: could not stage protection extension: %s\n",
+              error.localizedDescription.UTF8String);
+      [files removeItemAtPath:temporary error:nil];
+      return;
+    }
+    gProtectionDirectory = temporary;
+    atexit([] {
+      @autoreleasepool {
+        [NSFileManager.defaultManager removeItemAtPath:gProtectionDirectory error:nil];
+      }
+    });
+    extensionPath = destination;
+  });
+  return extensionPath ? [profile loadComponentExtension:extensionPath] : nil;
+}
+
 @implementation WingChromiumHost {
   ArdiaCoreWindow *_window, *_uiWindow;
   ArdiaCoreTab *_shell;
@@ -553,9 +604,7 @@ static NSString *const kProtectionFolder = @"uBOLite.chromium";
            }
            self->_profiles[profileId] = loaded;
            [self->_window prepareProfile:loaded];
-           [loaded loadComponentExtension:
-                       [NSBundle.mainBundle.resourcePath
-                           stringByAppendingPathComponent:kProtectionFolder]];
+           LoadBundledProtection(loaded);
            [self service:request
                  profile:profileId
                    reply:rid
@@ -1270,9 +1319,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
            // Register protection with the new profile's initial component set,
            // before the importer starts its private browser service document.
            [self->_window prepareProfile:profile];
-           [profile loadComponentExtension:[NSBundle.mainBundle.resourcePath
-                                               stringByAppendingPathComponent:
-                                                   kProtectionFolder]];
+           LoadBundledProtection(profile);
          }
          ready(profile, profile ? nil : @"Import destination could not load.");
        }];
@@ -2468,6 +2515,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [view addItem:NSMenuItem.separatorItem];
   [view addItem:[self command:@"Split View…" key:@"2" modifiers:cmd | shift data:@{@"type" : @"split-picker"}]];
   [view addItem:[self command:@"Show Reader" key:@"r" modifiers:cmd | option data:@{@"type" : @"reader"}]];
+  [view addItem:[self command:@"Translate Page Text…" key:nil modifiers:0 data:@{@"type" : @"translate-page"}]];
   [view addItem:[self action:@"Cast…" key:nil modifiers:0 name:@"cast" args:nil]];
   [view addItem:[self system:@"Enter Full Screen" selector:@selector(toggleFullScreen:) key:@"f" modifiers:cmd | control]];
   [view addItem:NSMenuItem.separatorItem];
@@ -3380,10 +3428,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                   [self->_protectionDeadlines[identity] timeIntervalSinceNow] >
                       0) {
                 [self->_checkingProtection removeObject:identity];
-                [self->_profiles[identity]
-                    loadComponentExtension:[NSBundle.mainBundle.resourcePath
-                                               stringByAppendingPathComponent:
-                                                   kProtectionFolder]];
+                LoadBundledProtection(self->_profiles[identity]);
                 [tab loadURL:self->_protectionURLs[identity] userInitiated:NO];
                 return;
               }
@@ -3459,10 +3504,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         [_protectionDeadlines[profileId] timeIntervalSinceNow] <= 0)
       continue;
     [_checkingProtection removeObject:profileId];
-    [_profiles[profileId]
-        loadComponentExtension:
-            [NSBundle.mainBundle.resourcePath
-                stringByAppendingPathComponent:kProtectionFolder]];
+    LoadBundledProtection(_profiles[profileId]);
     ArdiaCoreTab *probe = [_window openTab:_protectionURLs[profileId]
                                    profile:_profiles[profileId]
                                 foreground:NO];
@@ -3702,45 +3744,25 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       if (![_startingProtection containsObject:profileId]) {
         [_startingProtection addObject:profileId];
         [_window prepareProfile:profile];
-        NSString *path = [NSBundle.mainBundle.resourcePath
-            stringByAppendingPathComponent:kProtectionFolder];
-        NSDictionary *manifest = Parse([NSString
-            stringWithContentsOfFile:
-                [path stringByAppendingPathComponent:@"manifest.json"]
-                            encoding:NSUTF8StringEncoding
-                               error:nil]);
-        // Missing component keys trigger a fatal Chromium CHECK; validate
-        // before entering the engine, even though the bundle is signed at build
-        // time.
-        if (![manifest[@"key"] isKindOfClass:NSString.class] ||
-            ![manifest[@"key"] length]) {
-          [self send:@"command"
-                data:@{
-                  @"type" : @"toast",
-                  @"message" : @"The bundled protection extension is invalid."
-                }];
-          continue;
-        }
         [profile loadComponentExtension:
                      [NSBundle.mainBundle.resourcePath
                          stringByAppendingPathComponent:@"WingServices"]];
-        NSString *extensionId = [profile loadComponentExtension:path];
-        if (!extensionId) {
+        NSString *extensionId = LoadBundledProtection(profile);
+        if (extensionId.length) {
+          // The engine holds first-page navigation for up to 10 s while the
+          // blocking rules initialize.
+          [profile holdNavigationsUntilRulesetsOf:extensionId];
+          _protectionURLs[profileId] =
+              [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html", extensionId];
+        } else {
           // Show the pages unprotected rather than leaving them blank.
-          [_protectedProfiles addObject:profileId];
           [self send:@"command"
                 data:@{
                   @"type" : @"toast",
                   @"message" : @"Ad and tracker blocking could not start for this profile."
                 }];
-          continue;
         }
-        // Pages wait (up to 10 s, in the engine) until the blocking rules are
-        // in force, so the first page is filtered without a startup document.
-        [profile holdNavigationsUntilRulesetsOf:extensionId];
         [profile watchCastRoutes];
-        _protectionURLs[profileId] =
-            [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html", extensionId];
         [_protectedProfiles addObject:profileId];
       }
       if (![_protectedProfiles containsObject:profileId])
@@ -5355,44 +5377,67 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         }];
     return;
   }
-  if ([action isEqual:@"summarize"]) {
+  if ([action isEqual:@"summarize"] || [action isEqual:@"translate-page"]) {
+    BOOL translating = [action isEqual:@"translate-page"];
     NSString *helper = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent
         stringByAppendingPathComponent:@"wing-summarize"];
     if (![NSProcessInfo.processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){26, 0, 0}] ||
         ![NSFileManager.defaultManager isExecutableFileAtPath:helper]) {
-      [self reply:rid result:nil error:@"Page summaries need macOS 26 with Apple Intelligence."];
+      [self reply:rid result:nil
+            error:translating ? @"On-device page translation needs macOS 26."
+                              : @"Page summaries need macOS 26 with Apple Intelligence."];
       return;
     }
     if (![page.url hasPrefix:@"http"]) {
-      [self reply:rid result:nil error:@"Open a web page to summarize it."];
+      [self reply:rid result:nil
+            error:translating ? @"Open a web page to translate it." : @"Open a web page to summarize it."];
       return;
     }
-    NSString *library = [NSString
-        stringWithContentsOfFile:[[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"reader"]
-                                     stringByAppendingPathComponent:@"Readability.js"]
-                        encoding:NSUTF8StringEncoding
-                           error:nil] ?: @"";
-    // Readability finds the article on a copy of the page; the page itself is untouched.
-    NSString *script = [NSString
-        stringWithFormat:@"post('result',JSON.stringify((()=>{let t='';try{%@\n"
-                         @"t=new Readability(document.cloneNode(true)).parse()?.textContent||''}catch(e){}"
-                         @"t=(t.trim().length>200?t:document.body?.innerText||'').replace(/\\s+/g,' ').trim();"
-                         @"return{title:document.title,text:t.slice(0,20000)}})()))",
-                         library];
+    NSString *script;
+    if (translating) {
+      script = @"{const main=document.querySelector('article,main,[role=main]');"
+                @"const text=(main?.innerText?.trim()||document.body?.innerText||'').trim();"
+                @"const clipped=text.slice(0,8000).replace(/[\\uD800-\\uDBFF]$/,'');"
+                @"post('result',JSON.stringify({text:clipped,truncated:clipped.length<text.length}));}";
+    } else {
+      NSString *library = [NSString
+          stringWithContentsOfFile:[[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"reader"]
+                                       stringByAppendingPathComponent:@"Readability.js"]
+                          encoding:NSUTF8StringEncoding
+                             error:nil] ?: @"";
+      // Readability extracts an article from a copy of the page.
+      script = [NSString
+          stringWithFormat:@"post('result',JSON.stringify((()=>{let t='';try{%@\n"
+                           @"t=new Readability(document.cloneNode(true)).parse()?.textContent||''}catch(e){}"
+                           @"t=(t.trim().length>200?t:document.body?.innerText||'').replace(/\\s+/g,' ').trim();"
+                           @"return{text:t.slice(0,20000)}})()))",
+                           library];
+    }
     NSString *title = page.title ?: @"";
+    NSString *url = page.url;
     [page evaluate:script
         completion:^(NSString *json) {
+          if (page.closed || ![page.url isEqual:url]) {
+            [self reply:rid result:nil error:@"The page changed. Try again on the current page."];
+            return;
+          }
           id value = json ? Parse(json) : nil;
           if ([value isKindOfClass:NSString.class])
             value = Parse(value);
           NSString *text = [value isKindOfClass:NSDictionary.class] ? value[@"text"] : nil;
-          if (![text isKindOfClass:NSString.class] || text.length < 80) {
-            [self reply:rid result:nil error:@"There isn't enough text on this page to summarize."];
+          if (![text isKindOfClass:NSString.class] || text.length < (translating ? 1 : 80) ||
+              text.length > (translating ? 8000 : 20000)) {
+            [self reply:rid result:nil
+                  error:translating ? @"There isn’t enough readable text on this page."
+                                    : @"There isn't enough text on this page to summarize."];
             return;
           }
+          NSNumber *truncated = @([value[@"truncated"] respondsToSelector:@selector(boolValue)] &&
+                                  [value[@"truncated"] boolValue]);
           dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             NSTask *task = [NSTask new];
             task.executableURL = [NSURL fileURLWithPath:helper];
+            if (translating) task.arguments = @[@"--translate"];
             NSPipe *input = [NSPipe pipe], *output = [NSPipe pipe], *errors = [NSPipe pipe];
             task.standardInput = input;
             task.standardOutput = output;
@@ -5406,17 +5451,21 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
             NSData *out = launched ? [output.fileHandleForReading readDataToEndOfFile] : nil;
             NSData *err = launched ? [errors.fileHandleForReading readDataToEndOfFile] : nil;
             if (launched) [task waitUntilExit];
-            NSString *summary = out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : nil;
+            NSString *result = out ? [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding] : nil;
             NSString *problem = err.length ? [[NSString alloc] initWithData:err encoding:NSUTF8StringEncoding] : nil;
-            BOOL ok = launched && task.terminationStatus == 0 && summary.length;
+            BOOL ok = launched && task.terminationStatus == 0 && result.length;
             dispatch_async(dispatch_get_main_queue(), ^{
               if (ok)
                 [self reply:rid
-                     result:@{@"summary" : [summary stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet],
-                              @"title" : title}
+                     result:@{(translating ? @"translation" : @"summary"):
+                                  [result stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet],
+                              @"title" : title, @"truncated" : truncated}
                       error:nil];
               else
-                [self reply:rid result:nil error:problem.length ? problem : @"The page couldn't be summarized."];
+                [self reply:rid result:nil
+                      error:problem.length ? problem
+                          : translating ? @"Translation didn’t finish. Try again."
+                                        : @"The page couldn't be summarized."];
             });
           });
         }];

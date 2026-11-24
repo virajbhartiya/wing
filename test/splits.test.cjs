@@ -144,7 +144,7 @@ test("closing then restoring a temporary split restores the complete group", () 
   assert(state.tabs.some((tab) => tab.id === "b"));
   assert.equal(state.archive.length, 0);
 });
-test("composite sidebar emits one row with all pane names and active state", () => {
+test("composite sidebar row shows all pane names and is active when another pane is selected", () => {
   const vm = require("node:vm"),
     fs = require("node:fs"),
     state = fixture();
@@ -165,8 +165,12 @@ test("composite sidebar emits one row with all pane names and active state", () 
     ),
     context,
   );
-  const html = state.tabs.map((tab) => context.tabHTML(tab)).join("");
-  assert.equal((html.match(/data-tab="/g) || []).length, 3);
-  assert.match(context.tabHTML(state.tabs[0]), /class="tab active is-split"/);
-  assert.match(html, /a.example \/ b.example/);
+  const tab = state.tabs[0];
+  const group = context.sidebarSplit(tab);
+  assert.equal(group.tabIds[0], tab.id);
+  const row = context.tabRow(tab, group, context.sidebarTabTitle(tab, group));
+  assert.equal(row.active, true);
+  assert.match(row.html(), /class="tab is-split"/);
+  assert.match(row.html(), /a.example \/ b.example/);
+  assert.match(row.html(), /aria-label="Separate split view"/);
 });

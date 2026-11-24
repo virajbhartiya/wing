@@ -81,7 +81,9 @@ let state = null,
   paletteMode = "new",
   paletteIndex = 0,
   paletteResults = [],
+  paletteLibrary = null,
   libraryTab = "archive",
+  libraryView = null,
   toastTimer;
 async function act(name, data = {}) {
   try {
@@ -118,6 +120,82 @@ function patchHTML(selector, html) {
     renderedTabIds.set(selector, ids);
   }
 }
+const renderedRows = new WeakMap();
+function patchTabRows(selector, rows) {
+  const element = $(selector);
+  // Let an in-place rename finish before moving or updating its row.
+  if (element.querySelector(".tab-rename")) return;
+  const previousIds = renderedTabIds.get(selector);
+  const nextIds = new Set();
+  const template = document.createElement("template");
+  function reconcile(parent, entries) {
+    const previous = renderedRows.get(parent);
+    const next = new Map();
+    for (const entry of entries) next.set(entry.key, previous?.get(entry.key));
+    for (const [key, record] of previous || [])
+      if (!next.has(key)) record.element.remove();
+
+    let before = parent.firstElementChild;
+    for (const entry of entries) {
+      const record = next.get(entry.key);
+      let row = record?.element;
+      const changed =
+        !record ||
+        entry.content.length !== record.content.length ||
+        entry.content.some((value, index) => value !== record.content[index]);
+      if (changed) {
+        template.innerHTML = entry.html();
+        const replacement = template.content.firstElementChild;
+        if (!row) row = replacement;
+        else if (entry.children) {
+          const header = row.firstElementChild;
+          const nextHeader = replacement.firstElementChild;
+          header.setAttribute("aria-expanded", nextHeader.getAttribute("aria-expanded"));
+          header.replaceChildren(...nextHeader.childNodes);
+        } else {
+          for (const { name, value } of replacement.attributes)
+            if (name !== "class" && row.getAttribute(name) !== value)
+              row.setAttribute(name, value);
+          for (const name of ["tab-compact", "is-split"])
+            row.classList.toggle(name, replacement.classList.contains(name));
+          const focused = document.activeElement;
+          const control = focused !== row && row.contains(focused) && focused.classList[0];
+          row.replaceChildren(...replacement.childNodes);
+          if (control) {
+            const target = [...row.children].find((child) => child.classList.contains(control));
+            (target || row).focus({ preventScroll: true });
+          }
+        }
+      }
+      if (entry.tabId !== undefined) {
+        nextIds.add(entry.tabId);
+        if (!record && previousIds && !previousIds.has(entry.tabId)) {
+          row.classList.add("entering");
+          row.addEventListener("animationend", (event) => {
+            if (event.animationName === "strip-tab-in" || event.animationName === "tab-enter")
+              row.classList.remove("entering");
+          }, { once: true });
+        }
+        if (changed || record.active !== entry.active)
+          row.classList.toggle("active", entry.active);
+        if (changed || record.loading !== entry.loading)
+          row.querySelector(".site-icon")?.classList.toggle("is-loading", entry.loading);
+      }
+      if (row !== before) parent.insertBefore(row, before);
+      before = row.nextElementSibling;
+      if (entry.children) reconcile(row.lastElementChild, entry.children);
+      next.set(entry.key, {
+        element: row,
+        content: entry.content,
+        active: entry.active,
+        loading: entry.loading,
+      });
+    }
+    renderedRows.set(parent, next);
+  }
+  reconcile(element, rows);
+  renderedTabIds.set(selector, nextIds);
+}
 const current = () => state?.tabs.find((t) => t.id === state.activeTabId);
 const currentSpace = () =>
   state?.spaces.find((s) => s.id === state.activeSpaceId) || state?.spaces[0];
@@ -144,7 +222,7 @@ function host(url) {
     return url;
   }
 }
-function tabIcon(t) {
+function tabIcon(t, loading = t.loading && t.id === state?.activeTabId) {
   if (t.url === "wing://home")
     return '<span class="wing-mark" aria-hidden="true"></span>';
   if (t.url === "wing://pulls") return icon("split");
@@ -167,8 +245,9 @@ function tabIcon(t) {
   const monogram = hostname.slice(0, 1).toUpperCase() || "·";
   let favicon = page.origin + "/favicon.ico";
   try {
-    const discovered = new URL(t.favicon);
+    const discovered = t.favicon ? new URL(t.favicon) : null;
     if (
+      discovered &&
       ["https:", "http:"].includes(discovered.protocol) &&
       !discovered.username &&
       !discovered.password &&
@@ -181,20 +260,17 @@ function tabIcon(t) {
     (hash, char) => (hash * 31 + char.charCodeAt(0)) % 360,
     0,
   );
-  // Rows are rebuilt on every change; an icon already shown once is drawn
-  // straight away instead of flashing its letter while it decodes again.
+  // An icon already shown once can be drawn immediately in a new row.
   const shown = loadedIcons.has(favicon) ? " has-favicon" : "";
   // Background pages (Sheets, Docs) can report loading indefinitely while
   // hidden; only the page in front shows progress.
-  const loading = t.loading && t.id === state?.activeTabId;
   return `<span class="site-icon${shown}${t.sleeping ? " is-sleeping" : ""}${loading ? " is-loading" : ""}" style="--site-hue:${hue}" aria-hidden="true"${t.sleeping ? ' title="Sleeping tab"' : ""}><span class="site-monogram">${esc(monogram)}</span><img class="site-favicon" src="${esc(favicon)}" alt="" decoding="async" referrerpolicy="no-referrer"></span>`;
 }
 const loadedIcons = new Set();
 function sidebarSplit(tab) {
   return (state.splits || []).find((group) => group.tabIds.includes(tab.id));
 }
-function sidebarTabTitle(tab) {
-  const group = sidebarSplit(tab);
+function sidebarTabTitle(tab, group = sidebarSplit(tab)) {
   return group
     ? group.title ||
         group.tabIds
@@ -202,18 +278,24 @@ function sidebarTabTitle(tab) {
           .join(" / ")
     : tab.title;
 }
-function sidebarRepresentative(tab) {
-  const group = sidebarSplit(tab);
-  return !group || group.tabIds[0] === tab.id;
+function tabRow(t, group, title, { compact = false, favorite = false } = {}) {
+  return {
+    key: `tab:${t.id}`,
+    tabId: t.id,
+    content: [
+      t.url, title, t.title, t.favicon, t.faviconOrigin, t.sleeping,
+      t.screenSharing, t.capturing, t.pictureInPicture, t.audible, t.muted,
+      group?.tabIds.length, compact,
+    ],
+    active: group ? group.tabIds.includes(state.activeTabId) : t.id === state.activeTabId,
+    loading: !group && !!t.loading && t.id === state.activeTabId,
+    html: favorite
+      ? () => `<button class="favorite" data-tab="${esc(t.id)}" data-capturing="${!!t.capturing}" data-pip="${!!t.pictureInPicture}" aria-label="${esc(title)}${t.capturing ? " — camera, microphone or screen capture active" : ""}${t.pictureInPicture ? " — picture-in-picture active" : ""}" title="${esc(title)}${t.capturing ? " — capture active" : ""}${t.pictureInPicture ? " — picture-in-picture active" : ""}" draggable="true">${group ? icon("split") : tabIcon(t, false)}</button>`
+      : () => tabHTML(t, group, title, compact),
+  };
 }
-function tabHTML(t) {
-  if (!sidebarRepresentative(t)) return "";
-  const group = sidebarSplit(t);
-  const active = group
-    ? group.tabIds.includes(state.activeTabId)
-    : t.id === state.activeTabId;
-  const title = sidebarTabTitle(t);
-  return `<div class="tab ${active ? "active" : ""} ${group ? "is-split" : ""}" role="button" tabindex="0" draggable="true" data-tab="${esc(t.id)}" title="${esc(title)}\n${esc(t.url)}"><span class="tab-icon">${group ? icon("split") : tabIcon(t)}</span><span class="tab-title">${esc(title)}</span>${group ? `<span class="split-count">${group.tabIds.length}</span><button class="split-separate" data-separate-split="${esc(t.id)}" aria-label="Separate split view" title="Separate split view">${icon("close")}</button>` : ""}${t.screenSharing ? `<button class="tab-capture" data-stop-sharing="${esc(t.id)}" aria-label="Stop sharing ${esc(t.title)}" title="Stop sharing this screen or tab">●</button>` : t.capturing ? `<span class="tab-capture" aria-label="Camera or microphone in use" title="Camera or microphone in use">●</span>` : ""}${t.pictureInPicture ? `<span class="tab-pip" aria-label="Picture-in-picture active" title="Playing in picture-in-picture">▣</span>` : ""}${t.audible || t.muted ? `<button class="tab-audio" data-mute="${esc(t.id)}" title="${t.muted ? "Unmute tab" : "Mute tab"}" aria-label="${t.muted ? "Unmute" : "Mute"} ${esc(t.title)}">${icon(t.muted ? "muted" : "volume")}</button>` : ""}<button class="tab-close" data-close="${t.id}" title="Close ${group ? "split" : "tab"}" aria-label="Close ${esc(title)}">${icon("close")}</button></div>`;
+function tabHTML(t, group, title, compact) {
+  return `<div class="tab${compact ? " tab-compact" : ""}${group ? " is-split" : ""}" role="button" tabindex="0" draggable="true" data-tab="${esc(t.id)}" title="${esc(title)}\n${esc(t.url)}"><span class="tab-icon">${group ? icon("split") : tabIcon(t, false)}</span><span class="tab-title">${esc(title)}</span>${group ? `<span class="split-count">${group.tabIds.length}</span><button class="split-separate" data-separate-split="${esc(t.id)}" aria-label="Separate split view" title="Separate split view">${icon("close")}</button>` : ""}${t.screenSharing ? `<button class="tab-capture" data-stop-sharing="${esc(t.id)}" aria-label="Stop sharing ${esc(t.title)}" title="Stop sharing this screen or tab">●</button>` : t.capturing ? `<span class="tab-capture" aria-label="Camera or microphone in use" title="Camera or microphone in use">●</span>` : ""}${t.pictureInPicture ? `<span class="tab-pip" aria-label="Picture-in-picture active" title="Playing in picture-in-picture">▣</span>` : ""}${t.audible || t.muted ? `<button class="tab-audio" data-mute="${esc(t.id)}" title="${t.muted ? "Unmute tab" : "Mute tab"}" aria-label="${t.muted ? "Unmute" : "Mute"} ${esc(t.title)}">${icon(t.muted ? "muted" : "volume")}</button>` : ""}<button class="tab-close" data-close="${esc(t.id)}" title="Close ${group ? "split" : "tab"}" aria-label="Close ${esc(title)}">${icon("close")}</button></div>`;
 }
 let addressFinish = 0;
 let sidebarFrameSequence = -1,
@@ -423,16 +505,20 @@ function render() {
   $("#favorite-button").title =
     t?.kind === "favorite" ? "Remove from Favorites" : "Add to Favorites";
   $("#space-name").innerHTML = `<b>${esc(space.icon)}</b>${esc(space.name)}`;
-  const tabs = tabsForSpace().filter(sidebarRepresentative),
+  const splitByTab = new Map();
+  for (const group of state.splits || [])
+    for (const id of group.tabIds) splitByTab.set(id, group);
+  const tabs = tabsForSpace().filter((tab) => {
+      const group = splitByTab.get(tab.id);
+      return !group || group.tabIds[0] === tab.id;
+    }),
     favorites = tabs.filter((t) => t.kind === "favorite");
-  patchHTML(
+  const titleFor = (tab) => sidebarTabTitle(tab, splitByTab.get(tab.id) || null);
+  const rowFor = (tab, options) =>
+    tabRow(tab, splitByTab.get(tab.id), titleFor(tab), options);
+  patchTabRows(
     "#favorites",
-    favorites
-      .map(
-        (t) =>
-          `<button class="favorite ${(sidebarSplit(t)?.tabIds || [t.id]).includes(state.activeTabId) ? "active" : ""}" data-tab="${t.id}" data-capturing="${!!t.capturing}" data-pip="${!!t.pictureInPicture}" aria-label="${esc(sidebarTabTitle(t))}${t.capturing ? " — camera, microphone or screen capture active" : ""}${t.pictureInPicture ? " — picture-in-picture active" : ""}" title="${esc(sidebarTabTitle(t))}${t.capturing ? " — capture active" : ""}${t.pictureInPicture ? " — picture-in-picture active" : ""}" draggable="true">${sidebarSplit(t) ? icon("split") : tabIcon(t)}</button>`,
-      )
-      .join(""),
+    favorites.map((tab) => rowFor(tab, { favorite: true })),
   );
   $("#favorites").style.display = favorites.length ? "grid" : "";
   $("#home-context").textContent =
@@ -469,46 +555,50 @@ function render() {
   );
 
   const folders = state.folders.filter((f) => f.spaceId === space.id);
-  function folderHTML(folder, ancestors = new Set()) {
-    if (ancestors.has(folder.id)) return "";
-    const visited = new Set([...ancestors, folder.id]);
-    const children = tabs.filter(
-      (t) => t.folderId === folder.id && t.kind === "pinned",
-    );
-    const activeChild = children.find(
-      (t) =>
-        t.id === state.activeTabId ||
-        sidebarSplit(t)?.tabIds.includes(state.activeTabId),
-    );
-    const content = folder.collapsed
-      ? activeChild
-        ? tabHTML(activeChild)
-        : ""
-      : children.map(tabHTML).join("") +
-        folders
-          .filter((f) => f.parentId === folder.id)
-          .map((f) => folderHTML(f, visited))
-          .join("");
-    return `<div class="folder" data-folder="${folder.id}"><button class="folder-head" data-folder-toggle="${folder.id}" aria-expanded="${!folder.collapsed}"><span>${folder.collapsed ? "›" : "⌄"}</span>${icon("folder")}<span>${esc(folder.name)}</span></button><div class="folder-children">${content || (folder.collapsed ? "" : '<div class="empty">Drop tabs here</div>')}</div></div>`;
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  const nestedFolders = new Map();
+  for (const folder of folders) {
+    const parent = folderIds.has(folder.parentId) ? folder.parentId : null;
+    if (!nestedFolders.has(parent)) nestedFolders.set(parent, []);
+    nestedFolders.get(parent).push(folder);
   }
-  patchHTML(
-    "#pinned",
-    tabs
-      .filter((t) => t.kind === "pinned" && !t.folderId)
-      .map(tabHTML)
-      .join("") +
-      folders
-        .filter((f) => !f.parentId || !folders.some((p) => p.id === f.parentId))
-        .map((f) => folderHTML(f))
-        .join(""),
-  );
-  patchHTML(
-    "#today",
-    tabs
-      .filter((t) => t.kind === "today")
-      .map(tabHTML)
-      .join(""),
-  );
+  const pinned = tabs.filter((tab) => tab.kind === "pinned");
+  const today = tabs.filter((tab) => tab.kind === "today");
+  const pinnedByFolder = new Map();
+  for (const tab of pinned) {
+    const folder = tab.folderId || null;
+    if (!pinnedByFolder.has(folder)) pinnedByFolder.set(folder, []);
+    pinnedByFolder.get(folder).push(rowFor(tab));
+  }
+  function folderRow(folder, ancestors = new Set()) {
+    const visited = new Set([...ancestors, folder.id]);
+    const tabs = pinnedByFolder.get(folder.id) || [];
+    const children = folder.collapsed
+      ? tabs.filter((tab) => tab.active).slice(0, 1)
+      : [
+          ...tabs,
+          ...(nestedFolders.get(folder.id) || [])
+            .filter((child) => !visited.has(child.id))
+            .map((child) => folderRow(child, visited)),
+        ];
+    if (!folder.collapsed && !children.length)
+      children.push({
+        key: "empty",
+        content: [],
+        html: () => '<div class="empty">Drop tabs here</div>',
+      });
+    return {
+      key: `folder:${folder.id}`,
+      content: [folder.name, folder.collapsed],
+      children,
+      html: () => `<div class="folder" data-folder="${esc(folder.id)}"><button class="folder-head" data-folder-toggle="${esc(folder.id)}" aria-expanded="${!folder.collapsed}"><span>${folder.collapsed ? "›" : "⌄"}</span>${icon("folder")}<span>${esc(folder.name)}</span></button><div class="folder-children"></div></div>`,
+    };
+  }
+  patchTabRows("#pinned", [
+    ...(pinnedByFolder.get(null) || []),
+    ...(nestedFolders.get(null) || []).map((folder) => folderRow(folder)),
+  ]);
+  patchTabRows("#today", today.map((tab) => rowFor(tab)));
   renderPrFolder();
   const spaceButtons = state.spaces
       .map(
@@ -519,25 +609,18 @@ function render() {
   patchHTML("#spaces", spaceButtons);
   if (tabsOnTop) {
     patchHTML("#toolbar-spaces", spaceButtons);
-    patchHTML(
-      "#strip-tabs",
-      [
-        favorites,
-        tabs.filter((t) => t.kind === "pinned"),
-        tabs.filter((t) => t.kind === "today"),
-      ]
-        .filter((group) => group.length)
-        .map((group) =>
-          group
-            .map((t) =>
-              t.kind === "today"
-                ? tabHTML(t)
-                : tabHTML(t).replace('class="tab ', 'class="tab tab-compact '),
-            )
-            .join(""),
-        )
-        .join('<span class="strip-separator" aria-hidden="true"></span>'),
-    );
+    const stripRows = [];
+    for (const group of [favorites, pinned, today]) {
+      if (!group.length) continue;
+      if (stripRows.length)
+        stripRows.push({
+          key: `separator:${group[0].kind}`,
+          content: [],
+          html: () => '<span class="strip-separator" aria-hidden="true"></span>',
+        });
+      stripRows.push(...group.map((tab) => rowFor(tab, { compact: tab.kind !== "today" })));
+    }
+    patchTabRows("#strip-tabs", stripRows);
     // Only follow the active tab when it changes, so a strip scrolled by
     // hand stays put while pages load.
     if (activeChanged)
@@ -853,6 +936,35 @@ async function summarizePage() {
 async function toggleReader() {
   const r = await act("reader");
   if (r?.unavailable) toast("Reader isn’t available for this page.");
+}
+async function translatePageText() {
+  const tab = current();
+  if (!/^https?:/.test(tab?.url || ""))
+    return toast("Open a web page to translate it.");
+  showModal(
+    "translation",
+    `<div class="dialog-content summary">${dialogHead("Translate Page Text")}<p class="summary-source">${esc(tab.title || tab.url)}</p><p id="translation-status" role="status" aria-live="polite">Translating to your preferred language on this Mac…</p><div id="translation-text" role="region" aria-label="Translated page text" tabindex="0" dir="auto" hidden></div><div class="dialog-actions"><button class="secondary" id="translation-copy" hidden>Copy Translation</button></div></div>`,
+  );
+  const generation = modalGeneration;
+  const status = $("#translation-status");
+  try {
+    const result = await window.wing.invoke("translate-page", { id: tab.id });
+    if (generation !== modalGeneration) return;
+    if (typeof result?.translation !== "string" || !result.translation)
+      throw Error("Translation didn’t return any text.");
+    status.textContent = result.truncated
+      ? "Translated the first 8,000 characters."
+      : "Translation ready.";
+    const text = $("#translation-text");
+    text.textContent = result.translation;
+    text.hidden = false;
+    const copy = $("#translation-copy");
+    copy.hidden = false;
+    copy.onclick = () => act("copy-text", { text: result.translation });
+  } catch (error) {
+    if (generation === modalGeneration)
+      status.textContent = error.message || "The page text couldn’t be translated.";
+  }
 }
 // "Follow system" tracks macOS; a forced mode never reaches this until it's cleared.
 const systemDarkMedia = matchMedia("(prefers-color-scheme: dark)");
@@ -1314,18 +1426,25 @@ const DEV_COMMANDS = [
 function openPalette(mode = "new", value = "") {
   paletteMode = mode;
   paletteIndex = 0;
-  window.wing.invoke("local-servers").then((data) => {
-    localServers = data?.servers || [];
-    if (modalType === "palette") renderPalette();
-  }, () => {});
-  window.wing.invoke("library-data").then((data) => {
-    state = { ...state, ...data };
-    if (modalType === "palette") renderPalette();
-  });
+  paletteLibrary = null;
   showModal(
     "palette",
     `<div class="palette-input-wrap">${icon("search")}<input id="palette-input" placeholder="Search or enter website name" aria-label="Search or enter URL" autocomplete="off" spellcheck="false"><span class="palette-mode">${mode === "navigate" ? "This tab" : "New tab"}</span></div><div class="results" id="palette-results" role="listbox"></div><div class="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Select</span><span><kbd>↵</kbd> Open</span><span><kbd>⇥</kbd> Search a site</span><span class="palette-footer-end"><kbd>esc</kbd> Close</span></div>`,
   );
+  const generation = modalGeneration;
+  const profile = currentSpace()?.profileId;
+  window.wing.invoke("local-servers").then((data) => {
+    if (generation !== modalGeneration) return;
+    localServers = data?.servers || [];
+    renderPalette();
+  }, () => {});
+  window.wing.invoke("library-data").then((data) => {
+    if (generation !== modalGeneration || profile !== currentSpace()?.profileId)
+      return;
+    if (data.profileId && data.profileId !== profile) return;
+    paletteLibrary = data;
+    renderPalette();
+  }, () => {});
   $("#modal").classList.add("palette-modal");
   $("#palette-input").value = value || "";
   $("#palette-input").addEventListener("input", () => {
@@ -1545,6 +1664,12 @@ function renderPalette(rebuild = true) {
           toggleReader();
         },
       },
+      ...(window.wing.engine === "chromium" ? [{
+        label: "Translate Page Text…",
+        detail: "Translate into your preferred language on this Mac",
+        glyph: "library",
+        run: () => translatePageText(),
+      }] : []),
       {
         label: "New Private Window",
         detail: "Browse without saving history  ⇧⌘N",
@@ -1658,8 +1783,8 @@ function renderPalette(rebuild = true) {
                 at: t.lastActive,
                 tab: t,
               })),
-            ...flatten(state.bookmarks),
-            ...(state.history || [])
+            ...flatten(paletteLibrary?.bookmarks),
+            ...(paletteLibrary?.history || state.history || [])
               .filter(
                 (h) => h.profileId === undefined || h.profileId === profileId,
               )
@@ -2159,8 +2284,9 @@ function closeFromRow(button) {
     tab = state.tabs.find((t) => t.id === id),
     pinned = tab?.kind === "pinned" || tab?.kind === "favorite",
     remove = pinned && !button.closest(".is-split");
-  act("close-tab", { id, archive: remove });
+  const result = act("close-tab", { id, archive: remove });
   if (remove) toast("Removed. You can restore it from History & Archive.");
+  return result;
 }
 // The Pull Requests smart tab.
 const PR_CI = {
@@ -2588,7 +2714,7 @@ function settingsPanes() {
           `<button class="danger" id="clear-history">Clear History…</button>`,
           "delete",
         ) +
-        `<p class="settings-note">Wing has no account, analytics or cloud sync. Websites and your search engine receive normal browsing requests.</p>`,
+        `<p class="settings-note">Wing has no account or analytics. Layout sync through iCloud Drive and crash reporting are optional. Websites and your search engine receive normal browsing requests.</p>`,
     },
     {
       id: "passwords",
@@ -2964,7 +3090,7 @@ async function openExtensions() {
   if (result.error) return toast(result.error);
   showModal(
     "extensions",
-    `<div class="dialog-content">${dialogHead("Extensions")}<p>Extensions belong to this profile. Install from a Chrome Web Store link or a local unpacked folder. Support varies by extension API.</p><form id="store-extension-form"><label class="field"><span>Chrome Web Store link</span><input id="store-extension-url" type="text" required placeholder="https://chromewebstore.google.com/detail/…" aria-label="Chrome Web Store extension link"></label><div class="dialog-actions"><button class="primary" id="store-extension-submit">Review & install</button><button type="button" class="secondary" id="load-extension">Load unpacked</button></div><p id="store-extension-status" role="status"></p></form><div class="extension-list">${result.extensions.map((e) => `<div class="setting-row"><span>${esc(e.name)}<small>Version ${esc(e.version)}${e.manifestVersion ? ` · Manifest ${e.manifestVersion}` : ""}</small><details class="extension-permissions"><summary>Requested permissions</summary><p>${esc([...(e.permissions || []), ...(e.hostPermissions || [])].join(", ") || "No permissions declared")}</p></details></span><button class="secondary" data-remove-extension="${esc(e.id)}">Remove</button></div>`).join("") || "<p>No extensions installed in this profile.</p>"}</div>${(result.errors || []).map((e) => `<p>${esc(e.error)}</p>`).join("")}<p class="extension-note">${window.wing.engine === "chromium" ? "Full uBlock Origin is built in. Compatibility with other extensions is still being qualified." : "Compatibility is incomplete. uBlock Origin Lite currently fails our blocking test. Some static rules require explicit activation. Verify extensions before relying on them."}</p></div>`,
+    `<div class="dialog-content">${dialogHead("Extensions")}<p>Extensions belong to this profile. Install from a Chrome Web Store link or a local unpacked folder. Support varies by extension API.</p><form id="store-extension-form"><label class="field"><span>Chrome Web Store link</span><input id="store-extension-url" type="text" required placeholder="https://chromewebstore.google.com/detail/…" aria-label="Chrome Web Store extension link"></label><div class="dialog-actions"><button class="primary" id="store-extension-submit">Review & install</button><button type="button" class="secondary" id="load-extension">Load unpacked</button></div><p id="store-extension-status" role="status"></p></form><div class="extension-list">${result.extensions.map((e) => `<div class="setting-row"><span>${esc(e.name)}<small>Version ${esc(e.version)}${e.manifestVersion ? ` · Manifest ${e.manifestVersion}` : ""}</small><details class="extension-permissions"><summary>Requested permissions</summary><p>${esc([...(e.permissions || []), ...(e.hostPermissions || [])].join(", ") || "No permissions declared")}</p></details></span><button class="secondary" data-remove-extension="${esc(e.id)}">Remove</button></div>`).join("") || "<p>No extensions installed in this profile.</p>"}</div>${(result.errors || []).map((e) => `<p>${esc(e.error)}</p>`).join("")}<p class="extension-note">${window.wing.engine === "chromium" ? "uBlock Origin Lite is built in. Compatibility with other extensions is still being qualified." : "Compatibility is incomplete. uBlock Origin Lite currently fails our blocking test. Some static rules require explicit activation. Verify extensions before relying on them."}</p></div>`,
   );
   $("#store-extension-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -3034,38 +3160,74 @@ function savedMemoryLabel(metrics) {
     pages.reduce((n, p) => n + p.workingSetKB, 0) / pages.length / 1024;
   return ` · ABOUT ${Math.round(average * metrics.sleepingTabs)} MB SAVED`;
 }
-function openLibrary(tab = "archive") {
+async function openLibrary(tab = "archive") {
   libraryTab = tab;
-  window.wing.invoke("library-data").then((data) => {
-    state = { ...state, ...data };
-    if (modalType === "library") renderLibraryList();
-  });
+  const profile = currentSpace()?.profileId;
+  const view = { profile };
+  libraryView = view;
   showModal(
     "library",
-    `<div class="dialog-content">${dialogHead("Library")}<div class="library-tabs">${["archive", "history", "downloads"].map((t) => `<button data-library="${t}" class="${t === tab ? "active" : ""}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div><input class="library-search" id="library-search" placeholder="Find something you left behind…" aria-label="Search library"><div class="library-list" id="library-list"></div></div>`,
+    `<div class="dialog-content">${dialogHead("Library")}<div class="library-tabs">${["archive", "history", "downloads"].map((t) => `<button data-library="${t}" class="${t === tab ? "active" : ""}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div><input class="library-search" id="library-search" placeholder="Find something you left behind…" aria-label="Search library"><div id="library-status" role="status">Loading library…</div><button id="library-retry" class="secondary" hidden>Retry</button><div class="library-list" id="library-list"></div></div>`,
   );
+  const generation = modalGeneration;
+  const isCurrent = () =>
+    generation === modalGeneration && profile === currentSpace()?.profileId;
   $("#library-search").oninput = renderLibraryList;
-  $("#modal")
-    .querySelectorAll("[data-library]")
-    .forEach((b) => (b.onclick = () => openLibrary(b.dataset.library)));
+  const tabs = $("#modal").querySelectorAll("[data-library]");
+  for (const button of tabs) {
+    button.onclick = () => {
+      libraryTab = button.dataset.library;
+      for (const tab of tabs) tab.classList.toggle("active", tab === button);
+      renderLibraryList();
+    };
+  }
   renderLibraryList();
   $("#library-search").focus();
+  try {
+    const data = await window.wing.invoke("library-data");
+    if (!isCurrent()) return;
+    if (data.profileId && data.profileId !== profile)
+      throw Error("The active profile changed while loading the library.");
+    view.history = data.history;
+    view.downloads = data.downloads;
+    view.snapshotDownloads = state.downloads;
+    $("#library-status").textContent = "";
+    renderLibraryList();
+  } catch (error) {
+    if (!isCurrent()) return;
+    $("#library-status").textContent = error.message || "The library could not load.";
+    const retry = $("#library-retry");
+    retry.hidden = false;
+    retry.onclick = () => openLibrary(libraryTab);
+  }
 }
 function renderLibraryList() {
-  if (!$("#library-list")) return;
+  const list = $("#library-list");
+  if (!list || !currentSpace()) return;
   const q = $("#library-search").value.toLowerCase(),
     profileId = currentSpace().profileId;
+  const view = libraryView?.profile === profileId ? libraryView : null;
+  const spaces = new Set(
+    state.spaces.filter((space) => space.profileId === profileId).map((space) => space.id),
+  );
+  const downloads = view?.snapshotDownloads === state.downloads
+    ? view?.downloads ?? state.downloads
+    : state.downloads;
   const records = (
     libraryTab === "archive"
-      ? state.archive || []
+      ? (state.archive || []).filter((row) => spaces.has(row.spaceId))
       : libraryTab === "history"
-        ? (state.history || []).filter((h) => h.profileId === profileId)
-        : state.downloads
+        ? (view?.history || state.history || []).filter((h) => h.profileId === profileId)
+        : downloads || []
   )
     .filter((t) =>
       `${t.title || t.name} ${t.url || ""}`.toLowerCase().includes(q),
     )
     .slice(0, 150);
+  if (!records.length && $("#library-status").textContent) {
+    list.innerHTML = "";
+    return;
+  }
   if (libraryTab === "downloads" && window.wingFeatures) {
     $("#library-list").innerHTML = window.wingFeatures.downloads(records);
     return;
@@ -3422,7 +3584,11 @@ document.addEventListener("click", (e) => {
       strip.style.setProperty("--frozen-tab-width", row.offsetWidth + "px");
       strip.classList.add("frozen");
       row.classList.add("closing");
-      setTimeout(() => closeFromRow(close), 120);
+      setTimeout(async () => {
+        await closeFromRow(close);
+        // A beforeunload prompt can leave the same row in the strip.
+        row.classList.remove("closing");
+      }, 120);
     } else closeFromRow(close);
     return;
   }
@@ -4046,7 +4212,12 @@ window.wing.onState((next) => {
     (s) => s.id === state.activeSpaceId,
   );
   state = { ...state, ...next };
-  render();
+  if (
+    previousProfile &&
+    previousProfile !== currentSpace()?.profileId &&
+    (modalType === "library" || modalType === "palette")
+  ) closeModal();
+  else render();
   if (profileSwipeDirection && previousProfile !== currentSpace()?.profileId) {
     clearTimeout(profileSwipeAcknowledgement);
     settleProfileSwipe(profileSwipeDirection);
@@ -4107,6 +4278,9 @@ window.wing.onCommand((c) => {
       break;
     case "reader":
       toggleReader();
+      break;
+    case "translate-page":
+      translatePageText();
       break;
     case "cast-routes": {
       const known = new Set(castRoutes.map((route) => route.id));
@@ -4170,6 +4344,14 @@ document.addEventListener("mousedown", (e) => {
 window.wing.invoke("state").then((next) => {
   state = next;
   render();
+}).catch((error) => {
+  const page = $("#page-error");
+  const detail = error?.message
+    ? `<p class="error-code">${esc(error.message)}</p>`
+    : "";
+  $("#home").hidden = true;
+  page.hidden = false;
+  page.innerHTML = `<div role="alert">${icon("warning")}<h2>Wing couldn’t start</h2><p>Quit and reopen Wing to try again.</p>${detail}</div>`;
 });
 
 // Resource errors do not bubble; capture keeps a failed icon from exposing a

@@ -96,8 +96,8 @@ function native(action, data = {}) {
         "summarize",
       ].includes(action)
         ? 600000
-        : // The services page can take a while to start on a busy Mac.
-          action === "service"
+        : // Translation takes up to 30 seconds. The service page can be slow to start.
+          action === "service" || action === "translate-page"
           ? 45000
           : 15000,
     );
@@ -181,15 +181,10 @@ window.addEventListener("wing-native", (event) => {
       workspace.closed(data.id, data.archive);
       await publish();
     });
-  else if (workspace && kind === "service-event" && !privateMode)
-    enqueue(async () => {
-      if (data.profileId === profileId()) {
-        await library();
-        await publish(false);
-        watchDownloads();
-      }
-    });
-  else if (workspace && kind === "resize") enqueue(() => publish(false));
+  else if (workspace && kind === "service-event" && !privateMode) {
+    if (downloadScope && data.profileId === downloadScope.profile)
+      refreshDownloads();
+  } else if (workspace && kind === "resize") enqueue(() => publish(false));
 });
 const ready = native("bootstrap").then(async (result) => {
   document.documentElement.classList.toggle("full-screen", !!result.fullScreen);
@@ -213,15 +208,8 @@ const ready = native("bootstrap").then(async (result) => {
       2500,
     );
   // Populate recent downloads for the toolbar once startup work settles.
-  setTimeout(
-    () =>
-      enqueue(async () => {
-        await library();
-        await publish(false);
-        watchDownloads();
-      }).catch(() => {}),
-    2500,
-  );
+  resetDownloadScope();
+  scheduleDownloadRefresh(downloadScope, 2500);
 });
 // iCloud Drive layout sync: pull the other Macs' changes, merge, then write ours.
 let syncTimer = null;
@@ -264,7 +252,7 @@ setInterval(() => scheduleSync(0), 60000);
 ready.then(() => {
   if (!privateMode)
     setTimeout(() => service("ping").catch(() => {}), 1500);
-});
+}).catch(() => {});
 window.addEventListener("focus", () => scheduleSync(500));
 function enqueue(operation) {
   const result = queue.then(() => ready).then(operation);
@@ -327,7 +315,7 @@ async function publish(persist = true, sync = true) {
     persistTimer = null;
   }
   updateShellRaise(260);
-  const snapshot = workspace.snapshot(version);
+  const refreshProfileDownloads = !privateMode && resetDownloadScope();
   const address = document.querySelector("#address")?.getBoundingClientRect();
   persist = persist && !privateMode;
   await native("sync", {
@@ -353,52 +341,93 @@ async function publish(persist = true, sync = true) {
     for (const id of workspace.removedProfiles.splice(0))
       native("delete-profile", { id }).catch(() => {});
   if (persist && sync) scheduleSync();
+  const snapshot = workspace.snapshot(version);
   states.forEach((callback) => callback(snapshot));
+  // New profiles are known to the services bridge after the host accepts sync.
+  if (refreshProfileDownloads) refreshDownloads();
   return snapshot;
 }
 // Chromium reports download state changes, not byte progress; poll while a
 // transfer is active so the toolbar progress ring moves.
-let downloadWatch = null;
-function watchDownloads() {
-  if (downloadWatch) return;
-  if (!workspace.downloads.some((d) => d.status === "progressing" && !d.paused))
+let downloadScope;
+function resetDownloadScope() {
+  const profile = profileId();
+  if (downloadScope?.workspace === workspace && downloadScope.profile === profile)
+    return false;
+  clearTimeout(downloadScope?.timer);
+  workspace.downloads = [];
+  downloadScope = {
+    workspace,
+    profile,
+    timer: null,
+    inFlight: false,
+    refreshAgain: false,
+  };
+  return true;
+}
+function scheduleDownloadRefresh(scope, delay) {
+  scope.timer = setTimeout(() => {
+    if (downloadScope === scope) refreshDownloads();
+  }, delay);
+}
+async function refreshDownloads() {
+  const scope = downloadScope;
+  if (scope.inFlight) {
+    scope.refreshAgain = true;
     return;
-  downloadWatch = setTimeout(() => {
-    enqueue(async () => {
-      await library();
-      await publish(false);
-      downloadWatch = null;
-      watchDownloads();
-    });
-  }, 700);
+  }
+  clearTimeout(scope.timer);
+  scope.timer = null;
+  scope.inFlight = true;
+  // Refreshes update the toolbar without joining the workspace action queue
+  // or sending a complete layout back to the host.
+  try {
+    const downloads = await service("downloads", {}, scope.profile);
+    if (downloadScope !== scope || !Array.isArray(downloads)) return;
+    workspace.downloads = downloads;
+    notifyRuntime();
+  } catch {
+    // Keep the previous records during a transient service failure.
+  } finally {
+    scope.inFlight = false;
+    if (downloadScope === scope) {
+      if (scope.refreshAgain) {
+        scope.refreshAgain = false;
+        refreshDownloads();
+      } else if (
+        workspace.downloads.some((d) => d.status === "progressing" && !d.paused)
+      ) {
+        scheduleDownloadRefresh(scope, 700);
+      }
+    }
+  }
 }
 function profileId() {
   return workspace.state.spaces.find(
     (space) => space.id === workspace.state.activeSpaceId,
   )?.profileId;
 }
-function service(method, args = {}) {
-  return native("service", { profile: profileId(), method, args });
+function service(method, args = {}, profile = profileId()) {
+  return native("service", { profile, method, args });
 }
 async function library() {
-  const result = await service("library");
-  workspace.downloads = result.downloads;
   const profile = profileId(),
+    state = workspace.state,
     spaces = new Set(
-      workspace.state.spaces
-        .filter((s) => s.profileId === profile)
-        .map((s) => s.id),
+      state.spaces.filter((s) => s.profileId === profile).map((s) => s.id),
     );
+  const result = await service("library", {}, profile);
   const urls = new Set(result.history.map((row) => row.url));
   return {
     ...result,
+    profileId: profile,
     history: [
-      ...result.history,
-      ...workspace.state.history.filter(
+      ...result.history.map((row) => ({ ...row, profileId: profile })),
+      ...state.history.filter(
         (row) => row.profileId === profile && !urls.has(row.url),
       ),
     ],
-    archive: workspace.state.archive.filter((row) => spaces.has(row.spaceId)),
+    archive: state.archive.filter((row) => spaces.has(row.spaceId)),
   };
 }
 // The mini window draws its own toolbar, so it gets the Space's colors to match.
@@ -562,9 +591,18 @@ async function invoke(action, data = {}) {
         );
     }
   }
+  if (action === "translate-page") {
+    await ready;
+    return native(action, { id: data.id || workspace.state.activeTabId });
+  }
   if (action === "browser-profiles" || action === "browser-import") {
     await ready;
     return native(action, data);
+  }
+  if (action === "library-data") {
+    await ready;
+    if (privateMode) throw Error("Not available in a private window.");
+    return library();
   }
   if (action === "close-duplicates") {
     await ready;
@@ -952,7 +990,6 @@ async function invoke(action, data = {}) {
       );
       return { ok: true };
     }
-    if (action === "library-data") return library();
     if (
       [
         "download-control",
@@ -1025,7 +1062,7 @@ async function invoke(action, data = {}) {
         id: data.id || workspace.state.activeTabId,
       });
     if (action === "export")
-      return native("file-save", "image-export", {
+      return native("file-save", {
         name: "Wing-workspace.json",
         text: JSON.stringify(workspace.state, null, 2),
       });
@@ -1055,7 +1092,7 @@ async function invoke(action, data = {}) {
       const links = state.tabs.filter(
         (t) => t.spaceId === space.id && /^https?:/.test(t.url),
       );
-      return native("file-save", "image-export", {
+      return native("file-save", {
         name: "Wing-links.html",
         text: `<!doctype html><meta charset="utf-8"><title>${escape(space.name)}</title><h1>${escape(space.name)}</h1><ul>${links.map((t) => `<li><a href="${escape(navigation.cleanURL(t.url))}">${escape(t.customTitle || t.title)}</a></li>`).join("")}</ul>`,
       });
@@ -1190,5 +1227,5 @@ ready.then(async () => {
   if (!shouldAskDefaultBrowser({ packaged: true, isDefault: false, settings })) return;
   const reply = await native("default-browser-prompt").catch(() => null);
   if (reply?.use) native("default-browser").catch(() => {});
-  else if (reply?.off) invoke("features-settings", { defaultBrowserPromptOff: true });
-});
+  else if (reply?.off) await invoke("features-settings", { defaultBrowserPromptOff: true });
+}).catch(() => {});

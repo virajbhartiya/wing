@@ -61,6 +61,97 @@ test("a merge with nothing new changes nothing", () => {
   assert.equal(S.merge(a, layout, layout), false);
 });
 
+test("throwaway Space folders and pinned URLs stay out of the iCloud layout", () => {
+  const state = M.initialState();
+  const throwaway = { ...state.spaces[0], id: "disposable", throwaway: true };
+  const retained = state.spaces[0].id;
+  state.spaces.push(throwaway);
+  state.folders.push(
+    { id: "private-folder", spaceId: throwaway.id, name: "Private" },
+    { id: "retained-folder", spaceId: retained, name: "Retained" },
+  );
+  state.tabs.push(
+    M.newTab(throwaway.id, "https://private.example/", { kind: "pinned" }),
+    M.newTab(throwaway.id, "https://favorite.example/", { kind: "favorite" }),
+    M.newTab(retained, "https://retained.example/", { kind: "pinned" }),
+  );
+
+  const layout = S.layoutOf(state);
+  assert.ok(!layout.spaces.some((space) => space.id === throwaway.id));
+  assert.deepEqual(layout.folders.map((folder) => folder.id), ["retained-folder"]);
+  assert.ok(!layout.items.some((item) => item.spaceId === throwaway.id));
+  assert.ok(layout.items.some((item) => item.url === "https://retained.example/"));
+});
+
+test("older sync layouts with orphan records keep local throwaway content intact", () => {
+  const state = M.initialState();
+  const throwaway = { ...state.spaces[0], id: "disposable", throwaway: true };
+  const retained = state.spaces[0].id;
+  const base = S.layoutOf(state);
+  const localFolder = { id: "local-private", spaceId: throwaway.id, name: "Local" };
+  const localTab = M.newTab(throwaway.id, "https://local.example/", {
+    kind: "pinned",
+    folderId: localFolder.id,
+  });
+  state.spaces.push(throwaway);
+  state.folders.push(localFolder);
+  state.tabs.push(localTab);
+
+  const remote = clone(base);
+  remote.folders.push(
+    { id: localFolder.id, spaceId: throwaway.id, name: "Old copy", parentId: null },
+    { id: "remote-private", spaceId: throwaway.id, name: "Remote only", parentId: null },
+    { id: "shared-folder", spaceId: retained, name: "Shared", parentId: null },
+  );
+  remote.items.push(
+    {
+      key: `${throwaway.id}|pinned|https://remote.example/`,
+      spaceId: throwaway.id,
+      kind: "pinned",
+      url: "https://remote.example/",
+      title: "Remote",
+      folderId: null,
+    },
+    {
+      key: `${retained}|favorite|https://shared.example/`,
+      spaceId: retained,
+      kind: "favorite",
+      url: "https://shared.example/",
+      title: "Shared",
+      folderId: null,
+    },
+  );
+  const beforeLocal = clone({ localFolder, localTab });
+  assert.equal(S.validLayout(remote), true, "older layouts remain readable");
+  assert.equal(S.merge(state, remote, base), true);
+  assert.deepEqual(state.folders.filter((f) => f.spaceId === throwaway.id), [
+    beforeLocal.localFolder,
+  ]);
+  assert.deepEqual(state.tabs.filter((t) => t.spaceId === throwaway.id), [
+    beforeLocal.localTab,
+  ]);
+  assert.ok(state.folders.some((f) => f.id === "shared-folder"));
+  assert.ok(state.tabs.some((t) => t.url === "https://shared.example/"));
+  assert.doesNotThrow(() => M.validateState(state));
+});
+
+test("orphan sync records do not attach to a matching local Space", () => {
+  const state = M.initialState();
+  const remote = S.layoutOf(state);
+  const spaceId = state.spaces[0].id;
+  remote.spaces = remote.spaces.filter((space) => space.id !== spaceId);
+  remote.items = [{
+    key: `${spaceId}|pinned|https://orphan.example/`,
+    spaceId,
+    kind: "pinned",
+    url: "https://orphan.example/",
+    title: "Old pin",
+    folderId: null,
+  }, ...remote.items.filter((item) => item.spaceId !== spaceId)];
+  assert.equal(S.merge(state, remote, null), false);
+  assert.ok(!state.tabs.some((tab) => tab.url === "https://orphan.example/"));
+});
+
 test("an invalid sync file is ignored", () => {
   const a = M.initialState();
   const before = JSON.stringify(a);

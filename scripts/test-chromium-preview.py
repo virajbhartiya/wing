@@ -9,6 +9,7 @@ import sqlite3
 import hashlib
 import base64
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -26,7 +27,8 @@ def main():
     args = parser.parse_args()
     previews = 'native/build/chromium-preview' + ('' if args.arch == 'arm64' else '-' + args.arch)
     latest = json.loads((ROOT / previews / 'latest.json').read_text())
-    executable = Path(latest['app']) / 'Contents/MacOS/Wing Chromium Preview'
+    app = Path(latest['app'])
+    executable = app / 'Contents/MacOS/Wing Chromium Preview'
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_args):
             pass
@@ -34,6 +36,11 @@ def main():
             if self.path == '/download':
                 body = b'Wing download fixture'
                 mime = 'application/octet-stream'
+            elif self.path == '/translation':
+                body = ('<!doctype html><meta charset="utf-8"><title>Translation fixture</title><main>'
+                        'Bonjour à toutes et à tous. Ce document contient un exemple de texte en français '
+                        'destiné à tester la traduction sur cet ordinateur.</main>').encode('utf-8')
+                mime = 'text/html'
             elif self.path in ['/ad.svg', '/safe.svg']:
                 body = b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="green"/></svg>'
                 mime = 'image/svg+xml'
@@ -155,10 +162,16 @@ process.stdout.write(Buffer.concat([Buffer.from('v10'),c.update(plain),c.final()
                     break
         finally:
             server.shutdown()
-    output = {'engine':json.loads((Path(latest['app']) / 'Contents/Resources/engine-provenance.json').read_text()),
-              'hostInputs':json.loads((Path(latest['app']) / 'Contents/Resources/host-inputs.json').read_text()),
+    seal = subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)],
+                          capture_output=True, text=True)
+    if seal.returncode:
+        print(seal.stderr, file=sys.stderr)
+    output = {'engine':json.loads((app / 'Contents/Resources/engine-provenance.json').read_text()),
+              'hostInputs':json.loads((app / 'Contents/Resources/host-inputs.json').read_text()),
               'hostSHA256':hashlib.sha256(executable.read_bytes()).hexdigest(),
-              'passed':len(scenarios)==2 and all(s['passed'] for s in scenarios), 'scenarios':scenarios,
+              'appSignaturePreserved':seal.returncode == 0,
+              'passed':seal.returncode == 0 and len(scenarios)==2 and all(s['passed'] for s in scenarios),
+              'scenarios':scenarios,
               'scope':'Wing interface on the native Chromium host, isolated loopback profiles; not feature-complete or release qualification.'}
     (ROOT / qualification_report(args.arch)).write_text(json.dumps(output, indent=2)+'\n')
     return 0 if output['passed'] else 1

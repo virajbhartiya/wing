@@ -17,6 +17,26 @@ const download = async (id) => {
   if (!items.length) throw Error("Download no longer exists.");
   return items[0];
 };
+async function listDownloads() {
+  const items = await chrome.downloads.search({ orderBy: ["-startTime"], limit: 500 });
+  return items.map((d) => ({
+    id: String(d.id),
+    url: d.url,
+    name: d.filename.split(/[\\/]/).pop(),
+    path: d.filename,
+    status:
+      d.state === "complete"
+        ? "completed"
+        : d.state === "in_progress"
+          ? "progressing"
+          : d.state,
+    received: d.bytesReceived,
+    total: d.totalBytes,
+    paused: d.paused,
+    at: Date.parse(d.startTime),
+    error: d.error,
+  }));
+}
 const handlers = {
   async ping() {
     return { ok: true };
@@ -29,31 +49,16 @@ const handlers = {
   async library() {
     const [history, downloads, bookmarks] = await Promise.all([
       chrome.history.search({ text: "", startTime: 0, maxResults: 1000 }),
-      chrome.downloads.search({ orderBy: ["-startTime"], limit: 500 }),
+      listDownloads(),
       chrome.bookmarks.getTree(),
     ]);
     return {
       history: history.map((h) => ({ ...h, at: h.lastVisitTime })),
-      downloads: downloads.map((d) => ({
-        id: String(d.id),
-        url: d.url,
-        name: d.filename.split(/[\\/]/).pop(),
-        path: d.filename,
-        status:
-          d.state === "complete"
-            ? "completed"
-            : d.state === "in_progress"
-              ? "progressing"
-              : d.state,
-        received: d.bytesReceived,
-        total: d.totalBytes,
-        paused: d.paused,
-        at: Date.parse(d.startTime),
-        error: d.error,
-      })),
+      downloads,
       bookmarks,
     };
   },
+  downloads: listDownloads,
   async "download-start"({ url }) {
     return { id: await chrome.downloads.download({ url: httpURL(url).href }) };
   },

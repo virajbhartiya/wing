@@ -60,12 +60,28 @@ class ChromiumSourceSafety(unittest.TestCase):
             branding = source / "chrome/app/theme/ardia/BRANDING"
             branding.parent.mkdir(parents=True)
             branding.write_text("PRODUCT_FULLNAME=Chromium\nMAC_BUNDLE_ID=com.ardia.browser\nMAC_TEAM_ID=UPSTREAMID\n")
+            store_script = source / "components/extstore_fixups/chrome-webstore.js"
+            store_script.parent.mkdir(parents=True)
+            store_script.write_text("label.replace(CHROME_NAME_REGEX, 'Ardia');\n")
+            strings = source / "ardia/core/ac_strings.cc"
+            strings.parent.mkdir(parents=True)
+            strings.write_text('constexpr auto kTo = u"Ardia";\n')
+            alerts = source / "ardia/core/ac_safe_storage.mm"
+            alerts.write_text('NSString *message = @"Open Ardia Safe Storage in Ardia";\n')
+            owned = source / "chrome/app/theme/wing/BRANDING"
+
             build.apply_identity(source)
+            outputs = [keychain, store_script, strings, alerts, owned]
+            first = [path.read_text() for path in outputs]
             build.apply_identity(source)
+            self.assertEqual([path.read_text() for path in outputs], first)
             self.assertIn('"Wing Safe Storage"', keychain.read_text())
-            owned = (source / "chrome/app/theme/wing/BRANDING").read_text()
-            self.assertIn("MAC_BUNDLE_ID=org.wingbrowser.Wing", owned)
-            self.assertNotIn("UPSTREAMID", owned)
+            self.assertIn('kDefaultAccountName[] = "Wing"', keychain.read_text())
+            self.assertIn("CHROME_NAME_REGEX, 'Wing'", store_script.read_text())
+            self.assertIn('kTo = u"Wing"', strings.read_text())
+            self.assertIn('@"Open Wing Safe Storage in Wing"', alerts.read_text())
+            self.assertIn("MAC_BUNDLE_ID=org.wingbrowser.Wing", owned.read_text())
+            self.assertNotIn("UPSTREAMID", owned.read_text())
             self.assertIn("com.ardia.browser", branding.read_text())
 
     def test_privacy_configuration_disables_rlz_dependent_cdm_identifier(self):
@@ -93,13 +109,29 @@ class ChromiumSourceSafety(unittest.TestCase):
             api = root / "ardia/core/ardiacore_api.mm"
             api.parent.mkdir(parents=True)
             api.write_text("- (NSNumber*)boolPreference:(NSString*)name { return nil; }\n")
+            devtools = api.with_name("ac_devtools_call.mm")
+            devtools.write_text(
+                "    EndAheadBlank(&GetWebContents());\n"
+                "    if (generation != generation_ || !pending_.empty() || !host_) {\n"
+                "  int generation_ = 0;\n"
+            )
             header = root / "ardia/core/public/ArdiaCore.h"
             header.parent.mkdir(parents=True)
-            header.write_text("- (nullable NSNumber*)boolPreference:(NSString*)name;\n")
+            header.write_text(
+                "@interface ArdiaCoreProfile : NSObject\n"
+                "- (nullable NSNumber*)boolPreference:(NSString*)name;\n"
+                "@end\n"
+            )
+
             identity.apply_host_api(root)
-            first = api.read_text()
+            outputs = [api, devtools, header]
+            first = [path.read_text() for path in outputs]
             identity.apply_host_api(root)
-            self.assertEqual(api.read_text(), first)
+            self.assertEqual([path.read_text() for path in outputs], first)
+            self.assertIn('method.starts_with("Emulation.") || method.starts_with("Network.")', devtools.read_text())
+            self.assertIn("if (keep_attached_ || generation", devtools.read_text())
+            self.assertIn("- (BOOL)setDownloadDirectory:(NSString*)directory;", header.read_text())
+            self.assertIn("- (void)importLogins:", header.read_text())
             fragment.write_text("- (void)importLogins:(id)entries { /* revised */ }\n")
             identity.apply_host_api(root)
             self.assertIn("/* revised */", api.read_text())

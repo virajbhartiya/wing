@@ -1,6 +1,27 @@
-# Current engine decision (2026-10-24)
+# Current engine: native host on a source-built Chromium (2026-11)
 
-Primary Wing now uses Electron 45 + sandboxed WebContentsView + electron-chrome-extensions 4.9.0, with an original browser shell. Actual production-adapter testing established MV3 worker/storage/content/messaging/tab APIs and dynamic DNR support. Static DNR needs explicit extension-side ruleset activation in the tested engine. Web Store installation and universal extension compatibility are not claimed.
+Released Wing (`v0.2.0-native.*`) is an Objective-C++/AppKit host (`native/chromium/`) around Wing's own build of Chromium 156. The build applies Helium's patches (de-Googled, Manifest V2 kept) and links the ArdiaCore framework, which exposes Chromium's browser, profile and extension services to a native host through a narrow AppKit API. Exact sources and commits are pinned in `native/chromium-sources.json`; compilation writes a receipt that packaging verifies.
+
+Why this engine: the Electron host below could not run full uBlock Origin (the extension adapter cannot inject APIs into an MV2 background page, and `webNavigation` is absent), and CEF's Chrome runtime could not host a custom shell. Keeping Chromium's real extension system was the only way to get both Wing's interface and Chrome extension behavior. Evidence: `FULL-UBLOCK-ENGINE.md`, `full-ubo-electron-qualification.json`, `full-ubo-ardiacore-qualification.json`.
+
+Shape of the app:
+
+- Wing's interface (`src/`) runs in a trusted internal tab in its own profile. Privileged messages are accepted only from that exact tab, main frame, committed URL and origin.
+- Website tabs are separate, unprivileged native views. Spaces can share a profile or use independent profiles.
+- uBlock Origin Lite is bundled from a checksum-verified source (`native/ublock-sources.json`) with cookie-banner filtering enabled. Chromium holds navigation for up to ten seconds while the declarative rules initialize.
+- Workspace writes go to a private temporary file, then fsync and atomic rename.
+- Updates use Sparkle 2 with an EdDSA-signed appcast (`native/chromium/cloud.json`).
+- `npm run test:chromium-preview` checks the packaged app against loopback fixtures on first launch and restart, then verifies the app's code signature. Every native release runs it (`scripts/release-native.py`). Results are in `chromium-preview-qualification.json`.
+
+Costs we accept: Wing owns every Chromium security rebase, the Helium and MV2 patches, and the native integration. `npm run check:engine-update` and `scripts/check-chromium-update.py` track upstream releases.
+
+---
+
+## Previous engine decision: Electron (2026-10-24), retained as history
+
+This was the primary engine until the native Chromium host replaced it. The Electron app in `src/main.cjs` remains a development host (`npm run start:dev`).
+
+Wing used Electron 45 + sandboxed WebContentsView + electron-chrome-extensions 4.9.0, with an original browser shell. Actual production-adapter testing established MV3 worker/storage/content/messaging/tab APIs and dynamic DNR support. Static DNR needs explicit extension-side ruleset activation in the tested engine. Web Store installation and universal extension compatibility are not claimed.
 
 This replaces the earlier decision below. The CEF native host preserved extension APIs but exposed stock Chrome UI. Its custom Views host cannot safely use the normal tab model: a second tab leaves the custom frame; split creation caused SIGTRAP within CEF. Evidence: `CEF-SHELL-LIMITATIONS.md` and `cef-custom-shell-probe.json`. Electron gives Wing ownership of tab, split, overlay and lifecycle behavior without unsupported native view surgery. Both runtimes use Chromium156 in this environment; the wrapper alone does not determine resource use.
 
@@ -10,7 +31,7 @@ Primary references: [Electron extension API limitations](https://www.electronjs.
 
 ---
 
-## Previous engine decision, retained as research history
+## Earlier engine decision: CEF, retained as research history
 
 # Engine decision: Chrome extensions are a hard requirement
 

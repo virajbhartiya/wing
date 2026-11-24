@@ -17,7 +17,7 @@ import tempfile
 import urllib.request
 import zipfile
 from chromium_artifact import verify_receipt
-from chromium_distribution import host_inputs, qualification_report, verify_qualification
+from chromium_distribution import host_inputs, qualification_report, verify_host_qualification, verify_qualification
 from rebrand_locales import rebrand_locales
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +50,9 @@ RELEASE_IDENTITY = 'Wing Release Signing'
 
 def signing_identity(production):
     chosen = os.environ.get('WING_SIGN_IDENTITY')
+    if not production and chosen and chosen.startswith('Developer ID Application:'):
+        # The disposable preview does not need the production credential.
+        return '-'
     if chosen:
         return chosen
     if not production:
@@ -60,6 +63,56 @@ def signing_identity(production):
                          'Restore it from its backup, or set WING_SIGN_IDENTITY=- to ship an ad-hoc build '
                          '(people would lose their Screen Recording permission again).')
     return RELEASE_IDENTITY
+
+
+def sign_app(app, stage, framework, sparkle, identity):
+    developer_id = identity.startswith('Developer ID Application:')
+    timestamp = '--timestamp' if developer_id else '--timestamp=none'
+    macos = app / 'Contents/MacOS'
+    node = app / 'Contents/Resources/import-helper/node'
+
+    def sign(target, grants=None):
+        entitlements = ['--entitlements', str(grants)] if grants else []
+        run('codesign', '--force', timestamp, '--options', 'runtime', '--sign', identity,
+            *entitlements, str(target))
+
+    if developer_id:
+        # The importer uses Node's built-in modules and needs V8 JIT. Replace
+        # upstream Node grants, which also include debugger access.
+        node_grants = stage / 'node-entitlements.plist'
+        node_grants.write_bytes(plistlib.dumps({'com.apple.security.cs.allow-jit': True}))
+        sign(node, node_grants)
+    else:
+        run('codesign', '--force', '--sign', identity, str(node))
+
+    entitlements = stage / 'entitlements.plist'
+    entitlements.write_bytes(plistlib.dumps({
+        'com.apple.security.cs.allow-jit': True,
+        'com.apple.security.cs.disable-library-validation': True,
+    }))
+    for item in (framework / 'Versions/Current/Libraries').glob('*.dylib'):
+        sign(item)
+    for item in (framework / 'Versions/Current/Helpers').iterdir():
+        if item.is_file() or item.suffix == '.app':
+            sign(item, entitlements)
+    sign(framework, entitlements)
+    # The hardened runtime denies devices the app does not declare.
+    app_entitlements = stage / 'app-entitlements.plist'
+    app_entitlements.write_bytes(plistlib.dumps({
+        'com.apple.security.cs.allow-jit': True,
+        'com.apple.security.cs.disable-library-validation': True,
+        'com.apple.security.device.audio-input': True,
+        'com.apple.security.device.camera': True,
+        'com.apple.security.device.bluetooth': True,
+        'com.apple.security.device.usb': True,
+        'com.apple.security.personal-information.location': True,
+        'com.apple.security.print': True,
+    }))
+    sign(macos / 'wing-summarize')
+    for item in [sparkle / 'Versions/B/Autoupdate', sparkle / 'Versions/B/Updater.app', sparkle]:
+        sign(item)
+    sign(app, app_entitlements)
+    run('codesign', '--verify', '--deep', '--strict', str(app))
 
 
 def main():
@@ -81,8 +134,10 @@ def main():
     source_receipt = verify_receipt(args.source_receipt) if args.source_receipt else None
     if args.untested_intel:
         report = json.loads((ROOT / qualification_report('arm64')).read_text())
-        if not report.get('passed') or report.get('hostInputs') != inputs:
-            raise SystemExit('The arm64 build of this exact host code must pass qualification first.')
+        try:
+            verify_host_qualification(report, inputs)
+        except RuntimeError as error:
+            raise SystemExit(f'The arm64 build must pass qualification first. {error}') from error
         print('Warning: building an x64 app that has not been qualified on Intel.', flush=True)
     elif args.production:
         report = json.loads((ROOT / qualification_report(args.arch)).read_text())
@@ -227,28 +282,7 @@ def main():
         shutil.copy2(ROOT / 'scripts/wing-cli.sh', resources / 'bin/wing')
         plist['CFBundleIconFile'] = 'wing'
         (contents / 'Info.plist').write_bytes(plistlib.dumps(plist))
-        run('codesign', '--force', '--sign', sign, str(helper / 'node'))
-        entitlements = stage / 'entitlements.plist'
-        entitlements.write_bytes(plistlib.dumps({'com.apple.security.cs.allow-jit':True, 'com.apple.security.cs.disable-library-validation':True}))
-        for item in (framework / 'Versions/Current/Libraries').glob('*.dylib'):
-            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, str(item))
-        for item in (framework / 'Versions/Current/Helpers').iterdir():
-            if item.is_file() or item.suffix == '.app':
-                run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, '--entitlements', str(entitlements), str(item))
-        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, '--entitlements', str(entitlements), str(framework))
-        # The hardened runtime silently denies devices the app does not declare,
-        # so websites could never reach the camera, microphone or location.
-        app_entitlements = stage / 'app-entitlements.plist'
-        app_entitlements.write_bytes(plistlib.dumps({
-            'com.apple.security.cs.allow-jit':True, 'com.apple.security.cs.disable-library-validation':True,
-            'com.apple.security.device.audio-input':True, 'com.apple.security.device.camera':True,
-            'com.apple.security.device.bluetooth':True, 'com.apple.security.device.usb':True,
-            'com.apple.security.personal-information.location':True, 'com.apple.security.print':True}))
-        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, str(macos / 'wing-summarize'))
-        for item in [sparkle / 'Versions/B/Autoupdate', sparkle / 'Versions/B/Updater.app', sparkle]:
-            run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, str(item))
-        run('codesign', '--force', '--timestamp=none', '--options', 'runtime', '--sign', sign, '--entitlements', str(app_entitlements), str(app))
-        run('codesign', '--verify', '--deep', '--strict', str(app))
+        sign_app(app, stage, framework, sparkle, sign)
         if host_inputs() != inputs:
             raise RuntimeError('Host inputs changed during packaging; rebuild from a stable source tree.')
         # Keep every existing preview intact; each successful build has its own path.

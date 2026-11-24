@@ -16,4 +16,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run check
-      - run: python3 test/release_config_test.py
+      - run: npm run check:release
+      - run: npm ci --prefix website
+      - run: npm test --prefix website

@@ -3368,6 +3368,14 @@ body.private .space-heading #space-name::before {
   color: var(--muted);
   padding: 8px 0 14px;
 }
+#translation-text {
+  max-height: min(50vh, 420px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  user-select: text;
+}
 .summary-list {
   margin: 0;
   padding: 0 0 0 18px;

@@ -1,8 +1,20 @@
 # Performance evidence and limits
 
-The primary build now uses Electron. These engine-only measurements are not evidence that its complete UI is faster than Arc.
+Wing ships the AppKit host with source-built Chromium. The Electron, CEF and WebKit results below describe earlier prototypes.
 
-All measurements were made locally on macOS Apple Silicon, using controlled local fixtures. Raw reports are committed beside this document. These are short lifecycle tests, not an Arc-versus-Wing benchmark and not proof of the absence of leaks.
+All measurements ran on macOS Apple Silicon with controlled local fixtures. The prototype reports are committed beside this document.
+
+## Native Chromium workspace
+
+On macOS 26.6.2, a disposable profile restored 25, 250 or 1,000 pinned tabs in folders. After the first loopback page loaded, the test selected 20 tabs in order and measured from the selection call through the next animation frame. Only the visited tabs were opened by the engine. From the repository root, run `python3 scripts/benchmark-chromium-workspace.py` against the latest preview or pass `--app` to select a previous preview.
+
+| Pinned tabs | Baseline median | Updated median | Baseline p95 | Updated p95 |
+| ---: | ---: | ---: | ---: | ---: |
+| 25 | 17 ms | 17 ms | 82 ms | 20 ms |
+| 250 | 69 ms | 17 ms | 124 ms | 32 ms |
+| 1,000 | 268 ms | 34 ms | 319 ms | 117 ms |
+
+The updated renderer reuses existing sidebar and strip rows when selection or page metadata changes. In the same workload, a stalled image kept the load indicator active until Stop cleared it. The updated build cleared the indicator within 27 ms at all three workspace sizes. These are single-run samples on one Mac. Streaming, video calls, energy use, and memory under sustained pressure still need a real-site workload.
 
 ## Native CEF diagnostic browser
 
@@ -43,7 +55,7 @@ Native diagnostic host:
 - Service-worker architecture lets the workspace controller suspend when idle.
 - Local storage mutations serialized to prevent parallel UI requests overwriting each other.
 
-Primary Electron application:
+Electron prototype:
 
 - Lazy view creation, explicit child destruction, listener cleanup and detached hidden views.
 - Conservative input/audio/capture/loading/split protection; form state preservation is not guaranteed for every programmatic page.

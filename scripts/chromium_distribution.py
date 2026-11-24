@@ -11,7 +11,8 @@ def host_inputs(root=ROOT):
              if p.is_file() and p.suffix in {'.cjs', '.js', '.mm', '.h', '.swift', '.html', '.css', '.json'}
              and p.name != 'preload.bundle.cjs']
     paths += [root / name for name in ('scripts/build-chromium-preview.py',
-              'scripts/chromium_distribution.py', 'package.json', 'native/node-import-sources.json', 'native/ublock-sources.json')]
+              'scripts/test-chromium-preview.py', 'scripts/chromium_distribution.py',
+              'package.json', 'native/node-import-sources.json', 'native/ublock-sources.json')]
     return {str(p.relative_to(root)): digest(p) for p in sorted(paths)}
 
 
@@ -22,10 +23,18 @@ def qualification_report(arch):
 def verify_qualification(report, receipt, inputs):
     if not receipt or receipt.get('kind') != 'wing-source':
         raise RuntimeError('Persistent-profile builds require the Wing source engine.')
-    if not report.get('passed') or report.get('engine') != receipt:
+    if report.get('engine') != receipt:
         raise RuntimeError('This exact source engine has not passed native qualification.')
+    verify_host_qualification(report, inputs)
+
+
+def verify_host_qualification(report, inputs):
     if report.get('hostInputs') != inputs:
         raise RuntimeError('Host inputs changed since qualification; rebuild and qualify the preview.')
+    if report.get('appSignaturePreserved') is not True:
+        raise RuntimeError('The preview did not pass post-launch signature verification.')
+    if not report.get('passed'):
+        raise RuntimeError('The preview did not pass native qualification.')
     scenarios = report.get('scenarios', [])
     if {row.get('phase') for row in scenarios} != {'initial', 'restart'} or not all(
         row.get('passed') and row.get('exitCode') == 0 and row.get('sourceProfilePreserved')

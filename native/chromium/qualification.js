@@ -215,6 +215,46 @@
       "Fixture /first",
     "first page title arrives",
   );
+  await invoke("new-tab");
+  const homeTab = (await snapshot()).activeTabId;
+  const tabRow = (strip, id) =>
+    document.querySelector(`#${strip} [data-tab="${CSS.escape(id)}"]`);
+  const stableRows = ["today", "strip-tabs"].map((strip) => [
+    strip, tabRow(strip, first), tabRow(strip, homeTab),
+  ]);
+  for (const [strip, firstRow, homeRow] of stableRows)
+    assert(firstRow && homeRow, `${strip} shows both tabs`);
+  await invoke("select-tab", { id: first });
+  for (const [strip, firstRow, homeRow] of stableRows) {
+    assert(tabRow(strip, first) === firstRow, `${strip} keeps the selected row`);
+    assert(tabRow(strip, homeTab) === homeRow, `${strip} keeps the previous row`);
+    assert(firstRow.classList.contains("active"), `${strip} marks the new selection`);
+    assert(!homeRow.classList.contains("active"), `${strip} clears the old selection`);
+  }
+  await invoke("close-tab", { id: homeTab });
+  checks.push("sidebar and top strip retain tab row identity across selection");
+  await invoke("new-tab", { url: WING_TEST.base + "/translation" });
+  const translationTab = (await snapshot()).activeTabId;
+  await waitFor(
+    async () => (await snapshot()).tabs.find((tab) => tab.id === translationTab)?.title === "Translation fixture",
+    "translation fixture opened",
+  );
+  const originalText = await evaluate(translationTab, "document.querySelector('main').innerText");
+  try {
+    const result = await invoke("translate-page", { id: translationTab });
+    assert(result.translation && result.translation !== originalText && !result.truncated,
+      "installed languages return translated page text");
+  } catch (error) {
+    assert(
+      /Translation Languages|preferred language|doesn’t support translation|needs macOS 26/.test(error.message),
+      `translation should return text or an actionable availability error: ${error.message}`,
+    );
+  }
+  assert(await evaluate(translationTab, "document.querySelector('main').innerText") === originalText,
+    "translation preserves the original page");
+  await invoke("close-tab", { id: translationTab });
+  await invoke("select-tab", { id: first });
+  checks.push("on-device page translation returns text or actionable language setup guidance");
   await waitFor(
     async () => (await evaluate(first, "window.fixture")).control === "loaded",
     "control image loaded",
@@ -839,15 +879,25 @@
   await invoke("select-tab", { id: sleeper });
   await waitFor(
     async () =>
-      !(await invoke("native-diagnostics")).tabs.find((t) => t.id === sleeper)
-        ?.discarded,
+      (await invoke("native-diagnostics")).tabs.some(
+        (t) => t.id === sleeper && t.visible && !t.discarded,
+      ),
     "sleeping page wakes on selection",
   );
-  await invoke("select-tab", { id: first });
+  // Keep the restored page foregrounded until both the document and Wing
+  // report completion. Hidden windows can defer work in background pages.
   await waitFor(
-    async () => !(await snapshot()).tabs.find((t) => t.id === sleeper)?.loading,
+    async () =>
+      (await snapshot()).tabs.some(
+        (t) => t.id === sleeper && t.title === "Fixture /sleep" && !t.loading,
+      ) &&
+      (await evaluate(
+        sleeper,
+        `location.href === ${JSON.stringify(WING_TEST.base + "/sleep")} && document.readyState === "complete"`,
+      )) === true,
     "woken page finishes loading before automatic archive",
   );
+  await invoke("select-tab", { id: first });
   await invoke("native-archive-idle", { now: Date.now() + 13 * 3600000 });
   await waitFor(
     async () => (await snapshot()).archive.some((t) => t.id === sleeper),
