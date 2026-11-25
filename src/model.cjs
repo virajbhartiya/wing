@@ -134,6 +134,7 @@ function initialState() {
       // "ask" after a crash, or always / never send the macOS crash report.
       crashReports: "ask",
       dark: false,
+      memorySaver: false,
       onboarded: false,
       search: "google",
       sidebarWidth: 256,
@@ -528,6 +529,7 @@ function validateState(value) {
   if (!["top", "sidebar"].includes(settings.tabLayout))
     settings.tabLayout = "top";
   settings.dark = !!settings.dark;
+  settings.memorySaver = settings.memorySaver === true;
   // The mini player arrived on by default; turn it on once for older layouts,
   // whose saved false was only the old default.
   if (value.settings && value.settings.miniPlayerIntroduced !== true)

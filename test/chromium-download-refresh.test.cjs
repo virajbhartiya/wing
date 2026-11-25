@@ -9,7 +9,11 @@ async function drain() {
   await new Promise(setImmediate);
 }
 
-async function startShell() {
+async function startShell({
+  holdMetadata = false,
+  holdPersistence = false,
+  rejectSelection = false,
+} = {}) {
   const preload = require.resolve("../src/chromium-preload.cjs");
   const timers = new Set();
   const requests = [];
@@ -24,10 +28,13 @@ async function startShell() {
       assert.equal(kind, "wing-request");
       const request = JSON.parse(body);
       requests.push(request);
-      if (request.action === "service") return;
+      if (request.action === "service" ||
+          (holdMetadata && request.action === "page-metadata") ||
+          (holdPersistence && request.action === "persist-workspace"))
+        return;
       const result = request.action === "bootstrap"
         ? { workspace: null, version: "test" }
-        : { ok: true };
+        : { ok: !(rejectSelection && request.action === "select-workspace-tab") };
       queueMicrotask(() => receive("response", { id: request.id, result }));
     },
   };
@@ -71,8 +78,10 @@ async function startShell() {
       timer.callback();
       await drain();
     },
+    hasTimer: (delay) => [...timers].some((timer) => timer.delay === delay),
     services: () => requests.filter((request) => request.action === "service"),
     state: () => snapshots.at(-1),
+    snapshotCount: () => snapshots.length,
     requests,
   };
 }
@@ -86,6 +95,141 @@ test("a stalled background download refresh leaves tab actions responsive", asyn
   const completed = await Promise.race([action.then(() => true), drain().then(() => false)]);
   assert.equal(completed, true, "tab creation must finish while the service is still stalled");
   assert.equal(shell.services()[0].data.method, "downloads");
+});
+
+test("rapid tab selection shows the new pages before coalescing the workspace write", async () => {
+  const shell = await startShell();
+  await shell.invoke("new-tab", { url: "https://one.test/" });
+  const firstId = shell.state().activeTabId;
+  await shell.invoke("new-tab", { url: "https://two.test/" });
+  const secondId = shell.state().activeTabId;
+  const syncSince = (index) =>
+    shell.requests.slice(index).filter((request) => request.action === "sync");
+  const selectionsSince = (index) =>
+    shell.requests.slice(index).filter((request) => request.action === "select-workspace-tab");
+  const index = shell.requests.length;
+
+  await shell.invoke("select-tab", { id: firstId });
+  assert.equal(shell.state().activeTabId, firstId);
+  await shell.invoke("tab-index", { index: -1 });
+  assert.equal(shell.state().activeTabId, secondId);
+  assert.equal(syncSince(index).length, 0);
+  assert.deepEqual(
+    selectionsSince(index).map(({ data }) => [data.id, data.panes.map((pane) => pane.id)]),
+    [[firstId, [firstId]], [secondId, [secondId]]],
+  );
+  for (const { data } of selectionsSince(index))
+    assert.deepEqual(Object.keys(data).sort(),
+      ["anchor", "id", "lastActive", "panes", "spaceId", "url"]);
+
+  await shell.fireTimer(3000);
+  assert.equal(syncSince(index).length, 0);
+  const writes = shell.requests.slice(index).filter(({ action }) => action === "persist-workspace");
+  assert.equal(writes.length, 1);
+
+  await shell.invoke("select-tab", { id: firstId });
+  assert.equal(shell.hasTimer(3000), true);
+  await shell.invoke("pin", { id: firstId });
+  assert.equal(shell.hasTimer(3000), false);
+  const { data } = syncSince(index).at(-1);
+  assert.equal(data.persist, true);
+  assert.equal(data.workspace.activeTabId, firstId);
+  assert.equal(data.workspace.tabs.find((tab) => tab.id === firstId).kind, "pinned");
+});
+
+test("switching stays responsive during a save and schedules the newer selection", async () => {
+  const shell = await startShell({ holdPersistence: true });
+  await shell.invoke("new-tab", { url: "https://one.test/" });
+  const firstId = shell.state().activeTabId;
+  await shell.invoke("new-tab", { url: "https://two.test/" });
+  await shell.fireTimer(3000);
+  const pendingSave = shell.requests.find(({ action }) => action === "persist-workspace");
+  assert.ok(pendingSave);
+  const selection = shell.invoke("select-tab", { id: firstId });
+  assert.equal(await Promise.race([selection.then(() => true), drain().then(() => false)]), true);
+  assert.equal(shell.state().activeTabId, firstId);
+  assert.equal(shell.hasTimer(3000), true);
+  shell.respond(pendingSave, { result: true });
+  await drain();
+  assert.equal(shell.hasTimer(3000), true);
+});
+
+test("a tab selection cache mismatch falls back to a full workspace sync", async () => {
+  const shell = await startShell({ rejectSelection: true });
+  await shell.invoke("new-tab", { url: "https://one.test/" });
+  const id = shell.state().activeTabId;
+  const index = shell.requests.length;
+  await shell.invoke("select-tab", { id });
+  const updates = shell.requests.slice(index);
+  assert.deepEqual(updates.map(({ action }) => action), ["select-workspace-tab", "sync"]);
+  assert.equal(updates[1].data.workspace.activeTabId, id);
+  assert.equal(updates[1].data.deferPersist, true);
+});
+
+test("opening a new page and editing the address do not wait for a workspace save", async () => {
+  const shell = await startShell();
+  await shell.invoke("new-tab", { url: "https://one.test/" });
+  const id = shell.state().activeTabId;
+  await shell.invoke("navigate", { id, url: "https://two.test/" });
+
+  const requests = shell.requests.filter(({ action }) => action === "sync");
+  assert.deepEqual(
+    requests.map(({ data }) => [data.persist, data.deferPersist]),
+    [[false, true], [false, true]],
+  );
+  assert.equal(shell.state().tabs.find((tab) => tab.id === id).url, "https://two.test/");
+  assert.equal(shell.hasTimer(3000), true);
+});
+
+test("page metadata notifications update the shell without synchronizing native layout", async () => {
+  const shell = await startShell();
+  const url = "https://example.test/";
+  await shell.invoke("new-tab", { url });
+  const id = shell.state().activeTabId;
+  const start = shell.requests.length;
+  const snapshotCount = shell.snapshotCount();
+  shell.receive("page", { id, url, title: "A new title", favicon: url + "icon.png" });
+  shell.receive("page", { id, url, title: "Most recent title", favicon: url + "icon.png" });
+  await drain();
+
+  assert.equal(shell.state().tabs.find((tab) => tab.id === id).title, "Most recent title");
+  assert.equal(shell.snapshotCount(), snapshotCount + 1);
+  assert.equal(shell.requests.slice(start).filter((request) => request.action === "sync").length, 0);
+  const metadata = shell.requests.slice(start).filter(({ action }) => action === "page-metadata");
+  assert.deepEqual(metadata.at(-1).data, {
+    id, url, title: "Most recent title", favicon: url + "icon.png", faviconOrigin: new URL(url).origin,
+  });
+  await shell.fireTimer(3000);
+  const saved = shell.requests.slice(start).filter(({ action }) => action === "persist-workspace");
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].data, {});
+});
+
+test("page progress and Peek title updates stay local while a real navigation saves immediately", async () => {
+  const shell = await startShell({ holdMetadata: true });
+  const url = "https://example.test/";
+  await shell.invoke("new-tab", { url });
+  const id = shell.state().activeTabId;
+  await shell.invoke("peek", { url });
+  const peekId = shell.state().peek.id;
+  const start = shell.requests.length;
+  shell.receive("page", { id: peekId, url, title: "Peek title" });
+  shell.receive("page", { id, url, title: "Fresh title" });
+  shell.receive("page", { id, url, title: "Fresh title", progress: 0.5, loading: true });
+  await drain();
+  assert.equal(shell.state().peek.title, "Peek title");
+  assert.equal(shell.state().tabs.find((tab) => tab.id === id).progress, 0.5);
+  assert.deepEqual(shell.requests.slice(start).map(({ action }) => action), ["page-metadata"]);
+  assert.equal(shell.hasTimer(3000), true);
+
+  const next = url + "next";
+  shell.receive("page", { id, url: next, title: "New page" });
+  await drain();
+  const save = shell.requests.at(-1);
+  assert.equal(save.action, "sync");
+  assert.equal(save.data.persist, true);
+  assert.equal(save.data.workspace.tabs.find((tab) => tab.id === id).url, next);
+  assert.equal(shell.hasTimer(3000), false);
 });
 
 test("download refreshes coalesce and polling recovers from a failed request", async () => {

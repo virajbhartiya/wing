@@ -112,6 +112,21 @@ test("empty modal receives focus and a removed opener falls back safely", () => 
   context.closeModal();
   assert(nodes["#new-tab"].focused);
 });
+test("command palette navigation releases the overlay immediately and returns focus to the page", async () => {
+  const { context, overlay, opener } = setup();
+  const calls = [];
+  context.reducedMotion.matches = false;
+  context.setTimeout = () => assert.fail("navigation should not wait for the modal animation");
+  context.releaseOverlayBackdrop = async () => calls.push("release");
+  context.window = { wing: { invoke: async (name) => calls.push(name) } };
+  context.showModal("palette", "search");
+  context.closeModal({ immediate: true, returnToPage: true });
+  assert.equal(overlay.hidden, true);
+  assert.deepEqual(calls, ["release"]);
+  await Promise.resolve();
+  assert.deepEqual(calls, ["release", "recent-tabs-focus"]);
+  assert.equal(opener.focused, undefined);
+});
 test("Tab wraps visible controls and recaptures focus that escaped the modal", () => {
   const first = element(),
     last = element({ tagName: "SUMMARY" });

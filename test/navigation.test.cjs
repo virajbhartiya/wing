@@ -112,6 +112,22 @@ test("command bar ranks a typed host first and keeps one row per page", () => {
   );
 });
 
+test("reusing the command bar library index preserves ranking and uses current tab metadata", () => {
+  const now = Date.parse("2026-10-25T12:00:00Z");
+  const library = [
+    { kind: "history", title: "MDN", url: "https://developer.mozilla.org/", visits: 10 },
+    { kind: "bookmark", title: "Grid layout", url: "https://developer.mozilla.org/css/grid" },
+    { kind: "history", title: "Search", url: "https://www.google.com/search?q=css+grid" },
+    { kind: "history", title: "Redirect", url: "https://www.google.com/url?q=example.com" },
+  ];
+  const rank = N.createRanker(library);
+  const tabs = [{ kind: "tab", title: "MDN", id: "one", url: library[0].url }];
+  for (const query of ["grid", "developer.mozilla.org", "css grid", "a(b", "redirect"])
+    assert.deepEqual(rank(query, tabs, now), N.rankResults(query, [...tabs, ...library], now));
+  tabs[0].title = "Current page title";
+  assert.equal(rank("current page", tabs, now)[0].id, "one");
+});
+
 test("command bar keeps searches and redirects from hijacking an address", () => {
   const now = Date.parse("2026-10-25T12:00:00Z");
   const history = [

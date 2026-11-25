@@ -163,16 +163,24 @@ window.addEventListener("wing-native", (event) => {
     });
   else if (workspace && kind === "page")
     enqueue(async () => {
-      const urlOf = () => workspace.state.tabs.find((t) => t.id === data.id)?.url;
-      const before = urlOf();
-      // Progress, audio and zoom ticks change nothing native keeps; only the
-      // interface needs them, at most once a frame.
-      if (!workspace.pageChanged(data)) return notifyRuntime();
-      // A new address is saved at once. Titles and icons change constantly
-      // (unread counters), so they are saved a few seconds later in one write.
-      if (urlOf() !== before) await publish(true);
-      else {
-        await publish(false);
+      const tab = workspace.state.tabs.find((candidate) => candidate.id === data.id);
+      if (!tab) return;
+      const previousURL = tab.url;
+      const changed = workspace.pageChanged(data);
+      // Address changes affect native layout and survive immediately. Page
+      // metadata is a small update and joins the next coalesced disk write.
+      if (tab.url !== previousURL) {
+        await publish();
+        return;
+      }
+      // Progress, audio and zoom join metadata changes in the next shell frame.
+      notifyRuntime();
+      if (changed && !privateMode && !tab.transient) {
+        const { id, url, title, favicon, faviconOrigin } = tab;
+        native("page-metadata", { id, url, title, favicon, faviconOrigin })
+          .catch((error) => commands.forEach((callback) =>
+            callback({ type: "toast", message: error.message }),
+          ));
         persistSoon();
       }
     });
@@ -254,13 +262,14 @@ ready.then(() => {
     setTimeout(() => service("ping").catch(() => {}), 1500);
 }).catch(() => {});
 window.addEventListener("focus", () => scheduleSync(500));
+function reportError(error) {
+  commands.forEach((callback) =>
+    callback({ type: "toast", message: error.message }),
+  );
+}
 function enqueue(operation) {
   const result = queue.then(() => ready).then(operation);
-  queue = result.catch((error) =>
-    commands.forEach((callback) =>
-      callback({ type: "toast", message: error.message }),
-    ),
-  );
+  queue = result.catch(reportError);
   return result;
 }
 // Lifts the shell over live pages while an overlay or the floating sidebar shows.
@@ -304,19 +313,66 @@ function notifyRuntime() {
 let persistTimer = null;
 function persistSoon() {
   if (persistTimer || privateMode) return;
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    enqueue(() => publish(true));
-  }, 3000);
+  const timer = setTimeout(
+    () => enqueue(() => {
+      if (persistTimer !== timer) return;
+      persistTimer = null;
+      const saved = workspace;
+      const removedProfiles = new Set(saved.removedProfiles);
+      // Keep the request ordered with layout updates, then let input continue
+      // while native I/O runs. A newer change can schedule its own save.
+      native("persist-workspace").then(() => {
+        if (workspace !== saved) return;
+        deleteSavedProfiles(removedProfiles);
+        scheduleSync();
+      }).catch(reportError);
+    }),
+    3000,
+  );
+  persistTimer = timer;
 }
-async function publish(persist = true, sync = true) {
-  if (persist && persistTimer) {
+function deleteSavedProfiles(saved) {
+  workspace.removedProfiles = workspace.removedProfiles.filter((id) => {
+    if (!saved.has(id)) return true;
+    native("delete-profile", { id }).catch(() => {});
+    return false;
+  });
+}
+function finishWorkspaceSave(sync = true) {
+  if (persistTimer) {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  deleteSavedProfiles(new Set(workspace.removedProfiles));
+  if (sync) scheduleSync();
+}
+function notifyWorkspace() {
+  const snapshot = workspace.snapshot(version);
+  states.forEach((callback) => callback(snapshot));
+  return snapshot;
+}
+function addressAnchor() {
+  const rect = document.querySelector("#address")?.getBoundingClientRect();
+  if (!rect?.width) return null;
+  const { x, y, width, height } = rect;
+  return { x, y, width, height };
+}
+async function publishSelection(tab) {
+  updateShellRaise(260);
+  const result = await native("select-workspace-tab", {
+    spaceId: workspace.state.activeSpaceId,
+    id: tab.id,
+    url: tab.url,
+    lastActive: tab.lastActive,
+    panes: workspace.layout(innerWidth, innerHeight),
+    anchor: addressAnchor(),
+  });
+  if (!result.ok) return publish(false, true, true);
+  return notifyWorkspace();
+}
+async function publish(persist = true, sync = true, deferPersist = false) {
   updateShellRaise(260);
   const refreshProfileDownloads = !privateMode && resetDownloadScope();
-  const address = document.querySelector("#address")?.getBoundingClientRect();
   persist = persist && !privateMode;
   await native("sync", {
     workspace: workspace.state,
@@ -327,22 +383,12 @@ async function publish(persist = true, sync = true) {
       !!workspace.state.settings.dark,
     ),
     persist,
+    ...(deferPersist && !privateMode ? { deferPersist: true } : {}),
     // Native site prompts attach below the address field.
-    anchor: address?.width
-      ? {
-          x: address.x,
-          y: address.y,
-          width: address.width,
-          height: address.height,
-        }
-      : null,
+    anchor: addressAnchor(),
   });
-  if (persist)
-    for (const id of workspace.removedProfiles.splice(0))
-      native("delete-profile", { id }).catch(() => {});
-  if (persist && sync) scheduleSync();
-  const snapshot = workspace.snapshot(version);
-  states.forEach((callback) => callback(snapshot));
+  if (persist) finishWorkspaceSave(sync);
+  const snapshot = notifyWorkspace();
   // New profiles are known to the services bridge after the host accepts sync.
   if (refreshProfileDownloads) refreshDownloads();
   return snapshot;
@@ -410,14 +456,14 @@ function profileId() {
 function service(method, args = {}, profile = profileId()) {
   return native("service", { profile, method, args });
 }
-async function library() {
-  const profile = profileId(),
-    state = workspace.state,
-    spaces = new Set(
-      state.spaces.filter((s) => s.profileId === profile).map((s) => s.id),
-    );
-  const result = await service("library", {}, profile);
+async function library(suggestionsOnly) {
+  const profile = profileId();
+  const state = workspace.state;
+  const result = await service("library", { suggestionsOnly }, profile);
   const urls = new Set(result.history.map((row) => row.url));
+  const spaces = suggestionsOnly ? null : new Set(
+    state.spaces.filter((s) => s.profileId === profile).map((s) => s.id),
+  );
   return {
     ...result,
     profileId: profile,
@@ -427,7 +473,7 @@ async function library() {
         (row) => row.profileId === profile && !urls.has(row.url),
       ),
     ],
-    archive: state.archive.filter((row) => spaces.has(row.spaceId)),
+    ...(spaces ? { archive: state.archive.filter((row) => spaces.has(row.spaceId)) } : {}),
   };
 }
 // The mini window draws its own toolbar, so it gets the Space's colors to match.
@@ -602,7 +648,7 @@ async function invoke(action, data = {}) {
   if (action === "library-data") {
     await ready;
     if (privateMode) throw Error("Not available in a private window.");
-    return library();
+    return library(data.suggestionsOnly === true);
   }
   if (action === "close-duplicates") {
     await ready;
@@ -963,6 +1009,8 @@ async function invoke(action, data = {}) {
       return native("test-extension", data);
     if (action === "native-archive-idle")
       return native("test-archive-idle", data);
+    if (action === "native-memory-maintenance")
+      return native("test-memory-maintenance", data);
     if (action === "native-minis") return native("test-minis", data);
     if (action === "native-test-private") return native("test-private", data);
     if (action === "native-install-unpacked")
@@ -1169,7 +1217,15 @@ async function invoke(action, data = {}) {
           : "",
       });
     }
-    if (workspace.action(action, data)) {
+    // Everyday navigation and tab selection reach the browser before the
+    // coalesced workspace write. Organization changes still save immediately.
+    const selected =
+      action === "select-tab"
+        ? workspace.state.tabs.find((tab) => tab.id === data.id)
+        : null;
+    const selectedURL = selected?.url;
+    let selection;
+    if (workspace.action(action, data, (tab) => { selection = tab; })) {
       if (action.startsWith("recent-tabs-")) {
         const recent = workspace.recent.snapshot(workspace.state);
         commands.forEach((callback) =>
@@ -1187,7 +1243,18 @@ async function invoke(action, data = {}) {
           ),
         );
       }
-      await publish();
+      if (selection) {
+        await publishSelection(selection);
+        persistSoon();
+      } else if (
+        (selected && selected.url === selectedURL) ||
+        ["new-tab", "navigate", "tab-index", "cycle-tab", "recent-tabs-commit"].includes(action)
+      ) {
+        await publish(false, true, true);
+        persistSoon();
+      } else {
+        await publish();
+      }
       return { ok: true };
     }
     throw Error(`${action} has not yet been migrated to the native preview.`);
@@ -1198,6 +1265,7 @@ window.wing = {
   navigation: {
     calculate: navigation.calculate,
     rankResults: navigation.rankResults,
+    createRanker: navigation.createRanker,
   },
   theme: { fields: theme.COLOR_FIELDS, resolve: theme.resolveColors },
   iconClickResets: require("./interactions.cjs").iconClickResets,

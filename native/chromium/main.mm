@@ -193,13 +193,30 @@ static BOOL SaveWorkspace(NSData *body, NSString *path) {
     unlink(temporary.data());
   return valid;
 }
+static BOOL ValidPanes(id panes, BOOL (^containsTab)(id)) {
+  if (![panes isKindOfClass:NSArray.class] || [panes count] > 3)
+    return NO;
+  NSMutableSet *visible = [NSMutableSet new];
+  for (id pane in panes) {
+    if (![pane isKindOfClass:NSDictionary.class] ||
+        !containsTab(pane[@"id"]) || [visible containsObject:pane[@"id"]])
+      return NO;
+    [visible addObject:pane[@"id"]];
+    for (NSString *key in @[ @"x", @"y", @"width", @"height" ]) {
+      if (![pane[key] isKindOfClass:NSNumber.class] ||
+          !std::isfinite([pane[key] doubleValue]) ||
+          [pane[key] doubleValue] < 0 || [pane[key] doubleValue] > 32768)
+        return NO;
+    }
+  }
+  return YES;
+}
 static BOOL ValidSync(NSDictionary *data) {
   NSDictionary *state = data[@"workspace"];
   if (![state isKindOfClass:NSDictionary.class] ||
       ![state[@"tabs"] isKindOfClass:NSArray.class] ||
       ![state[@"spaces"] isKindOfClass:NSArray.class] ||
-      ![data[@"panes"] isKindOfClass:NSArray.class] ||
-      [data[@"panes"] count] > 3 || [state[@"tabs"] count] > 10000 ||
+      [state[@"tabs"] count] > 10000 ||
       [state[@"spaces"] count] > 10000)
     return NO;
   NSMutableSet *spaces = [NSMutableSet new], *tabs = [NSMutableSet new];
@@ -219,21 +236,9 @@ static BOOL ValidSync(NSDictionary *data) {
       return NO;
     [tabs addObject:tab[@"id"]];
   }
-  NSMutableSet *visible = [NSMutableSet new];
-  for (id pane in data[@"panes"]) {
-    if (![pane isKindOfClass:NSDictionary.class] ||
-        ![tabs containsObject:pane[@"id"]] ||
-        [visible containsObject:pane[@"id"]])
-      return NO;
-    [visible addObject:pane[@"id"]];
-    for (NSString *key in @[ @"x", @"y", @"width", @"height" ]) {
-      if (![pane[key] isKindOfClass:NSNumber.class] ||
-          !std::isfinite([pane[key] doubleValue]) ||
-          [pane[key] doubleValue] < 0 || [pane[key] doubleValue] > 32768)
-        return NO;
-    }
-  }
-  return YES;
+  return ValidPanes(data[@"panes"], ^BOOL(id identity) {
+    return [tabs containsObject:identity];
+  });
 }
 
 // Clicking the dimmed page behind a Peek closes it, as in Arc.
@@ -402,15 +407,22 @@ static NSString *PermissionSymbol(NSArray *kinds) {
   return @"hand.raised.fill";
 }
 static NSUInteger gHoverPeekGeneration;
+static CFTimeInterval gLaunchStart;
+static BOOL gTraceLaunch;
+static void TraceLaunch(const char *phase) {
+  if (gTraceLaunch)
+    fprintf(stderr, "Wing startup %.2f %s\n", (CACurrentMediaTime() - gLaunchStart) * 1000, phase);
+}
 // uBlock Origin Lite: declarative rules the engine applies without a background page.
 static NSString *const kProtectionFolder = @"uBOLite.chromium";
 static NSString *gProtectionDirectory;
+static NSString *gProtectionPath;
+static dispatch_group_t gProtectionStaging;
 
-static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
-  if (!profile) return nil;
-  static NSString *extensionPath;
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
+static void StageBundledProtection() {
+  gProtectionStaging = dispatch_group_create();
+  dispatch_group_async(gProtectionStaging, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    TraceLaunch("protection-staging-start");
     NSString *source = [NSBundle.mainBundle.resourcePath
         stringByAppendingPathComponent:kProtectionFolder];
     id manifest = Parse([NSString
@@ -450,10 +462,23 @@ static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
         [NSFileManager.defaultManager removeItemAtPath:gProtectionDirectory error:nil];
       }
     });
-    extensionPath = destination;
+    gProtectionPath = destination;
+    TraceLaunch("protection-staged");
   });
-  return extensionPath ? [profile loadComponentExtension:extensionPath] : nil;
 }
+// Call after staging is complete. Profiles share the staged extension files.
+static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
+  return gProtectionPath ? [profile loadComponentExtension:gProtectionPath] : nil;
+}
+
+typedef NS_ENUM(NSUInteger, WingMemoryTrimMode) {
+  WingMemoryTrimManual,
+  WingMemoryTrimCritical,
+  WingMemoryTrimIdle,
+};
+static const NSInteger kIdleLiveTabBudget = 32;
+static const NSUInteger kIdleTrimBatch = 16;
+static const double kIdleTrimGraceMs = 5 * 60 * 1000;
 
 @implementation WingChromiumHost {
   ArdiaCoreWindow *_window, *_uiWindow;
@@ -461,6 +486,9 @@ static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
   NSMutableString *_requestParts;
   NSNumber *_requestPartsId;
   NSDate *_lastBackup;
+  dispatch_queue_t _workspaceIO;
+  NSUInteger _workspaceWriteGeneration;
+  NSUInteger _savedWorkspaceGeneration; // Only accessed on _workspaceIO.
   NSMutableDictionary *_externalSpaces;
   NSString *_shellURL, *_workspacePath;
   NSMutableDictionary<NSString *, ArdiaCoreTab *> *_tabs;
@@ -468,6 +496,7 @@ static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
   NSMutableDictionary<NSString *, NSString *> *_modelURLs;
   NSMutableDictionary<NSString *, NSNumber *> *_closing;
   NSMutableDictionary<NSString *, NSNumber *> *_freezeGenerations;
+  NSMutableDictionary<NSString *, NSNumber *> *_backgroundSince;
   dispatch_source_t _memoryPressure;
   NSMutableSet<NSString *> *_loadingProfiles;
   NSMutableSet<NSString *> *_capturingTabs;
@@ -500,10 +529,15 @@ static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
   NSMutableSet<NSString *> *_importProfiles;
   NSSet<NSString *> *_importExistingProfiles;
   BOOL _importCommitted;
-  BOOL _automaticTrimRunning;
+  BOOL _memoryTrimRunning;
+  BOOL _criticalTrimPending;
   NSMutableDictionary<NSNumber *, WingImportReply> *_hostReplies;
   NSInteger _hostSequence;
   NSDictionary *_lastSync;
+  BOOL _deferredWorkspaceWrite;
+  BOOL _tracedFirstCommit;
+  BOOL _tracedInitialSync;
+  NSMutableDictionary<NSString *, NSDictionary *> *_pendingPageMetadata;
   id _resizeObserver;
   id _modifierObserver;
   id _mouseDownMonitor;
@@ -533,6 +567,7 @@ static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
   // Peek: a card floating over the page it came from, which dims behind it.
   NSView *_peekDim, *_peekCard;
   NSTextField *_peekTitle;
+  NSString *_peekTabID;
   WingChromeControl *_peekPromote, *_peekClose;
   // Tabs shown by WebKit instead of Chromium (streaming sites, for DRM video).
   NSMutableDictionary<NSString *, WingWebKitPage *> *_webkitPages;
@@ -604,7 +639,7 @@ static NSString *LoadBundledProtection(ArdiaCoreProfile *profile) {
            }
            self->_profiles[profileId] = loaded;
            [self->_window prepareProfile:loaded];
-           LoadBundledProtection(loaded);
+           [self applyLayout];
            [self service:request
                  profile:profileId
                    reply:rid
@@ -1314,14 +1349,21 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
            ready(nil, @"Browser is closing.");
            return;
          }
-         if (profile) {
+         if (!profile) {
+           ready(nil, @"Import destination could not load.");
+           return;
+         }
+         dispatch_group_notify(gProtectionStaging, dispatch_get_main_queue(), ^{
+           if (self->_quitting) {
+             ready(nil, @"Browser is closing.");
+             return;
+           }
            self->_profiles[profileId] = profile;
-           // Register protection with the new profile's initial component set,
-           // before the importer starts its private browser service document.
+           // Register protection before the importer opens its service document.
            [self->_window prepareProfile:profile];
            LoadBundledProtection(profile);
-         }
-         ready(profile, profile ? nil : @"Import destination could not load.");
+           ready(profile, nil);
+         });
        }];
 }
 // Hourly copies of the workspace, so a bad write or import can be undone.
@@ -1367,6 +1409,80 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
     [files removeItemAtPath:[self.backupsPath stringByAppendingPathComponent:all[i]]
                       error:nil];
 }
+- (BOOL)writeWorkspace:(NSDictionary *)state generation:(NSUInteger)generation {
+  if (_savedWorkspaceGeneration == generation)
+    return YES;
+  NSMutableDictionary *durable = [state mutableCopy];
+  NSMutableArray *tabs = [NSMutableArray new];
+  for (NSDictionary *record in state[@"tabs"])
+    if (![record[@"transient"] boolValue])
+      [tabs addObject:record];
+  durable[@"tabs"] = tabs;
+  NSData *body = [NSJSONSerialization dataWithJSONObject:durable options:0 error:nil];
+  if (!body || !SaveWorkspace(body, _workspacePath))
+    return NO;
+  _savedWorkspaceGeneration = generation;
+  [self backupWorkspace:body force:NO];
+  return YES;
+}
+- (NSDictionary *)workspaceWithPageMetadata {
+  NSDictionary *state = _lastSync[@"workspace"];
+  if (!_pendingPageMetadata.count)
+    return state;
+  NSMutableDictionary *updated = [state mutableCopy];
+  NSMutableArray *tabs = [NSMutableArray arrayWithCapacity:[state[@"tabs"] count]];
+  for (NSDictionary *record in state[@"tabs"]) {
+    NSDictionary *metadata = _pendingPageMetadata[record[@"id"]];
+    if (metadata && [metadata[@"url"] isEqual:record[@"url"]] &&
+        ![record[@"transient"] boolValue]) {
+      NSMutableDictionary *tab = [record mutableCopy];
+      if (!record[@"customTitle"])
+        tab[@"title"] = metadata[@"title"];
+      if (metadata[@"favicon"]) {
+        tab[@"favicon"] = metadata[@"favicon"];
+        tab[@"faviconOrigin"] = metadata[@"faviconOrigin"];
+      }
+      [tabs addObject:tab];
+    } else {
+      [tabs addObject:record];
+    }
+  }
+  updated[@"tabs"] = tabs;
+  return updated;
+}
+- (void)markWorkspaceDirty {
+  _deferredWorkspaceWrite = YES;
+  ++_workspaceWriteGeneration;
+}
+- (NSDictionary *)workspaceSnapshotForSave {
+  if (!_deferredWorkspaceWrite)
+    return nil;
+  NSDictionary *state = [self workspaceWithPageMetadata];
+  if (!state) return nil;
+  NSMutableDictionary *sync = [_lastSync mutableCopy];
+  sync[@"workspace"] = state;
+  _lastSync = sync;
+  [_pendingPageMetadata removeAllObjects];
+  return state;
+}
+- (void)persistSyncedWorkspaceForRequest:(NSNumber *)rid result:(id)result {
+  NSDictionary *state = [self workspaceSnapshotForSave];
+  if (!state) {
+    [self reply:rid result:result error:nil];
+    return;
+  }
+  NSUInteger generation = _workspaceWriteGeneration;
+  dispatch_async(_workspaceIO, ^{
+    BOOL saved = [self writeWorkspace:state generation:generation];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      if (saved && self->_workspaceWriteGeneration == generation)
+        self->_deferredWorkspaceWrite = NO;
+      if (!self->_quitting)
+        [self reply:rid result:saved ? result : nil
+              error:saved ? nil : @"Workspace could not be saved."];
+    });
+  });
+}
 // The damaged file is kept beside the workspace for inspection, never deleted.
 - (NSDictionary *)recoverWorkspaceAfter:(NSInteger)after {
   NSFileManager *files = NSFileManager.defaultManager;
@@ -1388,6 +1504,18 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
       return @{@"workspace" : state, @"index" : @(i)};
   }
   return @{@"workspace" : NSNull.null, @"index" : @(all.count)};
+}
+- (NSDictionary *)readWorkspace {
+  TraceLaunch("workspace-read-start");
+  NSData *saved = [NSData dataWithContentsOfFile:_workspacePath];
+  id state = saved ? [NSJSONSerialization JSONObjectWithData:saved options:0 error:nil] : nil;
+  if (saved && ![state isKindOfClass:NSDictionary.class]) {
+    NSDictionary *found = [self recoverWorkspaceAfter:-1];
+    TraceLaunch("workspace-read-recovered");
+    return @{@"workspace" : found[@"workspace"], @"backup" : found[@"index"], @"recovered" : @YES};
+  }
+  TraceLaunch("workspace-read-done");
+  return @{@"workspace" : state ?: NSNull.null, @"backup" : @(-1), @"recovered" : @NO};
 }
 - (void)reportProblem:(id)sender {
   NSOperatingSystemVersion os = NSProcessInfo.processInfo.operatingSystemVersion;
@@ -1511,7 +1639,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
     for (NSDictionary *space in proposed[@"spaces"])
       if ([space[@"profileId"] isEqual:target])
         [targetSpaces addObject:space[@"id"]];
-    NSMutableDictionary *merged = [_lastSync[@"workspace"] mutableCopy];
+    NSMutableDictionary *merged = [[self workspaceWithPageMetadata] mutableCopy];
     NSMutableSet *newTabs = [NSMutableSet new];
     NSSet *currentTabs = [NSSet setWithArray:[merged[@"tabs"] valueForKey:@"id"]];
     for (NSDictionary *tab in proposed[@"tabs"])
@@ -1545,15 +1673,21 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
       reply(nil, @"Imported workspace exceeds browser limits.");
       return;
     }
-    [self backupWorkspace:[NSData dataWithContentsOfFile:_workspacePath] force:YES];
-    NSData *body = [NSJSONSerialization dataWithJSONObject:merged
-                                                   options:0
-                                                     error:nil];
-    if (!SaveWorkspace(body, _workspacePath)) {
+    // Commit the import and its pre-import backup as one ordered transaction.
+    __block BOOL saved;
+    dispatch_sync(_workspaceIO, ^{
+      [self backupWorkspace:[NSData dataWithContentsOfFile:self->_workspacePath] force:YES];
+      NSData *body = [NSJSONSerialization dataWithJSONObject:merged options:0 error:nil];
+      saved = body && SaveWorkspace(body, self->_workspacePath);
+    });
+    if (!saved) {
       reply(nil, @"Imported workspace could not be saved.");
       return;
     }
     _importCommitted = YES;
+    ++_workspaceWriteGeneration;
+    _deferredWorkspaceWrite = NO;
+    [_pendingPageMetadata removeAllObjects];
     NSMutableDictionary *sync = [_lastSync mutableCopy];
     sync[@"workspace"] = merged;
     _lastSync = sync;
@@ -1637,6 +1771,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   _modelURLs = [NSMutableDictionary new];
   _closing = [NSMutableDictionary new];
   _freezeGenerations = [NSMutableDictionary new];
+  _backgroundSince = [NSMutableDictionary new];
   _loadingProfiles = [NSMutableSet new];
   _ownedTabs = [NSHashTable weakObjectsHashTable];
   _busyUntil = [NSMutableDictionary new];
@@ -1781,6 +1916,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
                                    }];
 }
 - (void)engineDidStart {
+  TraceLaunch("engine-ready");
   gMainHost = self;
   [self prepareState];
   _externalURLs = [NSMutableArray new];
@@ -1795,6 +1931,8 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   // are loaded separately, including Wing's "default" browsing profile.
   _workspacePath = [@(getenv("WING_PROFILE_ROOT"))
       stringByAppendingPathComponent:@"wing-workspace.json"];
+  _workspaceIO = dispatch_queue_create("app.wing.workspace-io",
+      dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
   _shellURL = [NSURL fileURLWithPath:[NSBundle.mainBundle.resourcePath
                                          stringByAppendingPathComponent:
                                              @"shell/index.html"]]
@@ -1849,6 +1987,7 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   [_window showInactive];
   [_window.window makeKeyAndOrderFront:nil];
+  TraceLaunch("window-ordered");
   [self layoutTrafficLights];
   [self installMenus];
   [_shell focus];
@@ -1857,8 +1996,10 @@ static void ExtensionFolderChanged(ConstFSEventStreamRef stream, void *context, 
       [NSTimer scheduledTimerWithTimeInterval:60
                                       repeats:YES
                                         block:^(NSTimer *timer) {
-                                          [weakSelf archiveIdlePagesAt:NSDate.date.timeIntervalSince1970 * 1000
-                                                        completion:^{ }];
+                                          double now = NSDate.date.timeIntervalSince1970 * 1000;
+                                          [weakSelf trimMemory:WingMemoryTrimIdle at:now completion:^(NSUInteger discarded) {
+                                            [weakSelf archiveIdlePagesAt:now completion:^{}];
+                                          }];
                                         }];
   [self watchMemoryPressure];
   _modifierObserver = [NSEvent
@@ -2103,10 +2244,13 @@ static NSString *const kLiveCallScript =
 // hang up on everyone in it.
 static NSString *const kHasUnsavedInputScript =
     @"post('result',JSON.stringify(" WING_LIVE_CALL_EXPR @"||"
+    @"typeof window.onbeforeunload==='function'||"
     @"[...(window[Symbol.for('wing.edited')]||[])]."
     @"some(e=>e.isConnected&&e.textContent.trim())||[...document."
     @"querySelectorAll('input,textarea')].some(e=>e.value!==e.defaultValue||"
-    @"e.checked!==e.defaultChecked)))";
+    @"e.checked!==e.defaultChecked)||[...document.querySelectorAll('select')]."
+    @"some(e=>[...e.options].some((o,i)=>o.selected!=="
+    @"(o.defaultSelected||(!e.multiple&&i===0&&![...e.options].some(item=>item.defaultSelected)))))))";
 - (BOOL)mayRetirePage:(ArdiaCoreTab *)page {
   NSString *identity = [self identityForTab:page];
   if (_quitting || !identity || page.closed || page.loading ||
@@ -2132,7 +2276,7 @@ static NSString *const kHasUnsavedInputScript =
 }
 // Background pages freeze a minute after they leave the screen: timers and
 // animation stop but the document stays, so returning is instant, not a reload.
-// Pages are only discarded (and reload on return) when macOS is short of memory.
+// Discarded pages reload when selected, so give them a longer idle grace.
 static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   @"mail.google.com", @"calendar.google.com", @"app.slack.com", @"web.whatsapp.com",
   @"discord.com", @"teams.microsoft.com", @"teams.live.com", @"outlook.office.com",
@@ -2140,12 +2284,15 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   @"meet.google.com", @"zoom.us", @"whereby.com", @"meet.jit.si", @"webex.com",
   @"app.gather.town", @"around.co", @"riverside.fm", @"streamyard.com", @"ping.gg"
 ];
-- (BOOL)mayFreezePage:(ArdiaCoreTab *)page {
+- (BOOL)shouldKeepRunning:(ArdiaCoreTab *)page {
   NSString *host = [NSURL URLWithString:page.url].host.lowercaseString ?: @"";
   for (NSString *awake in kAlwaysAwakeHosts)
     if ([host isEqual:awake] || [host hasSuffix:[@"." stringByAppendingString:awake]])
-      return NO;
-  return !page.frozen && !page.discarded && [self mayRetirePage:page] &&
+      return YES;
+  return NO;
+}
+- (BOOL)mayFreezePage:(ArdiaCoreTab *)page {
+  return !page.frozen && !page.discarded && [self mayRetirePage:page] && ![self shouldKeepRunning:page] &&
          ![_screenSharingTabs containsObject:[self identityForTab:page]];
 }
 - (void)scheduleFreeze:(NSString *)identity {
@@ -2196,8 +2343,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if (!host) return;
     // macOS warns often during ordinary heavy use; only a critical shortage is
     // worth a reload, and then only for pages over the budget or long idle.
-    [host trimMemoryAutomatic:YES completion:^{
-    }];
+    [host trimMemory:WingMemoryTrimCritical at:NSDate.date.timeIntervalSince1970 * 1000
+          completion:^(NSUInteger discarded) {}];
   });
   dispatch_resume(_memoryPressure);
 }
@@ -2264,59 +2411,66 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   }
   dispatch_group_notify(group, dispatch_get_main_queue(), completion);
 }
-- (void)trimMemoryAutomatic:(BOOL)automatic
-                 completion:(void (^)(void))completion {
-  if (automatic && _automaticTrimRunning) {
-    completion();
+- (void)trimMemory:(WingMemoryTrimMode)mode
+                at:(double)now
+        completion:(void (^)(NSUInteger))completion {
+  BOOL idleTrim = mode == WingMemoryTrimIdle;
+  NSDictionary *workspace = _lastSync[@"workspace"];
+  if (_quitting || _memoryTrimRunning ||
+      (idleTrim && (![workspace[@"settings"][@"memorySaver"] boolValue] ||
+                    _tabs.count <= kIdleLiveTabBudget))) {
+    if (!_quitting && _memoryTrimRunning && mode == WingMemoryTrimCritical)
+      _criticalTrimPending = YES;
+    completion(0);
     return;
   }
-  _automaticTrimRunning = _automaticTrimRunning || automatic;
-  NSArray *records = [_lastSync[@"workspace"][@"tabs"]
-      sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
-                                                     NSDictionary *b) {
-        return [a[@"lastActive"] compare:b[@"lastActive"]];
-      }];
   NSInteger remaining = 0;
   for (ArdiaCoreTab *page in _tabs.allValues)
     if (!page.discarded && !page.closed)
       remaining++;
-  [self discardFrom:records
-              index:0
-          remaining:remaining
-              limit:[_lastSync[@"workspace"][@"settings"][@"maxLiveTabs"]
-                        integerValue] ?: 4
-          automatic:automatic
-         completion:^{
-           if (automatic)
-             self->_automaticTrimRunning = NO;
-           completion();
-         }];
-}
-// Every page is asked about unsaved input at once; the budget is then applied
-// oldest first, so it only counts pages that really slept.
-- (void)discardFrom:(NSArray *)records
-              index:(NSUInteger)index
-          remaining:(NSInteger)remaining
-              limit:(NSInteger)limit
-          automatic:(BOOL)automatic
-         completion:(void (^)(void))completion {
-  double now = NSDate.date.timeIntervalSince1970 * 1000;
-  NSMutableDictionary<NSString *, NSNumber *> *clean = [NSMutableDictionary new];
+  NSInteger limit = idleTrim ? kIdleLiveTabBudget
+                            : ([workspace[@"settings"][@"maxLiveTabs"] integerValue] ?: 4);
+  if (idleTrim && remaining <= limit) {
+    completion(0);
+    return;
+  }
+  _memoryTrimRunning = YES;
+  NSArray *records = [workspace[@"tabs"]
+      sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
+                                                     NSDictionary *b) {
+        return [a[@"lastActive"] compare:b[@"lastActive"]];
+      }];
+  NSMutableDictionary<NSString *, ArdiaCoreTab *> *clean = [NSMutableDictionary new];
+  NSMutableDictionary<NSString *, NSString *> *checkedURLs = [NSMutableDictionary new];
+  NSMutableDictionary<NSString *, NSNumber *> *checkedBackgroundSince = idleTrim ? [NSMutableDictionary new] : nil;
+  NSUInteger checks = 0;
   dispatch_group_t group = dispatch_group_create();
-  for (NSUInteger i = index; i < records.count; i++) {
-    NSString *identity = records[i][@"id"];
+  for (NSDictionary *record in records) {
+    NSString *identity = record[@"id"];
     ArdiaCoreTab *page = _tabs[identity];
-    BOOL idle = now - [records[i][@"lastActive"] doubleValue] > 300000;
-    if (!page || clean[identity] || (automatic && !idle && remaining <= limit) ||
-        ![self mayDiscardPage:page])
+    BOOL idle = now - [record[@"lastActive"] doubleValue] >= kIdleTrimGraceMs;
+    NSNumber *backgroundSince = _backgroundSince[identity];
+    if (!page || ![self mayDiscardPage:page] ||
+        (mode == WingMemoryTrimCritical && !idle && remaining <= limit) ||
+        (idleTrim && (!idle || !backgroundSince || now - backgroundSince.doubleValue < kIdleTrimGraceMs ||
+                      _webkitPages[identity] || [self shouldKeepRunning:page] ||
+                      [_busyUntil[identity] doubleValue] > now)))
       continue;
-    clean[identity] = @NO;
+    if (idleTrim && checks >= kIdleTrimBatch)
+      break;
+    checks++;
+    NSString *url = page.url;
     __block BOOL settled = NO;
     void (^settle)(BOOL) = ^(BOOL answer) {
       if (settled)
         return;
       settled = YES;
-      clean[identity] = @(answer);
+      if (answer && self->_tabs[identity] == page && [page.url isEqual:url]) {
+        clean[identity] = page;
+        checkedURLs[identity] = url;
+        checkedBackgroundSince[identity] = backgroundSince;
+      } else if (idleTrim)
+        self->_busyUntil[identity] = @(now + 15 * 60 * 1000);
       dispatch_group_leave(group);
     };
     dispatch_group_enter(group);
@@ -2335,17 +2489,44 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                    });
   }
   dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-    NSInteger live = remaining;
-    for (NSUInteger i = index; i < records.count; i++) {
-      NSString *identity = records[i][@"id"];
-      ArdiaCoreTab *page = self->_tabs[identity];
-      BOOL idle = now - [records[i][@"lastActive"] doubleValue] > 300000;
-      if (!page || ![clean[identity] boolValue] || (automatic && !idle && live <= limit))
-        continue;
-      if ([self mayDiscardPage:page] && [page discard])
-        live--;
+    NSInteger live = 0;
+    for (ArdiaCoreTab *page in self->_tabs.allValues)
+      if (!page.discarded && !page.closed)
+        live++;
+    NSUInteger discarded = 0;
+    NSDictionary *currentWorkspace = self->_lastSync[@"workspace"];
+    NSMutableDictionary *activeTimes = nil;
+    if (idleTrim) {
+      activeTimes = [NSMutableDictionary new];
+      for (NSDictionary *record in currentWorkspace[@"tabs"])
+        if (clean[record[@"id"]])
+          activeTimes[record[@"id"]] = record[@"lastActive"];
     }
-    completion();
+    for (NSDictionary *record in records) {
+      NSString *identity = record[@"id"];
+      ArdiaCoreTab *page = self->_tabs[identity];
+      BOOL idle = now - [record[@"lastActive"] doubleValue] >= kIdleTrimGraceMs;
+      if (!page || clean[identity] != page || ![page.url isEqual:checkedURLs[identity]] ||
+          (mode == WingMemoryTrimCritical && !idle && live <= limit))
+        continue;
+      if (idleTrim && (live <= limit || ![currentWorkspace[@"settings"][@"memorySaver"] boolValue]))
+        break;
+      if (idleTrim && (![activeTimes[identity] isEqual:record[@"lastActive"]] ||
+                       ![self->_backgroundSince[identity] isEqual:checkedBackgroundSince[identity]] ||
+                       self->_webkitPages[identity] || [self shouldKeepRunning:page]))
+        continue;
+      if ([self mayDiscardPage:page] && [page discard]) {
+        live--;
+        discarded++;
+      }
+    }
+    self->_memoryTrimRunning = NO;
+    completion(discarded);
+    if (self->_criticalTrimPending) {
+      self->_criticalTrimPending = NO;
+      [self trimMemory:WingMemoryTrimCritical at:NSDate.date.timeIntervalSince1970 * 1000
+            completion:^(NSUInteger count) {}];
+    }
   });
 }
 // Menu items route through the same shell actions as keyboard shortcuts.
@@ -2856,6 +3037,15 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 }
 - (void)engineWillShutDown {
   _quitting = YES;
+  // The shell's coalescing timer may still be pending, or its view closed.
+  NSDictionary *state = [self workspaceSnapshotForSave];
+  NSUInteger generation = _workspaceWriteGeneration;
+  __block BOOL saved = YES;
+  dispatch_sync(_workspaceIO, ^{
+    if (state) saved = [self writeWorkspace:state generation:generation];
+  });
+  if (!saved)
+    fprintf(stderr, "Wing: workspace could not be saved on quit.\n");
   [_extensionPanel close];
   [_extensionSidebar close];
   [_maintenanceTimer invalidate];
@@ -3150,8 +3340,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [self send:@"action"
           data:@{@"name" : @"select-tab", @"args" : @{@"id" : identity}}];
 }
-- (void)applyStyle:(ArdiaCoreTab *)tab {
-  NSString *identity = [self identityForTab:tab];
+- (void)applyStyle:(ArdiaCoreTab *)tab identity:(NSString *)identity {
   if (!identity || !tab.committedOrigin)
     return;
   NSString *css =
@@ -3178,6 +3367,11 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [self cancelExternalRequestsForTab:tab];
   [self cancelDeviceRequestsForTab:tab];
   NSString *identity = [self identityForTab:tab];
+  if (gTraceLaunch && !_private && !_tracedFirstCommit && WebURL(tab.url) &&
+      [identity isEqual:_lastSync[@"workspace"][@"activeTabId"]]) {
+    _tracedFirstCommit = YES;
+    TraceLaunch("first-page-commit");
+  }
   if (identity)
     [_crashedTabs removeObjectForKey:identity];
   if (identity)
@@ -3186,7 +3380,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [_appliedStyles removeObjectForKey:identity];
   if (identity)
     [tab executeJavaScript:kTrackEditsScript frame:nil];
-  [self applyStyle:tab];
+  [self applyStyle:tab identity:identity];
   [self pageChanged:tab];
   if ([_protectionTabs.allValues containsObject:tab])
     [self tabDidChangeLoading:tab];
@@ -3195,11 +3389,14 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   NSString *identity = [self identityForTab:tab];
   if (!identity || tab.closed || _quitting)
     return;
+  NSString *url = tab.url ?: @"", *title = tab.title ?: @"";
+  if ([_peekTabID isEqual:identity] && title.length)
+    [self updatePeekTitle:title url:url];
   [self send:@"page"
         data:@{
           @"id" : identity,
-          @"url" : tab.url ?: @"",
-          @"title" : tab.title ?: @"",
+          @"url" : url,
+          @"title" : title,
           // A paused or sleeping page can't finish loading until it wakes.
           @"loading" : @(tab.loading && !tab.frozen && !tab.discarded),
           @"canGoBack" : @(tab.canGoBack),
@@ -3493,6 +3690,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   [_pictureInPictureTabs removeObject:identity];
   [_screenSharingTabs removeObject:identity];
   [_busyUntil removeObjectForKey:identity];
+  [_backgroundSince removeObjectForKey:identity];
   if (!_quitting)
     [self send:@"closed" data:@{@"id" : identity, @"archive" : archive}];
 }
@@ -3521,16 +3719,22 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 }
 - (void)orderShell {
   NSView *host = _window.hostView, *shell = _shell.view;
+  if (!shell || shell.superview != host)
+    return;
   NSArray *order = host.subviews;
-  NSMutableArray *pages = [order mutableCopy];
-  [pages removeObject:shell];
-  NSInteger position = 0;
-  for (NSView *view in pages) {
-    if ([view isKindOfClass:NSVisualEffectView.class]) position++;
-    else break;
+  NSUInteger position = order.count - 1;
+  if (!_shellRaised) {
+    position = 0;
+    for (NSView *view in order) {
+      if (view == shell) continue;
+      if (![view isKindOfClass:NSVisualEffectView.class]) break;
+      position++;
+    }
   }
-  [pages insertObject:shell atIndex:_shellRaised ? pages.count : position];
-  if ([pages isEqualToArray:order]) return;
+  if (order[position] == shell) return;
+  NSMutableArray *pages = [order mutableCopy];
+  [pages removeObjectIdenticalTo:shell];
+  [pages insertObject:shell atIndex:position];
   // Sorting keeps every view attached, so pages don't reload or lose their state.
   NSMapTable *ranks = [NSMapTable strongToStrongObjectsMapTable];
   [pages enumerateObjectsUsingBlock:^(NSView *view, NSUInteger index, BOOL *stop) {
@@ -3542,6 +3746,13 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   if (_quitting || !_lastSync)
     return;
   NSDictionary *state = _lastSync[@"workspace"];
+  NSArray<NSDictionary *> *records = state[@"tabs"];
+  NSMutableDictionary<NSString *, NSDictionary *> *recordsByID =
+      [NSMutableDictionary dictionaryWithCapacity:records.count];
+  for (NSDictionary *record in records) recordsByID[record[@"id"]] = record;
+  NSMutableDictionary<NSString *, NSString *> *profilesBySpace = [NSMutableDictionary new];
+  for (NSDictionary *space in state[@"spaces"])
+    profilesBySpace[space[@"id"]] = space[@"profileId"];
   if (_extensionSidebarOwner && ![_extensionSidebarOwner isEqual:state[@"activeTabId"]]) {
     [_extensionSidebar close];
     _extensionSidebarOwner = nil;
@@ -3552,18 +3763,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     _extensionPanelOwner = nil;
   }
   for (NSString *identity in _tabs.allKeys) {
-    NSDictionary *record;
-    for (NSDictionary *candidate in state[@"tabs"])
-      if ([candidate[@"id"] isEqual:identity]) {
-        record = candidate;
-        break;
-      }
-    NSString *profileId;
-    for (NSDictionary *space in state[@"spaces"])
-      if ([space[@"id"] isEqual:record[@"spaceId"]]) {
-        profileId = space[@"profileId"];
-        break;
-      }
+    NSDictionary *record = recordsByID[identity];
+    NSString *profileId = record ? profilesBySpace[record[@"spaceId"]] : nil;
     ArdiaCoreTab *page = _tabs[identity];
     if (record)
       [_pendingCreatedTabs removeObject:identity];
@@ -3581,6 +3782,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [_hangPrompts removeObjectForKey:identity];
       [_modelURLs removeObjectForKey:identity];
       [_appliedStyles removeObjectForKey:identity];
+      [_backgroundSince removeObjectForKey:identity];
       [_wakingTabs removeObject:identity];
       [_capturingTabs removeObject:identity];
       [_pictureInPictureTabs removeObject:identity];
@@ -3588,7 +3790,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       page.delegate = nil;
       [page closeNow];
     } else
-      [self applyStyle:page];
+      [self applyStyle:page identity:identity];
   }
   NSMutableSet *visible = [NSMutableSet new];
   for (NSDictionary *pane in _lastSync[@"panes"])
@@ -3616,11 +3818,14 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
         departing = page.view;
         continue;
       }
+      if (!_backgroundSince[identity])
+        _backgroundSince[identity] = @(NSDate.date.timeIntervalSince1970 * 1000);
       if (page.view.superview) [self scheduleFreeze:identity];
       [page noteShownByHost:NO];
       [page.view removeFromSuperview];
       [page.devToolsView removeFromSuperview];
     } else {
+      [_backgroundSince removeObjectForKey:identity];
       if (_departures[identity]) {
         [_departures removeObjectForKey:identity];
         page.view.alphaValue = 1;
@@ -3630,12 +3835,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     }
   }
   for (NSString *identity in _webkitPages.allKeys) {
-    NSDictionary *record;
-    for (NSDictionary *candidate in state[@"tabs"])
-      if ([candidate[@"id"] isEqual:identity]) {
-        record = candidate;
-        break;
-      }
+    NSDictionary *record = recordsByID[identity];
     WingWebKitPage *webkit = _webkitPages[identity];
     if (!record || [record[@"closed"] boolValue]) {
       [webkit close];
@@ -3685,20 +3885,10 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   CGFloat sidebarWidth = _extensionSidebar.page && available > 400 ? MIN(360, available * 0.45) : 0;
   for (NSDictionary *pane in _lastSync[@"panes"]) {
     NSString *identity = pane[@"id"];
-    NSDictionary *record;
-    for (NSDictionary *candidate in state[@"tabs"])
-      if ([candidate[@"id"] isEqual:identity]) {
-        record = candidate;
-        break;
-      }
+    NSDictionary *record = recordsByID[identity];
     if (!record || !WebURL(record[@"url"]))
       continue;
-    NSString *profileId;
-    for (NSDictionary *space in state[@"spaces"])
-      if ([space[@"id"] isEqual:record[@"spaceId"]]) {
-        profileId = space[@"profileId"];
-        break;
-      }
+    NSString *profileId = profilesBySpace[record[@"spaceId"]];
     if (!Identifier(profileId))
       continue;
     if (_webkitPages[identity] || WingStreamingURL(record[@"url"])) {
@@ -3720,6 +3910,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if (!profile) {
       if (![_loadingProfiles containsObject:profileId]) {
         [_loadingProfiles addObject:profileId];
+        if (!_private) TraceLaunch("profile-load-start");
         [ArdiaCoreEngine.sharedEngine
             loadProfile:[@"Wing-" stringByAppendingString:profileId]
              completion:^(ArdiaCoreProfile *loaded) {
@@ -3727,6 +3918,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
                // on every sync would only repeat the failure and its message.
                if (loaded) [self->_loadingProfiles removeObject:profileId];
                if (loaded) {
+                 if (!self->_private) TraceLaunch("profile-loaded");
                  self->_profiles[profileId] = loaded;
                  [self applyLayout];
                } else
@@ -3743,30 +3935,33 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     if (![_protectedProfiles containsObject:profileId]) {
       if (![_startingProtection containsObject:profileId]) {
         [_startingProtection addObject:profileId];
-        [_window prepareProfile:profile];
-        [profile loadComponentExtension:
-                     [NSBundle.mainBundle.resourcePath
-                         stringByAppendingPathComponent:@"WingServices"]];
-        NSString *extensionId = LoadBundledProtection(profile);
-        if (extensionId.length) {
-          // The engine holds first-page navigation for up to 10 s while the
-          // blocking rules initialize.
-          [profile holdNavigationsUntilRulesetsOf:extensionId];
-          _protectionURLs[profileId] =
-              [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html", extensionId];
-        } else {
-          // Show the pages unprotected rather than leaving them blank.
-          [self send:@"command"
-                data:@{
-                  @"type" : @"toast",
-                  @"message" : @"Ad and tracker blocking could not start for this profile."
-                }];
-        }
-        [profile watchCastRoutes];
-        [_protectedProfiles addObject:profileId];
+        dispatch_group_notify(gProtectionStaging, dispatch_get_main_queue(), ^{
+          [self->_startingProtection removeObject:profileId];
+          ArdiaCoreProfile *profile = self->_profiles[profileId];
+          if (self->_quitting || !profile) return;
+          [self->_window prepareProfile:profile];
+          NSString *extensionId = LoadBundledProtection(profile);
+          if (extensionId.length) {
+            // The engine holds first-page navigation for up to 10 s while the
+            // blocking rules initialize.
+            [profile holdNavigationsUntilRulesetsOf:extensionId];
+            self->_protectionURLs[profileId] =
+                [NSString stringWithFormat:@"chrome-extension://%@/dashboard.html", extensionId];
+            if (!self->_private) TraceLaunch("protection-hold-armed");
+          } else {
+            [self send:@"command"
+                  data:@{
+                    @"type" : @"toast",
+                    @"message" : @"Ad and tracker blocking could not start for this profile."
+                  }];
+          }
+          // The service bridge registers WingServices on its first request.
+          [profile watchCastRoutes];
+          [self->_protectedProfiles addObject:profileId];
+          [self applyLayout];
+        });
       }
-      if (![_protectedProfiles containsObject:profileId])
-        continue;
+      continue;
     }
     ArdiaCoreTab *tab = _tabs[identity];
     if (!tab && [_restoringTabs containsObject:identity])
@@ -3881,12 +4076,19 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     _fullscreenTookWindow = NO;
   } else if (full) {
     [full.devToolsView setHidden:YES];
-    if (_window.hostView.subviews.lastObject != full.view)
+    NSArray *order = _window.hostView.subviews;
+    NSView *frontPage = order.lastObject;
+    if (_shellRaised && frontPage == _shell.view && order.count > 1)
+      frontPage = order[order.count - 2];
+    if (frontPage != full.view)
       [_window.hostView addSubview:full.view positioned:NSWindowAbove relativeTo:nil];
     full.view.frame = _window.hostView.bounds;
     full.view.layer.cornerRadius = 0;
     full.view.hidden = NO;
   }
+  // Restores and profile loads can attach views outside a shell sync. Always
+  // leave the shell above live pages while an overlay or sidebar is raised.
+  [self orderShell];
 }
 - (WingChromeControl *)peekButton:(NSString *)symbol label:(NSString *)label action:(SEL)action {
   NSImage *image = [[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:label]
@@ -3911,17 +4113,30 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 - (void)closePeek:(id)sender {
   [self send:@"action" data:@{@"name" : @"close-peek", @"args" : @{}}];
 }
+- (void)updatePeekTitle:(NSString *)title url:(NSString *)url {
+  if (title.length > 300) title = [title substringToIndex:300];
+  NSString *site = [NSURL URLWithString:url ?: @""].host ?: @"";
+  if ([site hasPrefix:@"www."]) site = [site substringFromIndex:4];
+  NSString *label = title.length && site.length ? [NSString stringWithFormat:@"%@  ·  %@", title, site]
+                                                  : title.length ? title : site;
+  if (![_peekTitle.stringValue isEqual:label])
+    _peekTitle.stringValue = label;
+  if (![_peekTitle.toolTip isEqual:url])
+    _peekTitle.toolTip = url;
+}
 // The shell can't draw over native pages, so Peek's frame lives here: the page
 // behind dims, and the Peek sits in a card with its own small header.
 - (void)layoutPeek:(NSDictionary *)state {
   NSView *host = _window.hostView, *page = nil, *under = nil;
   NSDictionary *record;
+  _peekTabID = nil;
   for (NSDictionary *pane in _lastSync[@"panes"]) {
     NSString *identity = pane[@"id"];
     NSView *view = _tabs[identity].view ?: _webkitPages[identity].view;
     if (view.superview != host || view.hidden) continue;
     if ([pane[@"peek"] boolValue]) {
       page = view;
+      _peekTabID = identity;
       for (NSDictionary *candidate in state[@"tabs"])
         if ([candidate[@"id"] isEqual:identity]) record = candidate;
     } else if (!under)
@@ -3985,12 +4200,10 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     button.pressColor = WingHexColor(chrome[@"selected"], [NSColor.labelColor colorWithAlphaComponent:0.14]);
     ((NSButton *)button.subviews.firstObject).contentTintColor = muted;
   }
-  NSString *title = [record[@"title"] isKindOfClass:NSString.class] ? record[@"title"] : @"";
-  NSString *site = [NSURL URLWithString:record[@"url"] ?: @""].host ?: @"";
-  if ([site hasPrefix:@"www."]) site = [site substringFromIndex:4];
-  _peekTitle.stringValue = title.length && site.length ? [NSString stringWithFormat:@"%@  ·  %@", title, site]
-                                                       : title.length ? title : site;
-  _peekTitle.toolTip = record[@"url"];
+  NSString *title = _webkitPages[_peekTabID].title ?: _tabs[_peekTabID].title;
+  if (!title.length && [record[@"title"] isKindOfClass:NSString.class])
+    title = record[@"title"];
+  [self updatePeekTitle:title url:record[@"url"]];
 
   NSRect frame = page.frame;
   const CGFloat header = 40, edge = 6;
@@ -4037,6 +4250,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [_pictureInPictureTabs removeObject:identity];
       [_screenSharingTabs removeObject:identity];
       [_departures removeObjectForKey:identity];
+      [_backgroundSince removeObjectForKey:identity];
       if (page == _fullscreenTab)
         _fullscreenTab = nil;
       page.delegate = nil;
@@ -4074,6 +4288,8 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
 - (void)webKitPageChanged:(WingWebKitPage *)webkit identity:(NSString *)identity {
   if (!webkit || _webkitPages[identity] != webkit || _quitting)
     return;
+  if ([_peekTabID isEqual:identity] && webkit.title.length)
+    [self updatePeekTitle:webkit.title url:webkit.url];
   [self send:@"page"
         data:@{
           @"id" : identity,
@@ -4159,6 +4375,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
   for (NSDictionary *pane in _lastSync[@"panes"])
     if ([pane[@"id"] isEqual:identity])
       return;
+  _backgroundSince[identity] = @(NSDate.date.timeIntervalSince1970 * 1000);
   if (page.view.superview) [self scheduleFreeze:identity];
   [page noteShownByHost:NO];
   [page.view removeFromSuperview];
@@ -4250,7 +4467,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       @"download-directory", @"default-browser", @"default-browser-prompt", @"app-icon",
       @"mini-open", @"run-tool", @"metrics", @"trim-memory", @"password-apps",
       @"password-app-open", @"clear-site-data", @"fill-login", @"test-archive-idle",
-      @"test-install-unpacked"
+      @"test-install-unpacked", @"test-memory-maintenance", @"page-metadata", @"persist-workspace"
     ]];
   if (_private && [notPrivate containsObject:action]) {
     [self reply:rid result:nil error:@"Not available in a private window."];
@@ -4274,7 +4491,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     return;
   }
   if (getenv("WING_CHROMIUM_TEST_SCRIPT") &&
-      ![@[ @"sync", @"diagnostics", @"evaluate-page", @"extension-actions" ]
+      ![@[ @"sync", @"page-metadata", @"persist-workspace", @"diagnostics", @"evaluate-page", @"extension-actions" ]
           containsObject:action])
     fprintf(stderr, "Qualification request: %s\n", action.UTF8String);
   if ([action isEqual:@"test-minis"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
@@ -4309,8 +4526,19 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     return;
   }
   if ([action isEqual:@"diagnostics"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    // Simulate the host attaching a late page outside a shell sync request.
+    NSString *reattach = data[@"reattach"];
+    if (Identifier(reattach)) {
+      NSView *view = _tabs[reattach].view;
+      if (view.superview == _window.hostView) {
+        [view removeFromSuperview];
+        [self applyLayout];
+      }
+    }
     NSMutableArray *tabs = [NSMutableArray new];
     NSMutableArray *protectionPages = [NSMutableArray new];
+    NSArray *order = _window.hostView.subviews;
+    NSUInteger shellIndex = [order indexOfObjectIdenticalTo:_shell.view];
     for (NSString *identity in _protectionTabs) {
       ArdiaCoreTab *page = _protectionTabs[identity];
       [protectionPages addObject:@{
@@ -4325,12 +4553,15 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     for (NSString *identity in _tabs) {
       ArdiaCoreTab *page = _tabs[identity];
       NSRect bounds = page.view.frame;
+      NSUInteger pageIndex = [order indexOfObjectIdenticalTo:page.view];
       [tabs addObject:@{
         @"id" : identity,
         @"url" : page.url,
         @"profile" : page.profile.name,
         @"visible" : @(page.view.superview != nil && !_departures[identity]),
         @"attachedToWindow" : @(page.view.window == _window.window),
+        @"aboveShell" : @(shellIndex != NSNotFound && pageIndex != NSNotFound &&
+                           pageIndex > shellIndex),
         @"hidden" : @(page.view.hiddenOrHasHiddenAncestor),
         @"devToolsVisible" : @(page.devToolsView.superview != nil),
         @"discarded" : @(page.discarded),
@@ -4345,6 +4576,7 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
          result:@{
            @"tabs" : tabs,
            @"shellInternal" : @(_uiWindow.internal),
+           @"shellAbovePages" : @(order.lastObject == _shell.view),
            @"externalAppRequests" : @(_externalAppAlerts.count),
            @"deviceChoosers" : @(_deviceChoosers.count),
            @"extensionSidebar" : @{
@@ -4397,43 +4629,36 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     return;
   }
   if ([action isEqual:@"bootstrap"]) {
-    NSData *saved = [NSData dataWithContentsOfFile:_workspacePath];
-    id state = saved ? [NSJSONSerialization JSONObjectWithData:saved
-                                                       options:0
-                                                         error:nil]
-                     : nil;
-    NSInteger backup = -1;
-    BOOL recovered = NO;
-    if (saved && ![state isKindOfClass:NSDictionary.class]) {
-      NSDictionary *found = [self recoverWorkspaceAfter:-1];
-      state = found[@"workspace"];
-      backup = [found[@"index"] integerValue];
-      recovered = YES;
-    }
-    if (!_restorableTabs) {
-      _restorableTabs = [NSMutableSet new];
-      _restoringTabs = [NSMutableSet new];
-      id tabs = [state isKindOfClass:NSDictionary.class] ? state[@"tabs"] : nil;
-      for (NSDictionary *record in [tabs isKindOfClass:NSArray.class] ? tabs : @[])
-        if ([record isKindOfClass:NSDictionary.class] && [record[@"id"] isKindOfClass:NSString.class])
-          [_restorableTabs addObject:record[@"id"]];
-    }
-    [self reply:rid
-         result:@{
-           @"workspace" : state ?: NSNull.null,
-           @"version" : ArdiaCoreEngine.sharedEngine.chromiumVersion,
-           @"backup" : @(backup),
-           @"recovered" : @(recovered),
-           @"uncleanExit" : @(gUncleanExit),
-           @"fullScreen" : @((_window.window.styleMask & NSWindowStyleMaskFullScreen) != 0)
-         }
-          error:nil];
+    dispatch_async(_workspaceIO, ^{
+      NSDictionary *saved = [self readWorkspace];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_quitting) return;
+        if (!self->_restorableTabs) {
+          self->_restorableTabs = [NSMutableSet new];
+          self->_restoringTabs = [NSMutableSet new];
+          id state = saved[@"workspace"];
+          id tabs = [state isKindOfClass:NSDictionary.class] ? state[@"tabs"] : nil;
+          for (id record in [tabs isKindOfClass:NSArray.class] ? tabs : @[])
+            if ([record isKindOfClass:NSDictionary.class] && [record[@"id"] isKindOfClass:NSString.class])
+              [self->_restorableTabs addObject:record[@"id"]];
+        }
+        NSMutableDictionary *result = [saved mutableCopy];
+        result[@"version"] = ArdiaCoreEngine.sharedEngine.chromiumVersion;
+        result[@"uncleanExit"] = @(gUncleanExit);
+        result[@"fullScreen"] = @((self->_window.window.styleMask & NSWindowStyleMaskFullScreen) != 0);
+        [self reply:rid result:result error:nil];
+      });
+    });
     return;
   }
   if ([action isEqual:@"workspace-recover"]) {
-    [self reply:rid
-         result:[self recoverWorkspaceAfter:[data[@"after"] integerValue]]
-          error:nil];
+    NSInteger after = [data[@"after"] integerValue];
+    dispatch_async(_workspaceIO, ^{
+      NSDictionary *found = [self recoverWorkspaceAfter:after];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (!self->_quitting) [self reply:rid result:found error:nil];
+      });
+    });
     return;
   }
   if ([action isEqual:@"protection-url"]) {
@@ -4449,30 +4674,89 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     [self reply:rid result:@{@"url" : _protectionURLs[profile]} error:nil];
     return;
   }
+  if ([action isEqual:@"page-metadata"]) {
+    NSString *identity = data[@"id"], *url = data[@"url"], *title = data[@"title"];
+    NSString *favicon = data[@"favicon"], *origin = data[@"faviconOrigin"];
+    if (!Identifier(identity) || !WebURL(url) ||
+        ![title isKindOfClass:NSString.class] || title.length > 300) {
+      [self reply:rid result:nil error:@"Invalid page metadata."];
+      return;
+    }
+    if (_lastSync && (_tabs[identity] || _webkitPages[identity])) {
+      if (!_pendingPageMetadata)
+        _pendingPageMetadata = [NSMutableDictionary new];
+      NSMutableDictionary *metadata = [@{@"url" : url, @"title" : title} mutableCopy];
+      if ([favicon isKindOfClass:NSString.class] && favicon.length <= 4096 &&
+          ([favicon hasPrefix:@"http:"] || [favicon hasPrefix:@"https:"]) && WebURL(favicon) &&
+          [origin isKindOfClass:NSString.class] && origin.length <= 4096) {
+        metadata[@"favicon"] = favicon;
+        metadata[@"faviconOrigin"] = origin;
+      }
+      _pendingPageMetadata[identity] = metadata;
+      if (!_private) [self markWorkspaceDirty];
+    }
+    [self reply:rid result:@YES error:nil];
+    return;
+  }
+  if ([action isEqual:@"persist-workspace"]) {
+    [self persistSyncedWorkspaceForRequest:rid result:@YES];
+    return;
+  }
+  if ([action isEqual:@"select-workspace-tab"]) {
+    NSDictionary *state = _lastSync[@"workspace"];
+    NSString *identity = data[@"id"];
+    NSNumber *lastActive = data[@"lastActive"];
+    NSArray *tabs = state[@"tabs"];
+    NSUInteger index = [tabs indexOfObjectPassingTest:^BOOL(NSDictionary *tab, NSUInteger i, BOOL *stop) {
+      return [tab[@"id"] isEqual:identity];
+    }];
+    NSDictionary *tab = tabs && index != NSNotFound ? tabs[index] : nil;
+    if (!tab || ![state[@"activeSpaceId"] isEqual:data[@"spaceId"]] ||
+        ![tab[@"url"] isEqual:data[@"url"]] || [tab[@"closed"] boolValue] ||
+        [tab[@"transient"] boolValue] || ![lastActive isKindOfClass:NSNumber.class] ||
+        !std::isfinite(lastActive.doubleValue) || lastActive.doubleValue < 0 ||
+        !ValidPanes(data[@"panes"], ^BOOL(id paneId) {
+          if (!Identifier(paneId)) return NO;
+          for (NSDictionary *record in tabs)
+            if ([record[@"id"] isEqual:paneId]) return ![record[@"closed"] boolValue];
+          return NO;
+        })) {
+      // A newer topology (for instance, an import) requires a full snapshot.
+      [self reply:rid result:@{@"ok" : @NO} error:nil];
+      return;
+    }
+    NSMutableDictionary *updatedTab = [tab mutableCopy];
+    updatedTab[@"lastActive"] = lastActive;
+    NSMutableArray *updatedTabs = [tabs mutableCopy];
+    updatedTabs[index] = updatedTab;
+    NSMutableDictionary *updatedState = [state mutableCopy];
+    updatedState[@"tabs"] = updatedTabs;
+    updatedState[@"activeTabId"] = identity;
+    NSMutableDictionary *sync = [_lastSync mutableCopy];
+    sync[@"workspace"] = updatedState;
+    sync[@"panes"] = data[@"panes"];
+    sync[@"anchor"] = data[@"anchor"];
+    _lastSync = sync;
+    if (!_private) [self markWorkspaceDirty];
+    [self applyLayout];
+    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    return;
+  }
   if ([action isEqual:@"sync"]) {
     NSDictionary *state = data[@"workspace"];
     if (!ValidSync(data)) {
       [self reply:rid result:nil error:@"Invalid workspace layout"];
       return;
     }
-    if ([data[@"persist"] boolValue] && !_private) {
-      NSError *error;
-      NSMutableDictionary *durable = [state mutableCopy];
-      NSMutableArray *tabs = [NSMutableArray new];
-      for (NSDictionary *record in state[@"tabs"])
-        if (![record[@"transient"] boolValue])
-          [tabs addObject:record];
-      durable[@"tabs"] = tabs;
-      NSData *body = [NSJSONSerialization dataWithJSONObject:durable
-                                                     options:0
-                                                       error:&error];
-      if (!body || !SaveWorkspace(body, _workspacePath)) {
-        [self reply:rid result:nil error:@"Workspace could not be saved."];
-        return;
-      }
-      [self backupWorkspace:body force:NO];
+    if (gTraceLaunch && !_private && !_tracedInitialSync) {
+      _tracedInitialSync = YES;
+      TraceLaunch("shell-first-sync");
     }
+    BOOL persist = !_private && [data[@"persist"] boolValue];
     _lastSync = data;
+    [_pendingPageMetadata removeAllObjects];
+    if (persist || (!_private && [data[@"deferPersist"] boolValue]))
+      [self markWorkspaceDirty];
     [self startCloudServices];
     // Wing runs the mini player itself; Chromium's own automatic picture in
     // picture stays off so a page never floats twice.
@@ -4490,8 +4774,10 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
       [self relayoutTrafficLightsSoon];
     }
     [self applyLayout];
-    [self orderShell];
-    [self reply:rid result:@{@"ok" : @YES} error:nil];
+    if (persist)
+      [self persistSyncedWorkspaceForRequest:rid result:@{@"ok" : @YES}];
+    else
+      [self reply:rid result:@{@"ok" : @YES} error:nil];
     for (NSString *url in [_externalURLs copy])
       [self send:@"action"
             data:@{
@@ -4557,9 +4843,17 @@ static NSArray<NSString *> *const kAlwaysAwakeHosts = @[
     }];
     return;
   }
+  if ([action isEqual:@"test-memory-maintenance"] && getenv("WING_CHROMIUM_TEST_SCRIPT")) {
+    const double advance = [data[@"idleAdvanceMs"] doubleValue];
+    [self trimMemory:WingMemoryTrimIdle at:NSDate.date.timeIntervalSince1970 * 1000 + advance
+          completion:^(NSUInteger discarded) {
+            [self reply:rid result:@{@"discarded" : @(discarded)} error:nil];
+          }];
+    return;
+  }
   if ([action isEqual:@"trim-memory"]) {
-    [self trimMemoryAutomatic:NO
-                   completion:^{
+    [self trimMemory:WingMemoryTrimManual at:NSDate.date.timeIntervalSince1970 * 1000
+                   completion:^(NSUInteger discarded) {
                      [self reply:rid result:@{@"ok" : @YES} error:nil];
                    }];
     return;
@@ -5830,6 +6124,7 @@ static void PurgeDeletedProfiles(NSString *root) {
 }
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
+    gLaunchStart = CACurrentMediaTime();
     NSNumber *qualification = [NSBundle.mainBundle objectForInfoDictionaryKey:@"WingQualificationOnly"];
     if (!qualification) {
       fprintf(stderr, "Missing build mode; rebuild the application.\n");
@@ -5837,6 +6132,7 @@ int main(int argc, const char *argv[]) {
     }
     NSString *directory;
     if (qualification.boolValue) {
+      gTraceLaunch = getenv("WING_CHROMIUM_TEST_SCRIPT") != nullptr;
       const char *testDirectory = getenv("WING_CHROMIUM_TEST_PROFILE");
       if (!testDirectory || testDirectory[0] != '/') {
         fprintf(stderr, "Preview requires an isolated WING_CHROMIUM_TEST_PROFILE.\n");
@@ -5894,9 +6190,12 @@ int main(int argc, const char *argv[]) {
     // and Wing activates page tabs without focusing them, leaving them blank.
     args.push_back("--disable-features=RemoveEnsureRFHVisibilityConsistent");
     if (qualification.boolValue) args.push_back("--use-mock-keychain");
+    StageBundledProtection();
     static WingChromiumHost *host = [WingChromiumHost new];
-    return [ArdiaCoreEngine runWithArgc:(int)args.size()
-                                   argv:args.data()
-                               delegate:host];
+    int exitCode = [ArdiaCoreEngine runWithArgc:(int)args.size()
+                                          argv:args.data()
+                                      delegate:host];
+    dispatch_group_wait(gProtectionStaging, DISPATCH_TIME_FOREVER);
+    return exitCode;
   }
 }

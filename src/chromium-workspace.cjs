@@ -20,10 +20,19 @@ class ChromiumWorkspace {
     this.peekId = null;
     this.state.tabs = this.state.tabs.filter((t) => !t.transient);
   }
-  snapshot(version = "") {
+  #splitLayout() {
     const state = this.state,
       group = M.splits.groupFor(state);
     const ids = M.splits.visibleIds(state);
+    const weights = group
+      ? ids.map((id) => group.weights[group.tabIds.indexOf(id)])
+      : [1];
+    const orientation = group?.orientation || state.settings.splitOrientation;
+    return { group, ids, weights, orientation };
+  }
+  snapshot(version = "") {
+    const state = this.state;
+    const { group, ids, weights, orientation } = this.#splitLayout();
     return {
       ...state,
       tabs: state.tabs
@@ -31,12 +40,10 @@ class ChromiumWorkspace {
         .map((tab) => ({ ...tab, ...this.runtime.get(tab.id) })),
       splitIds: ids,
       splitId: ids.find((id) => id !== state.activeTabId) || null,
-      splitWeights: group
-        ? ids.map((id) => group.weights[group.tabIds.indexOf(id)])
-        : [1],
+      splitWeights: weights,
       splitRatio: group?.weights[0] || 0.5,
       splitReversed: false,
-      splitOrientation: group?.orientation || state.settings.splitOrientation,
+      splitOrientation: orientation,
       sidebarRevealed: this.revealed,
       sidebarRevealProgress: !state.sidebarHidden || this.revealed ? 1 : 0,
       sidebarRevealAnimating: false,
@@ -50,8 +57,8 @@ class ChromiumWorkspace {
     };
   }
   layout(width, height) {
-    const snapshot = this.snapshot();
-    const ids = snapshot.splitIds.filter(
+    const { ids: splitIds, weights, orientation } = this.#splitLayout();
+    const ids = splitIds.filter(
       (id) =>
         !M.isShellPage(this.state.tabs.find((tab) => tab.id === id)?.url) &&
         !this.runtime.get(id)?.crashed,
@@ -68,9 +75,9 @@ class ChromiumWorkspace {
       left,
       top: frame.top,
       margin: frame.margin,
-      orientation: snapshot.splitOrientation,
+      orientation,
     };
-    const bounds = M.splits.bounds({ ...area, weights: snapshot.splitWeights });
+    const bounds = M.splits.bounds({ ...area, weights });
     const panes = ids
       .map((id, index) => ({ id, ...bounds[index] }))
       .filter((pane) => pane.id !== this.peekId);
@@ -138,7 +145,20 @@ class ChromiumWorkspace {
     }
     M.closePage(this.state, id, { archive });
   }
-  action(name, data = {}) {
+  #selectTab(id, onSelection, resume = false) {
+    const state = this.state;
+    const tab = state.tabs.find((tab) => tab.id === id);
+    if (!tab) return;
+    const { activeSpaceId } = state;
+    const { url } = tab;
+    const wasOpen = onSelection && !tab.transient &&
+      M.splits.members(state, id).every((member) => !member.closed);
+    if (resume) M.resumeElsewhere(state, id);
+    M.activate(state, id);
+    if (wasOpen && tab.url === url && state.activeSpaceId === activeSpaceId)
+      onSelection(tab);
+  }
+  action(name, data = {}, onSelection) {
     const s = this.state,
       tab = s.tabs.find((tab) => tab.id === (data.id || s.activeTabId));
     const normalize = (input) =>
@@ -148,7 +168,7 @@ class ChromiumWorkspace {
       );
     switch (name) {
       case "settings":
-        for (const key of ["dark", "peekPinned"])
+        for (const key of ["dark", "peekPinned", "memorySaver"])
           if (typeof data[key] === "boolean") s.settings[key] = data[key];
         if ([4, 8, 16].includes(data.maxLiveTabs))
           s.settings.maxLiveTabs = data.maxLiveTabs;
@@ -383,7 +403,7 @@ class ChromiumWorkspace {
       case "recent-tabs-commit": {
         if (data.id) this.recent.select(s, data.id);
         const id = this.recent.commit(s);
-        if (id) M.activate(s, id);
+        this.#selectTab(id, onSelection);
         break;
       }
       case "recent-tabs-cancel":
@@ -487,8 +507,7 @@ class ChromiumWorkspace {
         delete tab.closed;
         break;
       case "select-tab":
-        M.resumeElsewhere(s, data.id);
-        M.activate(s, data.id);
+        this.#selectTab(data.id, onSelection, true);
         break;
       case "tab-index":
       case "cycle-tab": {
@@ -506,7 +525,7 @@ class ChromiumWorkspace {
           const step = data.direction < 0 ? -1 : 1;
           target = ordered[(current + step + ordered.length) % ordered.length];
         }
-        if (target) M.activate(s, target.id);
+        if (target) this.#selectTab(target.id, onSelection);
         break;
       }
       case "space-index": {

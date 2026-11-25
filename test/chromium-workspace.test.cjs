@@ -23,6 +23,21 @@ test("native workspace keeps pin and split semantics across serialization", () =
   assert.equal(panes.length, 2);
   assert.ok(panes[0].width < panes[1].width);
 });
+test("native pane layout does not read inactive tab metadata", () => {
+  const workspace = new ChromiumWorkspace();
+  workspace.action("new-tab", { url: "https://background.example/" });
+  const background = workspace.state.tabs.at(-1);
+  workspace.action("new-tab", { url: "https://visible.example/" });
+  Object.defineProperty(background, "title", {
+    enumerable: true,
+    get() {
+      assert.fail("layout cloned metadata for a background tab");
+    },
+  });
+
+  const panes = workspace.layout(1200, 800);
+  assert.deepEqual(panes.map((pane) => pane.id), [workspace.state.activeTabId]);
+});
 test("native search resolution and page events use the shared model without losing pin destinations", () => {
   const workspace = new ChromiumWorkspace();
   workspace.state.settings.siteSearches = [

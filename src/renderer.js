@@ -82,6 +82,7 @@ let state = null,
   paletteIndex = 0,
   paletteResults = [],
   paletteLibrary = null,
+  paletteRanker = null,
   libraryTab = "archive",
   libraryView = null,
   toastTimer;
@@ -127,23 +128,32 @@ function patchTabRows(selector, rows) {
   if (element.querySelector(".tab-rename")) return;
   const previousIds = renderedTabIds.get(selector);
   const nextIds = new Set();
-  const template = document.createElement("template");
+  let template;
   function reconcile(parent, entries) {
     const previous = renderedRows.get(parent);
-    const next = new Map();
-    for (const entry of entries) next.set(entry.key, previous?.get(entry.key));
-    for (const [key, record] of previous || [])
-      if (!next.has(key)) record.element.remove();
+    // These containers own their row order. Selection and metadata can update
+    // the same elements directly while their keys stay in the same order.
+    const sameOrder =
+      previous?.size === entries.length &&
+      entries.every((entry, index) => previous.get(entry.key)?.index === index);
+    const next = sameOrder ? previous : new Map();
+    if (!sameOrder && previous) {
+      const keys = new Set(entries.map((entry) => entry.key));
+      for (const [key, record] of previous)
+        if (!keys.has(key)) record.element.remove();
+    }
 
-    let before = parent.firstElementChild;
-    for (const entry of entries) {
-      const record = next.get(entry.key);
+    let before = sameOrder ? null : parent.firstElementChild;
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      const record = previous?.get(entry.key);
       let row = record?.element;
       const changed =
         !record ||
         entry.content.length !== record.content.length ||
         entry.content.some((value, index) => value !== record.content[index]);
       if (changed) {
+        template ||= document.createElement("template");
         template.innerHTML = entry.html();
         const replacement = template.content.firstElementChild;
         if (!row) row = replacement;
@@ -167,6 +177,8 @@ function patchTabRows(selector, rows) {
           }
         }
       }
+      const activeChanged = changed || record.active !== entry.active;
+      const loadingChanged = changed || record.loading !== entry.loading;
       if (entry.tabId !== undefined) {
         nextIds.add(entry.tabId);
         if (!record && previousIds && !previousIds.has(entry.tabId)) {
@@ -176,22 +188,30 @@ function patchTabRows(selector, rows) {
               row.classList.remove("entering");
           }, { once: true });
         }
-        if (changed || record.active !== entry.active)
+        if (activeChanged)
           row.classList.toggle("active", entry.active);
-        if (changed || record.loading !== entry.loading)
+        if (loadingChanged)
           row.querySelector(".site-icon")?.classList.toggle("is-loading", entry.loading);
       }
-      if (row !== before) parent.insertBefore(row, before);
-      before = row.nextElementSibling;
-      if (entry.children) reconcile(row.lastElementChild, entry.children);
-      next.set(entry.key, {
-        element: row,
-        content: entry.content,
-        active: entry.active,
-        loading: entry.loading,
-      });
+      if (!sameOrder) {
+        if (row !== before) parent.insertBefore(row, before);
+        before = row.nextElementSibling;
+      }
+      const childrenParent = entry.children
+        ? record?.childrenParent || row.lastElementChild
+        : null;
+      if (childrenParent) reconcile(childrenParent, entry.children);
+      if (!sameOrder || activeChanged || loadingChanged)
+        next.set(entry.key, {
+          index,
+          element: row,
+          childrenParent,
+          content: entry.content,
+          active: entry.active,
+          loading: entry.loading,
+        });
     }
-    renderedRows.set(parent, next);
+    if (!sameOrder) renderedRows.set(parent, next);
   }
   reconcile(element, rows);
   renderedTabIds.set(selector, nextIds);
@@ -430,6 +450,76 @@ const SEARCH_ENGINE_NAMES = [
 const searchEngineName = (key) =>
   (SEARCH_ENGINE_NAMES.find(([k]) => k === key) || SEARCH_ENGINE_NAMES[0])[1];
 let renderedActiveTab = null;
+let renderedTabLayout = null;
+let sidebarScrollPending = false;
+function followActiveSidebarTab() {
+  if (
+    !sidebarScrollPending ||
+    state.settings.tabLayout === "top" ||
+    (state.sidebarHidden && !state.sidebarRevealed)
+  )
+    return;
+  sidebarScrollPending = false;
+  requestAnimationFrame(() => {
+    if (state.settings.tabLayout === "top") return;
+    if (state.sidebarHidden && !state.sidebarRevealed) {
+      sidebarScrollPending = true;
+      return;
+    }
+    $("#sidebar .tab.active")?.scrollIntoView({ block: "nearest" });
+  });
+}
+function renderSidebarTabs(space, favorites, pinned, today, rowFor) {
+  $("#space-name").innerHTML = `<b>${esc(space.icon)}</b>${esc(space.name)}`;
+  patchTabRows(
+    "#favorites",
+    favorites.map((tab) => rowFor(tab, { favorite: true })),
+  );
+  $("#favorites").style.display = favorites.length ? "grid" : "";
+  const folders = state.folders.filter((f) => f.spaceId === space.id);
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  const nestedFolders = new Map();
+  for (const folder of folders) {
+    const parent = folderIds.has(folder.parentId) ? folder.parentId : null;
+    if (!nestedFolders.has(parent)) nestedFolders.set(parent, []);
+    nestedFolders.get(parent).push(folder);
+  }
+  const pinnedByFolder = new Map();
+  for (const tab of pinned) {
+    const folder = tab.folderId || null;
+    if (!pinnedByFolder.has(folder)) pinnedByFolder.set(folder, []);
+    pinnedByFolder.get(folder).push(rowFor(tab));
+  }
+  function folderRow(folder, ancestors = new Set()) {
+    const visited = new Set([...ancestors, folder.id]);
+    const tabs = pinnedByFolder.get(folder.id) || [];
+    const children = folder.collapsed
+      ? tabs.filter((tab) => tab.active).slice(0, 1)
+      : [
+          ...tabs,
+          ...(nestedFolders.get(folder.id) || [])
+            .filter((child) => !visited.has(child.id))
+            .map((child) => folderRow(child, visited)),
+        ];
+    if (!folder.collapsed && !children.length)
+      children.push({
+        key: "empty",
+        content: [],
+        html: () => '<div class="empty">Drop tabs here</div>',
+      });
+    return {
+      key: `folder:${folder.id}`,
+      content: [folder.name, folder.collapsed],
+      children,
+      html: () => `<div class="folder" data-folder="${esc(folder.id)}"><button class="folder-head" data-folder-toggle="${esc(folder.id)}" aria-expanded="${!folder.collapsed}"><span>${folder.collapsed ? "›" : "⌄"}</span>${icon("folder")}<span>${esc(folder.name)}</span></button><div class="folder-children"></div></div>`,
+    };
+  }
+  patchTabRows("#pinned", [
+    ...(pinnedByFolder.get(null) || []),
+    ...(nestedFolders.get(null) || []).map((folder) => folderRow(folder)),
+  ]);
+  patchTabRows("#today", today.map((tab) => rowFor(tab)));
+}
 function render() {
   if (!state) return;
   const activeChanged = state.activeTabId !== renderedActiveTab;
@@ -439,16 +529,17 @@ function render() {
   // start the new page without it.
   if (activeChanged && previousActive && !$("#find-bar").hidden)
     closeFind({ keepFocus: true, id: previousActive });
-  if (activeChanged)
-    requestAnimationFrame(() =>
-      $("#sidebar .tab.active")?.scrollIntoView({ block: "nearest" }),
-    );
   noteLayoutMode();
   document.body.classList.toggle(
     "toolbar-hidden",
     !!state.settings.toolbarHidden,
   );
-  const tabsOnTop = state.settings.tabLayout === "top";
+  const tabLayout = state.settings.tabLayout;
+  const layoutChanged = tabLayout !== renderedTabLayout;
+  renderedTabLayout = tabLayout;
+  const tabsOnTop = tabLayout === "top";
+  if (tabsOnTop) sidebarScrollPending = false;
+  else if (activeChanged || layoutChanged) sidebarScrollPending = true;
   document.body.classList.toggle("tabs-top", tabsOnTop);
   $("#show-sidebar").title = tabsOnTop
     ? "Move tabs to sidebar · ⌘S"
@@ -504,7 +595,6 @@ function render() {
   );
   $("#favorite-button").title =
     t?.kind === "favorite" ? "Remove from Favorites" : "Add to Favorites";
-  $("#space-name").innerHTML = `<b>${esc(space.icon)}</b>${esc(space.name)}`;
   const splitByTab = new Map();
   for (const group of state.splits || [])
     for (const id of group.tabIds) splitByTab.set(id, group);
@@ -516,11 +606,6 @@ function render() {
   const titleFor = (tab) => sidebarTabTitle(tab, splitByTab.get(tab.id) || null);
   const rowFor = (tab, options) =>
     tabRow(tab, splitByTab.get(tab.id), titleFor(tab), options);
-  patchTabRows(
-    "#favorites",
-    favorites.map((tab) => rowFor(tab, { favorite: true })),
-  );
-  $("#favorites").style.display = favorites.length ? "grid" : "";
   $("#home-context").textContent =
     `${space.name} / ${state.profiles.find((p) => p.id === space.profileId)?.name || "Default"}`;
   patchHTML(
@@ -554,51 +639,9 @@ function render() {
       '<div class="launch-empty">A clear space. Open your first tab with <kbd>⌘ T</kbd>.</div>',
   );
 
-  const folders = state.folders.filter((f) => f.spaceId === space.id);
-  const folderIds = new Set(folders.map((folder) => folder.id));
-  const nestedFolders = new Map();
-  for (const folder of folders) {
-    const parent = folderIds.has(folder.parentId) ? folder.parentId : null;
-    if (!nestedFolders.has(parent)) nestedFolders.set(parent, []);
-    nestedFolders.get(parent).push(folder);
-  }
   const pinned = tabs.filter((tab) => tab.kind === "pinned");
   const today = tabs.filter((tab) => tab.kind === "today");
-  const pinnedByFolder = new Map();
-  for (const tab of pinned) {
-    const folder = tab.folderId || null;
-    if (!pinnedByFolder.has(folder)) pinnedByFolder.set(folder, []);
-    pinnedByFolder.get(folder).push(rowFor(tab));
-  }
-  function folderRow(folder, ancestors = new Set()) {
-    const visited = new Set([...ancestors, folder.id]);
-    const tabs = pinnedByFolder.get(folder.id) || [];
-    const children = folder.collapsed
-      ? tabs.filter((tab) => tab.active).slice(0, 1)
-      : [
-          ...tabs,
-          ...(nestedFolders.get(folder.id) || [])
-            .filter((child) => !visited.has(child.id))
-            .map((child) => folderRow(child, visited)),
-        ];
-    if (!folder.collapsed && !children.length)
-      children.push({
-        key: "empty",
-        content: [],
-        html: () => '<div class="empty">Drop tabs here</div>',
-      });
-    return {
-      key: `folder:${folder.id}`,
-      content: [folder.name, folder.collapsed],
-      children,
-      html: () => `<div class="folder" data-folder="${esc(folder.id)}"><button class="folder-head" data-folder-toggle="${esc(folder.id)}" aria-expanded="${!folder.collapsed}"><span>${folder.collapsed ? "›" : "⌄"}</span>${icon("folder")}<span>${esc(folder.name)}</span></button><div class="folder-children"></div></div>`,
-    };
-  }
-  patchTabRows("#pinned", [
-    ...(pinnedByFolder.get(null) || []),
-    ...(nestedFolders.get(null) || []).map((folder) => folderRow(folder)),
-  ]);
-  patchTabRows("#today", today.map((tab) => rowFor(tab)));
+  if (!tabsOnTop) renderSidebarTabs(space, favorites, pinned, today, rowFor);
   renderPrFolder();
   const spaceButtons = state.spaces
       .map(
@@ -606,7 +649,6 @@ function render() {
           `<button class="space-dot ${s.id === space.id ? "active" : ""}" data-space="${s.id}" draggable="true" title="${esc(s.name)} · ${esc(state.profiles.find((p) => p.id === s.profileId)?.name)} profile. Drag to reorder, right-click to edit" aria-label="${esc(s.name)} space" aria-pressed="${s.id === space.id}"><span aria-hidden="true">${esc(s.icon)}</span><span class="space-label">${esc(s.name)}</span></button>`,
       )
       .join("");
-  patchHTML("#spaces", spaceButtons);
   if (tabsOnTop) {
     patchHTML("#toolbar-spaces", spaceButtons);
     const stripRows = [];
@@ -621,13 +663,16 @@ function render() {
       stripRows.push(...group.map((tab) => rowFor(tab, { compact: tab.kind !== "today" })));
     }
     patchTabRows("#strip-tabs", stripRows);
-    // Only follow the active tab when it changes, so a strip scrolled by
-    // hand stays put while pages load.
-    if (activeChanged)
+    // Follow selection and layout changes while leaving manual scroll alone
+    // as metadata arrives for the same selected tab.
+    if (activeChanged || layoutChanged)
       $("#strip-tabs .tab.active")?.scrollIntoView({
         block: "nearest",
         inline: "nearest",
       });
+  } else {
+    patchHTML("#spaces", spaceButtons);
+    followActiveSidebarTab();
   }
   $("#address-text").textContent =
     t?.url === "wing://pulls"
@@ -1347,13 +1392,14 @@ addEventListener(
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 // Native page views stay detached until the backdrop is released, so a caller
 // returning focus to the page has to wait for that instead of using the opener.
-function closeModal({ returnToPage = false } = {}) {
+function closeModal({ returnToPage = false, immediate = false } = {}) {
   const generation = ++modalGeneration;
   stopMetrics();
   const wasOpen = !!modalType && !$("#overlay").hidden;
   modalType = null;
+  const hadThemePreview = themePreview !== null;
   themePreview = null;
-  if (state) render();
+  if (state && (!immediate || hadThemePreview)) render();
   // Let the dialog fade out over the frozen page before live pages return.
   const finish = () => {
     if (generation !== modalGeneration) return;
@@ -1366,7 +1412,7 @@ function closeModal({ returnToPage = false } = {}) {
         if (!modalType) window.wing.invoke("recent-tabs-focus");
       });
   };
-  if (wasOpen && !reducedMotion.matches) {
+  if (wasOpen && !immediate && !reducedMotion.matches) {
     $("#overlay").classList.add("closing");
     setTimeout(finish, 130);
   } else finish();
@@ -1427,6 +1473,7 @@ function openPalette(mode = "new", value = "") {
   paletteMode = mode;
   paletteIndex = 0;
   paletteLibrary = null;
+  paletteRanker = null;
   showModal(
     "palette",
     `<div class="palette-input-wrap">${icon("search")}<input id="palette-input" placeholder="Search or enter website name" aria-label="Search or enter URL" autocomplete="off" spellcheck="false"><span class="palette-mode">${mode === "navigate" ? "This tab" : "New tab"}</span></div><div class="results" id="palette-results" role="listbox"></div><div class="palette-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Select</span><span><kbd>↵</kbd> Open</span><span><kbd>⇥</kbd> Search a site</span><span class="palette-footer-end"><kbd>esc</kbd> Close</span></div>`,
@@ -1438,11 +1485,12 @@ function openPalette(mode = "new", value = "") {
     localServers = data?.servers || [];
     renderPalette();
   }, () => {});
-  window.wing.invoke("library-data").then((data) => {
+  window.wing.invoke("library-data", { suggestionsOnly: true }).then((data) => {
     if (generation !== modalGeneration || profile !== currentSpace()?.profileId)
       return;
     if (data.profileId && data.profileId !== profile) return;
     paletteLibrary = data;
+    paletteRanker = null;
     renderPalette();
   }, () => {});
   $("#modal").classList.add("palette-modal");
@@ -1477,6 +1525,46 @@ function openPalette(mode = "new", value = "") {
   renderPalette();
   $("#palette-input").focus();
   $("#palette-input").select();
+}
+function rankPalettePages(query) {
+  const profileId = currentSpace().profileId;
+  const libraryItems = () => {
+    const bookmarks = (nodes = []) => nodes.flatMap((node) =>
+      node.url
+        ? [{ kind: "bookmark", title: node.title, url: node.url, at: node.dateLastUsed || node.dateAdded }]
+        : bookmarks(node.children),
+    );
+    return [
+      ...bookmarks(paletteLibrary?.bookmarks),
+      ...(paletteLibrary?.history || state.history || [])
+        .filter((entry) => entry.profileId === undefined || entry.profileId === profileId)
+        .map((entry) => ({
+          kind: "history", title: entry.title || entry.url, url: entry.url,
+          visits: entry.visitCount, typed: entry.typedCount, at: entry.at,
+        })),
+    ];
+  };
+  const tabs = state.tabs
+    .filter((tab) => !tab.transient && tab.url !== "wing://home")
+    .map((tab) => ({
+      kind: tab.kind === "today" ? "tab" : "saved",
+      id: tab.id, title: tab.customTitle || tab.title, url: tab.url,
+      at: tab.lastActive, tab,
+    }));
+  const navigation = window.wing.navigation;
+  if (!navigation.createRanker)
+    return navigation.rankResults(query, [...tabs, ...libraryItems()]);
+  paletteRanker ||= navigation.createRanker(libraryItems());
+  return paletteRanker(query, tabs);
+}
+function openPalettePage(action, data) {
+  if (window.wing.engine === "chromium") {
+    act(action, data);
+    closeModal({ immediate: true, returnToPage: true });
+  } else {
+    closeModal();
+    act(action, data);
+  }
 }
 function renderPalette(rebuild = true) {
   const q = $("#palette-input").value.trim(),
@@ -1756,47 +1844,9 @@ function renderPalette(rebuild = true) {
     ];
     const spaceName = (id) => state.spaces.find((s) => s.id === id)?.name || "";
     const openAction = paletteMode === "navigate" ? "navigate" : "new-tab";
-    const flatten = (nodes = []) =>
-      nodes.flatMap((n) =>
-        n.url
-          ? [
-              {
-                kind: "bookmark",
-                title: n.title,
-                url: n.url,
-                at: n.dateLastUsed || n.dateAdded,
-              },
-            ]
-          : flatten(n.children),
-      );
-    const profileId = currentSpace().profileId;
     const pages = (
       q
-        ? window.wing.navigation.rankResults(q, [
-            ...state.tabs
-              .filter((t) => !t.transient && t.url !== "wing://home")
-              .map((t) => ({
-                kind: t.kind === "today" ? "tab" : "saved",
-                id: t.id,
-                title: t.customTitle || t.title,
-                url: t.url,
-                at: t.lastActive,
-                tab: t,
-              })),
-            ...flatten(paletteLibrary?.bookmarks),
-            ...(paletteLibrary?.history || state.history || [])
-              .filter(
-                (h) => h.profileId === undefined || h.profileId === profileId,
-              )
-              .map((h) => ({
-                kind: "history",
-                title: h.title || h.url,
-                url: h.url,
-                visits: h.visitCount,
-                typed: h.typedCount,
-                at: h.at,
-              })),
-          ])
+        ? rankPalettePages(q)
         : state.tabs
             .filter((t) => !t.transient)
             .sort((a, b) => b.lastActive - a.lastActive)
@@ -1817,10 +1867,7 @@ function renderPalette(rebuild = true) {
               siteTab: page.tab,
               hint: "Switch to Tab",
               topHit: page.topHit,
-              run: () => {
-                closeModal();
-                act("select-tab", { id: page.tab.id });
-              },
+              run: () => openPalettePage("select-tab", { id: page.tab.id }),
             }
           : {
               label: page.title,
@@ -1832,10 +1879,7 @@ function renderPalette(rebuild = true) {
                   ? "Bookmark"
                   : "History",
               topHit: page.topHit,
-              run: () => {
-                closeModal();
-                act(openAction, { url: page.url });
-              },
+              run: () => openPalettePage(openAction, { url: page.url }),
             },
       );
     const spaces = state.spaces
@@ -1861,9 +1905,7 @@ function renderPalette(rebuild = true) {
       glyph: "search",
       hint: /^(https?:|localhost|[\w-]+\.)/i.test(q) && !/\s/.test(q) ? "Go" : "Search",
       run: () => {
-        const action = paletteMode === "navigate" ? "navigate" : "new-tab";
-        closeModal();
-        act(action, { url: q });
+        openPalettePage(openAction, { url: q });
       },
     };
     paletteResults = q
@@ -3125,10 +3167,21 @@ async function openExtensions() {
   );
 }
 function openPerformance() {
+  const nativeMemorySaver = window.wing.engine === "chromium"
+    ? settingToggle(
+        "memory-saver",
+        "Memory Saver",
+        "Above 32 loaded tabs, Wing gradually sleeps eligible tabs you haven’t used for at least five minutes.",
+        state.settings.memorySaver === true,
+      )
+    : "";
   showModal(
     "performance",
-    `<div class="dialog-content">${dialogHead("Performance")}<p>Background tabs pause a minute after you leave them and pick up exactly where they were when you return. Only when your Mac runs low on memory does Wing put tabs to sleep; those reload when you come back.</p><label class="setting-row"><span>Tabs kept awake when memory is low<small>Active pages, audio, calls and pages with typed input are protected.<br>The limit is soft when a page needs to stay awake.</small></span><select id="tab-budget">${[4, 8, 16].map((n) => `<option value="${n}" ${(state.settings.maxLiveTabs || 4) === n ? "selected" : ""}>${n} live tabs</option>`).join("")}</select></label><div id="performance-stats" class="performance-stats"></div><div id="process-list"></div><p style="font-size:10px;color:var(--muted);line-height:1.7">Memory shows the sum of process working sets; shared pages can be counted more than once. CPU is sampled while this panel is open. These are diagnostics, not a leak-free guarantee.</p><div class="dialog-actions"><button class="secondary" id="trim-memory">Run memory cleanup</button></div></div>`,
+    `<div class="dialog-content">${dialogHead("Performance")}<p>Background tabs can pause a minute after you leave them. Sleeping tabs reload when you return.</p>${nativeMemorySaver}<label class="setting-row"><span>Tabs kept awake when memory is low<small>Active pages, audio, calls and pages with typed input are protected.<br>The limit is soft when a page needs to stay awake.</small></span><select id="tab-budget">${[4, 8, 16].map((n) => `<option value="${n}" ${(state.settings.maxLiveTabs || 4) === n ? "selected" : ""}>${n} live tabs</option>`).join("")}</select></label><div id="performance-stats" class="performance-stats"></div><div id="process-list"></div><p style="font-size:10px;color:var(--muted);line-height:1.7">Memory shows the sum of process working sets; shared pages can be counted more than once. CPU is sampled while this panel is open. These are diagnostics, not a leak-free guarantee.</p><div class="dialog-actions"><button class="secondary" id="trim-memory">Run memory cleanup</button></div></div>`,
   );
+  const memorySaver = $("#memory-saver");
+  if (memorySaver)
+    memorySaver.onchange = (e) => act("settings", { memorySaver: e.target.checked });
   $("#tab-budget").onchange = (e) =>
     act("settings", { maxLiveTabs: Number(e.target.value) });
   $("#trim-memory").onclick = () => act("trim-memory");
@@ -4239,6 +4292,7 @@ window.wing.onCommand((c) => {
       break;
     case "sidebar-frame":
       applySidebarReveal(c);
+      if (state) followActiveSidebarTab();
       break;
     case "palette":
       openPalette(c.mode, c.value);

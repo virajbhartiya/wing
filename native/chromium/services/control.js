@@ -46,16 +46,16 @@ const handlers = {
     if (!result) throw Error("Cookie was rejected.");
     return { ok: true };
   },
-  async library() {
-    const [history, downloads, bookmarks] = await Promise.all([
+  async library({ suggestionsOnly } = {}) {
+    const [history, bookmarks, downloads] = await Promise.all([
       chrome.history.search({ text: "", startTime: 0, maxResults: 1000 }),
-      listDownloads(),
       chrome.bookmarks.getTree(),
+      suggestionsOnly ? undefined : listDownloads(),
     ]);
     return {
       history: history.map((h) => ({ ...h, at: h.lastVisitTime })),
-      downloads,
       bookmarks,
+      ...(suggestionsOnly ? {} : { downloads }),
     };
   },
   downloads: listDownloads,

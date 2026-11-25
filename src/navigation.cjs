@@ -153,67 +153,80 @@ function pageKey(value) {
 const ADDRESS =
   /^(https?:\/\/\S+|localhost(:\d+)?(\/\S*)?|[\w-]+(\.[\w-]+)*\.[a-z]{2,}(:\d+)?([/?#]\S*)?)$/i;
 const MAX_ROWS_PER_SITE = 3;
+// Parse stable library entries once per command palette session. Live tabs
+// are prepared separately so a new navigation or title is reflected at once.
+function prepareResult(item) {
+  const open = item.kind === "tab" || item.kind === "saved";
+  let title = String(item.title || "");
+  let rest = String(item.url || "").toLowerCase();
+  let host = "", siteHost = "", siteURL = "", term = "";
+  let home = false, redirect = false;
+  try {
+    const url = new URL(item.url);
+    siteHost = host = url.hostname.replace(/^www\./, "");
+    siteURL = url.origin + "/";
+    rest = (url.pathname + url.search).toLowerCase();
+    home = url.pathname === "/" && !url.search;
+    if (!open) {
+      redirect = isRedirect(url);
+      term = searchTerm(url);
+      if (term) {
+        host = "";
+        rest = "";
+        title = term;
+      }
+    }
+    if (/^https?:\/\//i.test(title)) title = pageKey(title);
+  } catch {}
+  return {
+    item, open, title, rest, host, siteHost, siteURL, term, home, redirect,
+    lowerTitle: title.toLowerCase(),
+    lowerTerm: term.trim().toLowerCase(),
+    siteLabels: siteHost.split("."),
+    hostLabels: host.split(".").slice(0, -1),
+    key: term ? "search:" + term.trim().toLowerCase() : pageKey(item.url),
+  };
+}
+function createRanker(items) {
+  const prepared = items.map(prepareResult);
+  return (query, tabs, now = Date.now()) => rankPrepared(query, tabs, now, prepared);
+}
 // Ranks open tabs, saved tabs, bookmarks and history for the command bar. A
 // typed address always goes to that address. Otherwise a site's home page wins,
 // then title words, then anywhere; often-visited and recent pages rise. Only a
 // home page you really use, or an open tab, may take over ↵ as the top hit.
 function rankResults(query, items, now = Date.now()) {
+  return rankPrepared(query, items, now, []);
+}
+function rankPrepared(query, items, now, prepared) {
   const text = String(query || "").trim();
-  const tokens = text.toLowerCase().split(/\s+/).filter(Boolean);
+  const lowerText = text.toLowerCase();
+  const tokens = lowerText.split(/\s+/).filter(Boolean);
   if (!tokens.length) return [];
+  const wordStarts = tokens.map((token) => new RegExp(
+    `(^|[^\\p{L}\\p{N}])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+    "u",
+  ));
   const isAddress = ADDRESS.test(text);
   const typedKey = pageKey(text);
   const seen = new Map();
   const sites = new Map();
-  for (const item of items) {
-    let host = "",
-      rest = String(item.url || "").toLowerCase(),
-      title = String(item.title || ""),
-      term = "",
-      home = false;
-    const open = item.kind === "tab" || item.kind === "saved";
-    try {
-      const url = new URL(item.url);
-      host = url.hostname.replace(/^www\./, "");
-      rest = (url.pathname + url.search).toLowerCase();
-      home = url.pathname === "/" && !url.search;
-      if (
-        tokens.length === 1 &&
-        !isAddress &&
-        host.split(".").some((l) => l.startsWith(tokens[0]))
-      ) {
-        const site = sites.get(host) || {
-          url: url.origin + "/",
-          title: host,
-          visits: 0,
-          at: 0,
-        };
-        site.visits += item.visits || 0;
-        site.at = Math.max(site.at, item.at || 0);
-        sites.set(host, site);
-      }
-      if (!open) {
-        if (isRedirect(url)) continue;
-        term = searchTerm(url);
-        if (term) {
-          if (term.trim().toLowerCase() === text.toLowerCase()) continue;
-          host = "";
-          rest = "";
-          title = term;
-        }
-      }
-      if (/^https?:\/\//i.test(title)) title = pageKey(title);
-    } catch {}
-    const key = term ? "search:" + term.trim().toLowerCase() : pageKey(item.url);
+  for (const entry of items.map(prepareResult).concat(prepared)) {
+    const { item, open, title, rest, host, siteHost, siteURL, term, home,
+      redirect, lowerTitle, lowerTerm, siteLabels, hostLabels, key } = entry;
+    if (siteURL && tokens.length === 1 && !isAddress &&
+        siteLabels.some((label) => label.startsWith(tokens[0]))) {
+      const site = sites.get(siteHost) || { url: siteURL, title: siteHost, visits: 0, at: 0 };
+      site.visits += item.visits || 0;
+      site.at = Math.max(site.at, item.at || 0);
+      sites.set(siteHost, site);
+    }
+    if (redirect || (term && lowerTerm === lowerText)) continue;
     // The address row already goes here.
     if (isAddress && !open && key === typedKey) continue;
-    const lowerTitle = title.toLowerCase();
     // "wiki" should find en.wikipedia.org, but not the registry suffix ".org".
-    const labels = host.split(".").slice(0, -1);
-    const hostStart = (token) =>
-      !!host &&
-      ((host + rest).startsWith(token) ||
-        labels.some((l) => l.startsWith(token)));
+    const hostStart = (token) => !!host &&
+      ((host + rest).startsWith(token) || hostLabels.some((label) => label.startsWith(token)));
     let match = 0;
     for (const [i, token] of tokens.entries()) {
       const score =
@@ -221,10 +234,7 @@ function rankResults(query, items, now = Date.now()) {
           ? 100
           : lowerTitle.startsWith(token)
             ? 70
-            : new RegExp(
-                  `(^|[^\\p{L}\\p{N}])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
-                  "u",
-                ).test(lowerTitle)
+            : wordStarts[i].test(lowerTitle)
               ? 50
               : host.includes(token)
                 ? 40
@@ -303,6 +313,7 @@ function rankResults(query, items, now = Date.now()) {
 }
 module.exports = {
   rankResults,
+  createRanker,
   cleanURL,
   validateSearch,
   resolveInput,

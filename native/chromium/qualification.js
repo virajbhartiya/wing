@@ -215,22 +215,42 @@
       "Fixture /first",
     "first page title arrives",
   );
+  openPalette("new");
+  await waitFor(
+    async () => (await invoke("native-diagnostics")).shellAbovePages,
+    "Command-T initially raises the command bar above the page",
+  );
+  const reattached = await invoke("native-diagnostics", { reattach: first });
+  assert(reattached.tabs.find((tab) => tab.id === first)?.attachedToWindow,
+    "late page remains attached while the command bar is open");
+  assert(reattached.shellAbovePages,
+    "Command-T remains visible when a native page attaches outside a shell sync");
+  assert(document.activeElement === document.querySelector("#palette-input"),
+    "the visible command bar retains keyboard focus");
+  closeModal({ immediate: true });
+  await waitFor(async () => {
+    const page = (await invoke("native-diagnostics")).tabs.find((tab) => tab.id === first);
+    return page?.attachedToWindow && page.aboveShell;
+  }, "closing the command bar puts the still-attached page back above the shell");
+  checks.push("Command-T stays above live content through a native page reattachment");
   await invoke("new-tab");
   const homeTab = (await snapshot()).activeTabId;
   const tabRow = (strip, id) =>
     document.querySelector(`#${strip} [data-tab="${CSS.escape(id)}"]`);
-  const stableRows = ["today", "strip-tabs"].map((strip) => [
-    strip, tabRow(strip, first), tabRow(strip, homeTab),
-  ]);
-  for (const [strip, firstRow, homeRow] of stableRows)
+  assert(!tabRow("today", first), "initial top layout skips the hidden sidebar rows");
+  for (const [layout, strip] of [["top", "strip-tabs"], ["sidebar", "today"]]) {
+    await invoke("tab-layout", { layout });
+    await invoke("select-tab", { id: homeTab });
+    const firstRow = tabRow(strip, first);
+    const homeRow = tabRow(strip, homeTab);
     assert(firstRow && homeRow, `${strip} shows both tabs`);
-  await invoke("select-tab", { id: first });
-  for (const [strip, firstRow, homeRow] of stableRows) {
+    await invoke("select-tab", { id: first });
     assert(tabRow(strip, first) === firstRow, `${strip} keeps the selected row`);
     assert(tabRow(strip, homeTab) === homeRow, `${strip} keeps the previous row`);
     assert(firstRow.classList.contains("active"), `${strip} marks the new selection`);
     assert(!homeRow.classList.contains("active"), `${strip} clears the old selection`);
   }
+  await invoke("tab-layout", { layout: "top" });
   await invoke("close-tab", { id: homeTab });
   checks.push("sidebar and top strip retain tab row identity across selection");
   await invoke("new-tab", { url: WING_TEST.base + "/translation" });
@@ -450,6 +470,9 @@
     "real video enters picture-in-picture",
   );
   await invoke("favorite", { id: first });
+  assert(tabRow("strip-tabs", first)?.querySelector(".tab-pip"),
+    "top-strip favorites retain the picture-in-picture indicator");
+  await invoke("tab-layout", { layout: "sidebar" });
   await waitFor(
     () =>
       document
@@ -457,6 +480,7 @@
         ?.getAttribute("data-pip") === "true",
     "favorite tabs retain the picture-in-picture indicator",
   );
+  await invoke("tab-layout", { layout: "top" });
   await invoke("favorite", { id: first });
   await invoke("new-tab", { url: WING_TEST.base + "/pip-background" });
   const pipBackground = (await snapshot()).activeTabId;
