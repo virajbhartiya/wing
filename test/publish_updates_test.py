@@ -24,6 +24,14 @@ class AppcastTest(unittest.TestCase):
         self.assertEqual(enclosure.get('url'), 'https://updates.example/releases/v0.2.0-native.2/Wing-2-arm64.zip')
         self.assertEqual(enclosure.get(f'{{{P.SPARKLE_NS}}}edSignature'), 'c2ln')
 
+    def test_release_notes_link_points_at_wings_notes_page(self):
+        args = ('v0.2.0-native.30', 'arm64', pathlib.Path('Wing-30-arm64.zip'),
+                {'edSignature': 'c2ln', 'length': '42'}, {'CFBundleVersion': '30'}, 'updates.example')
+        link = lambda node: node.findtext('sparkle:releaseNotesLink', namespaces=NS)
+        self.assertEqual(link(P.item(*args, notes=True)),
+                         'https://updates.example/releases/v0.2.0-native.30/notes.html')
+        self.assertIn('github.com', link(P.item(*args)))
+
     def test_keeps_only_recent_releases(self):
         feed = b''
         for build in range(P.KEEP + 3):
