@@ -196,7 +196,7 @@ class PublishPreflight(unittest.TestCase):
                 call.args[:2] == ('git', 'push') or call.args[:3] == ('gh', 'release', 'create')
             ]
             self.assertEqual(len(publication), 4)
-            self.assertEqual(publication[0], mock.call.publisher.prepare_uploads('v0.2.0-native.1', [archive]))
+            self.assertEqual(publication[0], mock.call.publisher.prepare_uploads('v0.2.0-native.1', [archive], notes=pathlib.Path('notes.md')))
             self.assertEqual(publication[1], mock.call.run('git', 'push', 'origin', 'HEAD'))
             self.assertEqual(publication[2].args[:3], ('gh', 'release', 'create'))
             self.assertEqual(publication[3], mock.call.publisher.upload_prepared(uploads))

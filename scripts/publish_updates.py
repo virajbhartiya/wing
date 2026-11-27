@@ -10,6 +10,9 @@ appcast. The DMG is also copied to /Wing-<arch>.dmg, a stable download link.
 import base64, email.utils, json, pathlib, plistlib, re, subprocess, sys, tempfile, time, zipfile
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from release_notes import notes_key, render_release
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CLOUD = json.loads((ROOT / 'native/chromium/cloud.json').read_text())
 STACK, REGION = 'wing-cloud', 'ap-south-1'
@@ -54,7 +57,7 @@ def verify_signature(archive, signature, public_key):
         raise SystemExit(f'{archive.name}: Sparkle signature verification failed. {checked.stderr.strip()}')
 
 
-def item(tag, arch, archive, signature, info, domain):
+def item(tag, arch, archive, signature, info, domain, notes=False):
     sp = lambda name: f'{{{SPARKLE_NS}}}{name}'
     node = ET.Element('item')
     ET.SubElement(node, 'title').text = f'Wing {tag[1:]}'
@@ -62,7 +65,9 @@ def item(tag, arch, archive, signature, info, domain):
     ET.SubElement(node, sp('version')).text = str(info['CFBundleVersion'])
     ET.SubElement(node, sp('shortVersionString')).text = tag[1:]
     ET.SubElement(node, sp('minimumSystemVersion')).text = info.get('LSMinimumSystemVersion', '14.0')
-    ET.SubElement(node, sp('releaseNotesLink')).text = f'https://github.com/{REPO}/releases/tag/{tag}'
+    # The update dialog shows Wing's own notes page; GitHub is the fallback.
+    ET.SubElement(node, sp('releaseNotesLink')).text = (
+        f'https://{domain}/{notes_key(tag)}' if notes else f'https://github.com/{REPO}/releases/tag/{tag}')
     ET.SubElement(node, 'enclosure', {
         'url': f'https://{domain}/releases/{tag}/{archive.name}',
         'length': signature['length'],
@@ -116,8 +121,10 @@ def store(bucket, key, size, command, skip_present=True):
     raise SystemExit(f'{key} did not upload whole after 3 attempts.')
 
 
-def prepare_uploads(tag, archives):
-    """Validate every artifact and build its appcast entry before publishing."""
+def prepare_uploads(tag, archives, notes=None):
+    """Validate every artifact and build its appcast entry before publishing.
+    `notes` is the Markdown release notes; it becomes the update dialog's page."""
+    page = render_release(tag, pathlib.Path(notes).read_text(encoding='utf-8')) if notes else None
     outputs = stack_outputs()
     bucket, domain = outputs['UpdatesBucket'], outputs['Domain']
     if CLOUD['domain'] != domain:
@@ -147,13 +154,20 @@ def prepare_uploads(tag, archives):
             raise SystemExit(f'{archive.name}: Sparkle did not return a valid Ed25519 signature.')
         verify_signature(archive, signature['edSignature'], public_key)
         prepared.append((arch, archive, archive_size, image, image_size,
-                         item(tag, arch, archive, signature, info, domain)))
-    return tag, bucket, domain, outputs['DistributionId'], prepared
+                         item(tag, arch, archive, signature, info, domain, notes=page is not None)))
+    return tag, bucket, domain, outputs['DistributionId'], prepared, page
 
 
 def upload_prepared(uploads):
-    tag, bucket, domain, distribution, prepared = uploads
+    tag, bucket, domain, distribution, prepared, page = uploads
     invalidate = []
+    if page is not None:
+        # Before any appcast points at it.
+        with tempfile.NamedTemporaryFile('w', suffix='.html', encoding='utf-8') as out:
+            out.write(page)
+            out.flush()
+            aws('s3', 'cp', out.name, f's3://{bucket}/{notes_key(tag)}', '--content-type',
+                'text/html; charset=utf-8', '--cache-control', 'no-cache', '--only-show-errors', capture=False)
     for arch, archive, archive_size, image, image_size, update in prepared:
         for path, size in [(archive, archive_size), (image, image_size)]:
             key = f'releases/{tag}/{path.name}'
@@ -179,8 +193,8 @@ def upload_prepared(uploads):
         '--paths', *invalidate)
 
 
-def publish(tag, archives):
-    upload_prepared(prepare_uploads(tag, archives))
+def publish(tag, archives, notes=None):
+    upload_prepared(prepare_uploads(tag, archives, notes))
 
 
 if __name__ == '__main__':
